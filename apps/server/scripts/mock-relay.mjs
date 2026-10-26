@@ -3,6 +3,7 @@
  * 本地 mock 中转：OpenAI Chat Completions 兼容（含 SSE 流式），
  * 用于无真实 API Key 时的端到端联调。
  */
+import fs from "node:fs";
 import http from "node:http";
 
 const PORT = Number(process.env.MOCK_PORT ?? 18789);
@@ -18,6 +19,9 @@ const server = http.createServer((req, res) => {
   req.on("end", () => {
     const payload = JSON.parse(body || "{}");
     console.log(`[mock] model=${payload.model} stream=${payload.stream} messages=${payload.messages?.length ?? 0}`);
+    try {
+      fs.writeFileSync("/tmp/mock-last-request.json", JSON.stringify(payload, null, 2));
+    } catch {}
     const chars = [...REPLY];
     if (payload.stream) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });

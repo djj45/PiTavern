@@ -32,6 +32,22 @@ export interface ConnectionDto {
   defaultModel: string;
   stDataDir: string;
   persona: { name: string; description: string };
+  /** simple=内置简洁组装；bridge=ST 预设桥接组装 */
+  contextMode: "simple" | "bridge";
+  activePreset: string;
+  activeWorlds: string[];
+  worldInfo: { scanDepth: number; recursionSteps: number; caseSensitive: boolean; matchWholeWords: boolean };
+}
+
+export interface PresetSummaryDto {
+  name: string;
+  promptCount: number;
+  orderCount: number;
+}
+
+export interface WorldSummaryDto {
+  name: string;
+  entryCount: number;
 }
 
 export interface CharacterDto {

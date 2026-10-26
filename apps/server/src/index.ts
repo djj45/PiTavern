@@ -23,7 +23,7 @@ seedDataDirs(stDataDir);
 const modelsRef = { current: buildModels(config) };
 const characters = new CharacterStore(path.join(stDataDir, "characters"));
 const chats = new ChatStore(stDataDir);
-const sessions = new SessionManager(config, () => modelsRef.current, characters, chats);
+const sessions = new SessionManager(config, () => modelsRef.current, characters, chats, stDataDir);
 
 const app = createHttpApp({
   config,
@@ -32,6 +32,7 @@ const app = createHttpApp({
   chats,
   sessions,
   webDistDir: fs.existsSync(webDistDir) ? webDistDir : null,
+  stDataDir,
 });
 
 const server = http.createServer(app);

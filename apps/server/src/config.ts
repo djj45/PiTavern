@@ -21,6 +21,15 @@ export interface ProviderConfig {
   models: ProviderModelConfig[];
 }
 
+export interface WorldInfoConfig {
+  /** 扫描最近 N 条消息（ST world_info_depth） */
+  scanDepth: number;
+  /** 递归步数（ST world_info_max_recursion_steps） */
+  recursionSteps: number;
+  caseSensitive: boolean;
+  matchWholeWords: boolean;
+}
+
 export interface TavernConfig {
   port: number;
   /** SillyTavern 兼容数据目录（characters/ chats/ worlds/ OpenAI Settings/） */
@@ -31,6 +40,13 @@ export interface TavernConfig {
   persona: { name: string; description: string };
   /** off | low | medium | high（仅对 reasoning 模型生效） */
   thinkingLevel: "off" | "low" | "medium" | "high";
+  /** simple=内置简洁组装；bridge=ST 预设桥接组装 */
+  contextMode: "simple" | "bridge";
+  /** 桥接模式使用的预设（文件名，OpenAI Settings/ 下） */
+  activePreset: string;
+  /** 桥接模式额外启用的全局世界书（worlds/ 下的文件名） */
+  activeWorlds: string[];
+  worldInfo: WorldInfoConfig;
 }
 
 export const CONFIG_PATH = process.env.PITAVERN_CONFIG ?? "data/config.json";
@@ -51,6 +67,10 @@ export function defaultConfig(): TavernConfig {
     defaultModel: "",
     persona: { name: "旅人", description: "" },
     thinkingLevel: "off",
+    contextMode: "simple",
+    activePreset: "",
+    activeWorlds: [],
+    worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true },
   };
 }
 
@@ -62,6 +82,7 @@ export function loadConfig(): TavernConfig {
     ...defaults,
     ...raw,
     persona: { ...defaults.persona, ...raw.persona },
+    worldInfo: { ...defaults.worldInfo, ...raw.worldInfo },
   };
 }
 

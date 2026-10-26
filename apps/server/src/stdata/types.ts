@@ -15,6 +15,10 @@ export interface CharacterCard {
   creator: string;
   characterVersion: string;
   extensions: Record<string, unknown>;
+  /** V2/V3 卡内嵌世界书（character_book，桥接模式扫描用） */
+  characterBook: unknown;
+  /** 卡片引用的外部世界书名（extensions.world → worlds/<name>.json） */
+  worldName: string;
   /** 卡片对应的 PNG 文件绝对路径（无则空串） */
   avatarFile: string;
 }
@@ -45,6 +49,7 @@ interface RawCardData {
   creator?: unknown;
   character_version?: unknown;
   extensions?: unknown;
+  character_book?: unknown;
 }
 
 function str(value: unknown, fallback = ""): string {
@@ -72,6 +77,8 @@ export function normalizeCard(spec: string, data: RawCardData, avatarFile: strin
     creator: str(data.creator),
     characterVersion: str(data.character_version),
     extensions: (data.extensions as Record<string, unknown>) ?? {},
+    characterBook: data.character_book ?? null,
+    worldName: str((data.extensions as Record<string, unknown> | undefined)?.world),
     avatarFile,
   };
 }

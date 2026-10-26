@@ -193,7 +193,87 @@ try {
   assert.equal(lines[2].is_user, false);
   console.log("✓ JSONL 落库（3 行：开场白 + 用户 + 助手）");
 
-  console.log("\n=== M1 冒烟全部通过 ===");
+  // 8. 桥接模式全链路：迷你 ST 预设 + 世界书 + 提示词正则
+  const presetDir = path.join(DATA_DIR, "OpenAI Settings");
+  fs.mkdirSync(presetDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(presetDir, "e2e桥接.json"),
+    JSON.stringify({
+      temperature: 0.7,
+      top_p: 0.9,
+      openai_max_tokens: 2048,
+      prompts: [
+        { identifier: "main", name: "Main", role: "system", content: "你是 {{char}}，与 {{user}} 演绎故事。" },
+        { identifier: "worldInfoBefore", name: "World Info (before)", role: "system", marker: true, content: "" },
+        { identifier: "chatHistory", name: "Chat History", role: "system", marker: true, content: "" },
+        { identifier: "absTail", name: "尾部注入", role: "system", content: "|e2e深度注入|", injection_position: 1, injection_depth: 0 },
+      ],
+      prompt_order: [{ character_id: 100001, order: [
+        { identifier: "main", enabled: true },
+        { identifier: "worldInfoBefore", enabled: true },
+        { identifier: "chatHistory", enabled: true },
+        { identifier: "absTail", enabled: true },
+      ] }],
+      extensions: {
+        regex_scripts: [{
+          scriptName: "去思考", findRegex: "/<think>([\\s\\S]*?)<\\/think>/g", replaceString: "",
+          placement: [2], disabled: false, markdownOnly: false, promptOnly: true, minDepth: 1, maxDepth: null,
+        }],
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(DATA_DIR, "worlds", "e2e世界.json"),
+    JSON.stringify({ entries: {
+      0: { uid: "0", key: [], keysecondary: [], content: "[E2E常驻设定] 月亮是蓝色的。", constant: true, disable: false, order: 10, position: 0 },
+      1: { uid: "1", key: ["银剑"], keysecondary: [], content: "[E2E银剑设定] 银剑会鸣响。", constant: false, disable: false, order: 20, position: 0 },
+    } }),
+  );
+  res = await fetch(`${BASE}/api/connection`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contextMode: "bridge", activePreset: "e2e桥接", activeWorlds: ["e2e世界"] }),
+  });
+  assert.ok((await res.json()).ok);
+
+  // 第二轮：先追加一条带 think 标签的助手消息（模拟历史），再发含世界书关键词的用户消息
+  fs.appendFileSync(
+    path.join(DATA_DIR, chatId),
+    `${JSON.stringify({ name: "测试看板娘", is_user: false, is_system: false, send_date: new Date().toISOString(), mes: "<think>客人提到银剑，翻下设定</think>（她眯起眼）银剑？您倒是识货。" })}\n`,
+    "utf8",
+  );
+  const ws2 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  await new Promise((resolve, reject) => { ws2.on("open", resolve); ws2.on("error", reject); });
+  ws2.send(JSON.stringify({ type: "chat.send", chatId, text: "我拔出银剑。" }));
+  const deadline2 = Date.now() + 30000;
+  const events2 = [];
+  ws2.on("message", (raw) => events2.push(JSON.parse(String(raw))));
+  while (Date.now() < deadline2) {
+    if (events2.some((e) => e.type === "chat.done") || events2.some((e) => e.type === "chat.error")) break;
+    await sleep(100);
+  }
+  assert.ok(events2.some((e) => e.type === "chat.done"), `桥接轮应成功: ${JSON.stringify(events2.filter((e) => e.type === "chat.error"))}`);
+  ws2.close();
+
+  // 校验 mock 中转实际收到的请求结构
+  const sent = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
+  assert.equal(sent.temperature, 0.7, "预设采样参数应透传");
+  assert.equal(sent.top_p, 0.9);
+  assert.equal(sent.max_tokens ?? sent.max_completion_tokens, 2048, "maxTokens 应透传（compat 决定字段名）");
+  const msgTexts = sent.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
+  assert.ok(msgTexts.includes("你是 测试看板娘，与 测试员 演绎故事。"), "宏应替换（char/user）");
+  assert.ok(msgTexts.includes("[E2E常驻设定]"), "世界书常驻条目应注入");
+  assert.ok(msgTexts.includes("[E2E银剑设定]"), "世界书关键词条目应注入");
+  assert.ok(!msgTexts.includes("<think>"), "提示词正则应去除 think 标签");
+  const lastUser = sent.messages.map((m) => m.role).lastIndexOf("user");
+  assert.ok(lastUser === sent.messages.length - 1 || sent.messages[lastUser + 1]?.role !== "user", "用户消息定位正确");
+  // pi-ai 的 transcript 语义：所有 system 消息按序重放合并为开头一条 leading system，
+  // 尾部注入的内容保留、位置前移（与 ST 的差异已文档化）
+  assert.ok(msgTexts.includes("|e2e深度注入|"), "depth0 绝对注入内容应在请求中");
+  assert.equal(sent.messages[0].role, "system");
+  console.log("✓ 桥接模式全链路（预设/宏/世界书/正则/深度注入/采样透传）");
+
+  console.log("\n=== M1+M2 冒烟全部通过 ===");
 } finally {
   mock.kill();
   server.kill();

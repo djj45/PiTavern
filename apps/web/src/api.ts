@@ -1,4 +1,11 @@
-import type { ChatMessageDto, ChatSummaryDto, CharacterDto, ConnectionDto } from "@pitavern/shared";
+import type {
+  ChatMessageDto,
+  ChatSummaryDto,
+  CharacterDto,
+  ConnectionDto,
+  PresetSummaryDto,
+  WorldSummaryDto,
+} from "@pitavern/shared";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -10,7 +17,9 @@ async function json<T>(res: Response): Promise<T> {
 
 export const api = {
   connection: () => fetch("/api/connection").then((r) => json<ConnectionDto>(r)),
-  saveConnection: (patch: Partial<ConnectionDto> & { providers?: unknown }) =>
+  saveConnection: (patch: Partial<Omit<ConnectionDto, "providers">> & {
+    providers?: Array<ConnectionDto["providers"][number] & { apiKey?: string }>;
+  }) =>
     fetch("/api/connection", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -21,6 +30,8 @@ export const api = {
       json<{ ok: boolean; provider?: string; model?: string; error?: string }>(r),
     ),
   characters: () => fetch("/api/characters").then((r) => json<CharacterDto[]>(r)),
+  presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
+  worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),
   chats: (character?: string) =>
     fetch(`/api/chats${character ? `?character=${encodeURIComponent(character)}` : ""}`).then((r) =>
       json<ChatSummaryDto[]>(r),

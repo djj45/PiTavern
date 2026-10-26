@@ -1,14 +1,20 @@
+import fs from "node:fs";
+import path from "node:path";
 import express, { type Request, type Response } from "express";
 import type {
   CharacterDto,
   ChatMessageDto,
   ChatSummaryDto,
   ConnectionDto,
+  PresetSummaryDto,
   ProviderDto,
+  WorldSummaryDto,
 } from "@pitavern/shared";
 import { PITAVERN_VERSION } from "@pitavern/shared";
 import type { TavernConfig } from "../config.ts";
 import { saveConfig, seedDataDirs } from "../config.ts";
+import { listPresets, presetsDir } from "../context/preset.ts";
+import { normalizeWorldFile } from "../context/worldinfo.ts";
 import { providerDtoList, buildModels, resolveModel } from "../providers/models.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { CharacterStore } from "../stdata/characters.ts";
@@ -22,6 +28,7 @@ export interface HttpDeps {
   chats: ChatStore;
   sessions: SessionManager;
   webDistDir: string | null;
+  stDataDir: string;
 }
 
 function characterDto(card: import("../stdata/types.ts").CharacterCard): CharacterDto {
@@ -66,8 +73,33 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       defaultModel: config.defaultModel,
       stDataDir: config.stDataDir,
       persona: config.persona,
+      contextMode: config.contextMode,
+      activePreset: config.activePreset,
+      activeWorlds: config.activeWorlds,
+      worldInfo: config.worldInfo,
     };
     res.json(dto);
+  });
+
+  app.get("/api/presets", (_req, res) => {
+    const list: PresetSummaryDto[] = listPresets(deps.stDataDir);
+    res.json(list);
+  });
+
+  app.get("/api/worlds", (_req, res) => {
+    const worldsRoot = path.join(deps.stDataDir, "worlds");
+    const list: WorldSummaryDto[] = [];
+    if (fs.existsSync(worldsRoot)) {
+      for (const file of fs.readdirSync(worldsRoot).filter((f) => f.endsWith(".json")).sort()) {
+        try {
+          const entries = normalizeWorldFile(JSON.parse(fs.readFileSync(path.join(worldsRoot, file), "utf8")), file);
+          list.push({ name: file.replace(/\.json$/, ""), entryCount: entries.length });
+        } catch {
+          // 跳过损坏文件
+        }
+      }
+    }
+    res.json(list);
   });
 
   /** 保存连接设置。apiKey 为空字符串表示不变，undefined 表示清除。 */
@@ -96,6 +128,18 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     if (typeof body.defaultModel === "string") config.defaultModel = body.defaultModel;
     if (body.persona?.name) config.persona.name = body.persona.name;
     if (typeof body.persona?.description === "string") config.persona.description = body.persona.description;
+    if (body.contextMode === "simple" || body.contextMode === "bridge") config.contextMode = body.contextMode;
+    if (typeof body.activePreset === "string") config.activePreset = body.activePreset.replace(/\.json$/, "");
+    if (Array.isArray(body.activeWorlds)) {
+      config.activeWorlds = body.activeWorlds.filter((w): w is string => typeof w === "string").map((w) => w.replace(/\.json$/, ""));
+    }
+    if (body.worldInfo && typeof body.worldInfo === "object") {
+      const wi = body.worldInfo as Partial<ConnectionDto["worldInfo"]>;
+      if (typeof wi.scanDepth === "number") config.worldInfo.scanDepth = Math.max(1, Math.min(100, wi.scanDepth));
+      if (typeof wi.recursionSteps === "number") config.worldInfo.recursionSteps = Math.max(0, Math.min(10, wi.recursionSteps));
+      if (typeof wi.caseSensitive === "boolean") config.worldInfo.caseSensitive = wi.caseSensitive;
+      if (typeof wi.matchWholeWords === "boolean") config.worldInfo.matchWholeWords = wi.matchWholeWords;
+    }
     if (typeof body.stDataDir === "string" && body.stDataDir.trim() && body.stDataDir.trim() !== config.stDataDir) {
       config.stDataDir = body.stDataDir.trim();
       seedDataDirs(config.stDataDir);

@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "check": "tsc -p tsconfig.json",
+    "verify:bridge": "tsx scripts/bridge-verify.ts",
     "e2e": "node scripts/e2e-smoke.mjs"
   },
   "dependencies": {

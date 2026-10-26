@@ -1,8 +1,8 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Message, Model, Models, Usage } from "@earendil-works/pi-ai";
-import type { CharacterCard } from "../stdata/types.ts";
-import type { StChatLine } from "../stdata/types.ts";
+import type { BridgeSampling } from "../context/bridge.ts";
+import type { CharacterCard, StChatLine } from "../stdata/types.ts";
 
 const ZERO_USAGE: Usage = {
   input: 0,
@@ -14,8 +14,7 @@ const ZERO_USAGE: Usage = {
 };
 
 /**
- * M1 极简系统提示词：人物卡三件套 + persona + 基础 RP 规范。
- * M2 桥接组装器上线后，这里会被预设引擎的产物取代。
+ * M1 极简系统提示词（simple 模式）。bridge 模式下由组装器产出完整上下文。
  */
 export function buildSystemPrompt(card: CharacterCard, persona: { name: string; description: string }): string {
   const parts: string[] = [];
@@ -64,28 +63,55 @@ export function historyToAgentMessages(lines: StChatLine[]): Message[] {
 export interface TavernAgentOptions {
   models: Models;
   model: Model<"openai-completions">;
-  systemPrompt: string;
-  /** 历史消息（不含本轮用户输入），会作为 initialState.messages */
-  history: Message[];
   chatId: string;
   thinkingLevel: "off" | "low" | "medium" | "high";
+  /** simple 模式：系统提示词 + 历史（不含本轮用户消息，配合 prompt()） */
+  systemPrompt?: string;
+  history?: Message[];
+  /** bridge 模式：组装器产出的完整消息列表（含本轮用户消息，配合 continue()） */
+  messages?: Message[];
+  /** bridge 模式：预设采样参数 */
+  sampling?: BridgeSampling;
 }
 
 /**
- * 构建酒馆 Agent。M1 关键策略：
+ * 构建酒馆 Agent：
  * - finishTurn 强制 {action:"end"}：一次用户输入 = 一回合回复，防自主循环（RP 延迟敏感）；
  * - sessionId=chatId：给支持会话缓存的网关做 prompt cache 命中；
- * - 工具列表 M3 注入，这里留空。
+ * - sampling 经 streamFn 包装透传（pi Agent 本身不携带采样参数）。
  */
 export function createTavernAgent(options: TavernAgentOptions): Agent {
+  const { sampling } = options;
+  const streamFn: typeof options.models.streamSimple = (model, context, streamOptions) => {
+    const merged = {
+      ...streamOptions,
+      ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
+      ...(sampling?.maxTokens !== undefined ? { maxTokens: sampling.maxTokens } : {}),
+      ...(sampling?.samplingParams
+        ? { samplingParams: { ...(streamOptions?.samplingParams ?? {}), ...sampling.samplingParams } }
+        : {}),
+    };
+    return options.models.streamSimple(model, context, merged);
+  };
+
+  const thinkingLevel = options.model.reasoning ? options.thinkingLevel : "off";
+  const initialState =
+    options.messages !== undefined
+      ? {
+          model: options.model,
+          thinkingLevel,
+          messages: options.messages as AgentMessage[],
+        }
+      : {
+          systemPrompt: options.systemPrompt ?? "",
+          model: options.model,
+          thinkingLevel,
+          messages: (options.history ?? []) as AgentMessage[],
+        };
+
   return new Agent({
-    initialState: {
-      systemPrompt: options.systemPrompt,
-      model: options.model,
-      thinkingLevel: options.model.reasoning ? options.thinkingLevel : "off",
-      messages: options.history as AgentMessage[],
-    },
-    streamFn: options.models.streamSimple.bind(options.models),
+    initialState,
+    streamFn,
     finishTurn: async () => ({ action: "end" }),
     sessionId: options.chatId,
   });

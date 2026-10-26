@@ -12,7 +12,8 @@
     "dev:web": "npm run dev -w apps/web",
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present",
-    "e2e": "npm run e2e -w apps/server"
+    "e2e": "npm run e2e -w apps/server",
+    "verify:bridge": "npm run verify:bridge -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

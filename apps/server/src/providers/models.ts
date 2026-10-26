@@ -41,6 +41,8 @@ export function buildModels(config: TavernConfig): Models {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: m.contextWindow ?? 1_000_000,
           maxTokens: m.maxTokens ?? 16_384,
+          // 中转站普遍只认旧字段 max_tokens，覆盖 pi-ai 的自动探测
+          compat: { maxTokensField: "max_tokens" },
         }),
       ),
       api: openAICompletionsApi(),

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { ConnectionDto, ProviderDto } from "@pitavern/shared";
+import { useEffect, useState } from "react";
+import type { ConnectionDto, PresetSummaryDto, ProviderDto, WorldSummaryDto } from "@pitavern/shared";
 import { api } from "../api.ts";
 
 interface SettingsDialogProps {
@@ -29,6 +29,18 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
   const [personaName, setPersonaName] = useState(connection?.persona.name ?? "");
   const [personaDescription, setPersonaDescription] = useState(connection?.persona.description ?? "");
   const [test, setTest] = useState<TestState>({ running: false, result: null });
+  const [presets, setPresets] = useState<PresetSummaryDto[]>([]);
+  const [worlds, setWorlds] = useState<WorldSummaryDto[]>([]);
+  const [contextMode, setContextMode] = useState<"simple" | "bridge">(connection?.contextMode ?? "simple");
+  const [activePreset, setActivePreset] = useState(connection?.activePreset ?? "");
+  const [activeWorlds, setActiveWorlds] = useState<string[]>(connection?.activeWorlds ?? []);
+  const [scanDepth, setScanDepth] = useState(connection?.worldInfo?.scanDepth ?? 2);
+  const [recursionSteps, setRecursionSteps] = useState(connection?.worldInfo?.recursionSteps ?? 0);
+
+  useEffect(() => {
+    api.presets().then(setPresets).catch(() => setPresets([]));
+    api.worlds().then(setWorlds).catch(() => setWorlds([]));
+  }, []);
 
   const updateProvider = (id: string, patch: Partial<EditableProvider>) => {
     setProviders((list) => list.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -60,15 +72,27 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
     try {
       const payload = {
         providers: providers.map((p) => ({
-          ...p,
+          id: p.id,
+          name: p.name,
+          baseUrl: p.baseUrl,
+          hasApiKey: p.hasApiKey,
+          models: p.models,
           // 空串 = 服务端保持原 key 不变；填了新值 = 更新
           apiKey: p.apiKeyInput,
-          models: p.models,
         })),
         defaultProvider,
         defaultModel,
         stDataDir,
         persona: { name: personaName || "旅人", description: personaDescription },
+        contextMode,
+        activePreset,
+        activeWorlds,
+        worldInfo: {
+          scanDepth,
+          recursionSteps,
+          caseSensitive: connection?.worldInfo?.caseSensitive ?? false,
+          matchWholeWords: connection?.worldInfo?.matchWholeWords ?? true,
+        },
       };
       await api.saveConnection(payload);
       onSaved();
@@ -174,6 +198,94 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
               </div>
             ))}
           </div>
+        </section>
+
+        {/* 对话上下文 */}
+        <section className="mb-5">
+          <h3 className="mb-2 text-sm font-medium">对话上下文</h3>
+          <div className="mb-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setContextMode("simple")}
+              className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
+                contextMode === "simple" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
+              }`}
+            >
+              内置简洁组装
+              <span className="block text-xs text-tavern-dim">人物卡三件套 + 基础扮演规则</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setContextMode("bridge")}
+              className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
+                contextMode === "bridge" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
+              }`}
+            >
+              ST 预设桥接
+              <span className="block text-xs text-tavern-dim">prompt_order + 宏 + 世界书 + 提示词正则</span>
+            </button>
+          </div>
+          {contextMode === "bridge" && (
+            <div className="rounded-lg border border-tavern-border bg-tavern-bg p-3">
+              <label className="mb-1 block text-xs text-tavern-dim">预设（OpenAI Settings/ 目录）</label>
+              <select
+                value={activePreset}
+                onChange={(e) => setActivePreset(e.target.value)}
+                className="mb-2 w-full rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
+              >
+                <option value="">（未选择）</option>
+                {presets.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}（{p.orderCount}/{p.promptCount} 条）
+                  </option>
+                ))}
+              </select>
+              <label className="mb-1 block text-xs text-tavern-dim">全局世界书（卡内书与卡片引用世界自动生效）</label>
+              {worlds.length === 0 ? (
+                <p className="mb-2 text-xs text-tavern-dim">worlds/ 目录暂无世界书文件</p>
+              ) : (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {worlds.map((w) => {
+                    const on = activeWorlds.includes(w.name);
+                    return (
+                      <button
+                        key={w.name}
+                        type="button"
+                        onClick={() => setActiveWorlds((list) => (on ? list.filter((x) => x !== w.name) : [...list, w.name]))}
+                        className={`rounded-full px-2.5 py-0.5 text-xs ${on ? "bg-tavern-accent text-tavern-bg" : "bg-tavern-raised text-tavern-dim hover:text-tavern-text"}`}
+                      >
+                        {w.name}（{w.entryCount}）
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="flex items-center gap-4 text-xs text-tavern-dim">
+                <label className="flex items-center gap-1.5">
+                  扫描深度
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={scanDepth}
+                    onChange={(e) => setScanDepth(Number(e.target.value) || 1)}
+                    className="w-16 rounded border border-tavern-border bg-tavern-raised px-1.5 py-0.5 text-tavern-text"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5">
+                  递归步数
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={recursionSteps}
+                    onChange={(e) => setRecursionSteps(Number(e.target.value) || 0)}
+                    className="w-16 rounded border border-tavern-border bg-tavern-raised px-1.5 py-0.5 text-tavern-text"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* persona 与数据目录 */}
