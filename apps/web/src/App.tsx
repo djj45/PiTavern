@@ -2,16 +2,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessageDto, ChatSummaryDto, CharacterDto, ConnectionDto, ServerEvent } from "@pitavern/shared";
 import { api } from "./api.ts";
 import { useTavernSocket } from "./socket.ts";
+import { isToolItem, type ChatItem } from "./chatItems.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { ChatView } from "./components/ChatView.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
+import { ActivityPanel, type UsageStats } from "./components/ActivityPanel.tsx";
 
 interface ActiveChat {
   id: string;
   character: string;
-  messages: ChatMessageDto[];
+  items: ChatItem[];
 }
+
+const EMPTY_USAGE: UsageStats = { input: 0, output: 0, totalTokens: 0, costTotal: 0, turns: 0 };
 
 export function App() {
   const [connection, setConnection] = useState<ConnectionDto | null>(null);
@@ -22,6 +26,8 @@ export function App() {
   const [streaming, setStreaming] = useState<{ chatId: string; text: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [usage, setUsage] = useState<UsageStats>(EMPTY_USAGE);
 
   const activeChatIdRef = useRef<string | null>(null);
   activeChatIdRef.current = activeChat?.id ?? null;
@@ -65,14 +71,67 @@ export function App() {
         case "chat.delta":
           if (isActive) setStreaming((s) => (s ? { ...s, text: s.text + event.delta } : s));
           break;
+        case "chat.tool_start":
+          if (isActive) {
+            setActiveChat((chat) =>
+              chat
+                ? {
+                    ...chat,
+                    items: [
+                      ...chat.items,
+                      {
+                        kind: "tool" as const,
+                        key: event.toolCallId,
+                        toolCallId: event.toolCallId,
+                        toolName: event.toolName,
+                        args: event.args,
+                        status: "running" as const,
+                      },
+                    ],
+                  }
+                : chat,
+            );
+          }
+          break;
+        case "chat.tool_end":
+          if (isActive) {
+            setActiveChat((chat) =>
+              chat
+                ? {
+                    ...chat,
+                    items: chat.items.map((item) =>
+                      isToolItem(item) && item.toolCallId === event.toolCallId
+                        ? {
+                            ...item,
+                            status: event.isError ? ("error" as const) : ("done" as const),
+                            summary: event.details?.summary,
+                            durationMs: event.durationMs,
+                          }
+                        : item,
+                    ),
+                  }
+                : chat,
+            );
+          }
+          break;
         case "chat.done":
           if (isActive) {
             setStreaming(null);
-            setActiveChat((chat) =>
-              chat ? { ...chat, messages: [...chat.messages, event.message] } : chat,
-            );
+            const message: ChatMessageDto = event.message;
+            setActiveChat((chat) => (chat ? { ...chat, items: [...chat.items, message] } : chat));
           }
           refreshChats();
+          break;
+        case "chat.usage":
+          if (isActive) {
+            setUsage((u) => ({
+              input: u.input + event.input,
+              output: u.output + event.output,
+              totalTokens: u.totalTokens + event.totalTokens,
+              costTotal: u.costTotal + event.costTotal,
+              turns: u.turns + 1,
+            }));
+          }
           break;
         case "chat.error":
           if (isActive) setStreaming(null);
@@ -87,14 +146,18 @@ export function App() {
 
   const socket = useTavernSocket(onEvent);
 
-  const openChat = useCallback(async (chatId: string) => {
-    try {
-      const chat = await api.chat(chatId);
-      setActiveChat({ id: chat.id, character: chat.character, messages: chat.messages });
-    } catch (e) {
-      showNotice(`打开聊天失败: ${(e as Error).message}`);
-    }
-  }, [showNotice]);
+  const openChat = useCallback(
+    async (chatId: string) => {
+      try {
+        const chat = await api.chat(chatId);
+        setActiveChat({ id: chat.id, character: chat.character, items: chat.messages });
+        setUsage(EMPTY_USAGE);
+      } catch (e) {
+        showNotice(`打开聊天失败: ${(e as Error).message}`);
+      }
+    },
+    [showNotice],
+  );
 
   const newChat = useCallback(async () => {
     const name = selectedCharacter ?? characters[0]?.name;
@@ -118,11 +181,11 @@ export function App() {
         chat
           ? {
               ...chat,
-              messages: [
-                ...chat.messages,
+              items: [
+                ...chat.items,
                 {
                   id: `local-user-${Date.now()}`,
-                  role: "user",
+                  role: "user" as const,
                   name: connection?.persona.name ?? "你",
                   text,
                   sendDate: new Date().toISOString(),
@@ -173,6 +236,8 @@ export function App() {
         wsConnected={socket.connected}
         onModelChange={changeModel}
         onOpenSettings={() => setSettingsOpen(true)}
+        panelOpen={panelOpen}
+        onTogglePanel={() => setPanelOpen((v) => !v)}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -193,6 +258,7 @@ export function App() {
           onStop={stopGeneration}
           disabled={!connection?.defaultModel}
         />
+        {panelOpen && <ActivityPanel items={activeChat?.items ?? []} usage={usage} />}
       </div>
       {notice && (
         <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-text shadow-xl">

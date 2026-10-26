@@ -210,6 +210,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     const meta = chats.createChat(
       card.name,
       firstMes ? { name: card.name, is_user: false, is_system: false, mes: firstMes } : null,
+      config.persona.name,
     );
     res.json({ id: meta.id });
   });

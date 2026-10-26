@@ -5,9 +5,11 @@ interface TopBarProps {
   wsConnected: boolean;
   onModelChange: (providerId: string, modelId: string) => void;
   onOpenSettings: () => void;
+  panelOpen: boolean;
+  onTogglePanel: () => void;
 }
 
-export function TopBar({ connection, wsConnected, onModelChange, onOpenSettings }: TopBarProps) {
+export function TopBar({ connection, wsConnected, onModelChange, onOpenSettings, panelOpen, onTogglePanel }: TopBarProps) {
   const models =
     connection?.providers.flatMap((p) =>
       p.models.map((m) => ({ providerId: p.id, providerName: p.name, modelId: m.id, modelName: m.name, reasoning: m.reasoning })),
@@ -48,6 +50,16 @@ export function TopBar({ connection, wsConnected, onModelChange, onOpenSettings 
             ))}
           </select>
         )}
+        <button
+          type="button"
+          onClick={onTogglePanel}
+          title="工具活动与用量面板"
+          className={`rounded-md border px-2.5 py-1 text-sm ${
+            panelOpen ? "border-tavern-accent-dim text-tavern-accent" : "border-tavern-border bg-tavern-raised text-tavern-text hover:border-tavern-accent-dim"
+          }`}
+        >
+          📊
+        </button>
         <button
           type="button"
           onClick={onOpenSettings}

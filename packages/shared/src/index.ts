@@ -120,4 +120,6 @@ export type ServerEvent =
       toolName: string;
       isError: boolean;
       durationMs?: number;
+      /** 工具回传的 UI 摘要（每个工具保证含 summary 字段） */
+      details?: { summary?: string; [key: string]: unknown };
     };

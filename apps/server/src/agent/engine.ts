@@ -1,6 +1,6 @@
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Message, Model, Models, Usage } from "@earendil-works/pi-ai";
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
 import type { BridgeSampling } from "../context/bridge.ts";
 import type { CharacterCard, StChatLine } from "../stdata/types.ts";
 
@@ -72,6 +72,8 @@ export interface TavernAgentOptions {
   messages?: Message[];
   /** bridge 模式：预设采样参数 */
   sampling?: BridgeSampling;
+  /** 酒馆工具四件套（M3） */
+  tools?: AgentTool<any>[];
 }
 
 /**
@@ -95,24 +97,39 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
   };
 
   const thinkingLevel = options.model.reasoning ? options.thinkingLevel : "off";
+  const tools = options.tools ?? [];
+
+  // bridge 模式：messages[0] 已是 system，工具声明须挂到首条 system 消息的 toolsAdded，
+  // 否则 pi 的 createInitialSystemMessage 不会创建、模型看不到工具
+  let initialMessages: AgentMessage[];
+  if (options.messages !== undefined) {
+    initialMessages = [...(options.messages as AgentMessage[])];
+    if (tools.length > 0 && initialMessages[0]?.role === "system") {
+      const first = initialMessages[0] as SystemMessage;
+      initialMessages[0] = { ...first, toolsAdded: [...(first.toolsAdded ?? []), ...tools] };
+    }
+  } else {
+    initialMessages = (options.history ?? []) as AgentMessage[];
+  }
+
   const initialState =
     options.messages !== undefined
-      ? {
-          model: options.model,
-          thinkingLevel,
-          messages: options.messages as AgentMessage[],
-        }
-      : {
-          systemPrompt: options.systemPrompt ?? "",
-          model: options.model,
-          thinkingLevel,
-          messages: (options.history ?? []) as AgentMessage[],
-        };
+      ? { model: options.model, thinkingLevel, messages: initialMessages, tools }
+      : { systemPrompt: options.systemPrompt ?? "", model: options.model, thinkingLevel, messages: initialMessages, tools };
+
+  // 单回合 RP 语义：模型输出纯文本即结束；有工具结果则继续循环（查书/召回后续写）。
+  // MAX_TURNS 上限防止模型无限工具循环。
+  const MAX_TURNS = 10;
+  let turnCount = 0;
 
   return new Agent({
     initialState,
     streamFn,
-    finishTurn: async () => ({ action: "end" }),
+    finishTurn: async (turn) => {
+      turnCount += 1;
+      if (turnCount >= MAX_TURNS) return { action: "end" };
+      return turn.toolResults.length > 0 ? undefined : { action: "end" };
+    },
     sessionId: options.chatId,
   });
 }

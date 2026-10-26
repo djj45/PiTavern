@@ -18,11 +18,51 @@ const server = http.createServer((req, res) => {
   req.on("data", (chunk) => (body += chunk));
   req.on("end", () => {
     const payload = JSON.parse(body || "{}");
-    console.log(`[mock] model=${payload.model} stream=${payload.stream} messages=${payload.messages?.length ?? 0}`);
+    console.log(`[mock] model=${payload.model} stream=${payload.stream} messages=${payload.messages?.length ?? 0} tools=${payload.tools?.length ?? 0}`);
     try {
       fs.writeFileSync("/tmp/mock-last-request.json", JSON.stringify(payload, null, 2));
     } catch {}
     const chars = [...REPLY];
+
+    // 工具循环模拟：带工具且最后一条是 user → 发起 worldbook_search 调用；
+    // 最后一条是 tool 结果 → 收尾输出正文
+    const lastMsg = payload.messages?.[payload.messages.length - 1];
+    if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+      const tool = lastMsg?.role === "tool"
+        ? null
+        : lastMsg?.role === "user"
+          ? {
+              index: 0,
+              id: "call_mock_1",
+              type: "function",
+              function: { name: "worldbook_search", arguments: JSON.stringify({ query: "银剑", read: true }) },
+            }
+          : null;
+      if (tool) {
+        console.log("[mock] → tool_call worldbook_search(银剑)");
+        const chunk = {
+          id: "mock-2",
+          object: "chat.completion.chunk",
+          choices: [{ index: 0, delta: { role: "assistant", tool_calls: [tool] }, finish_reason: null }],
+        };
+        if (payload.stream) {
+          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          res.write('data: {"id":"mock-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n');
+          res.write("data: [DONE]\n\n");
+          res.end();
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            id: "mock-2",
+            object: "chat.completion",
+            choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [tool] }, finish_reason: "tool_calls" }],
+          }));
+        }
+        return;
+      }
+    }
+
     if (payload.stream) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       let i = 0;

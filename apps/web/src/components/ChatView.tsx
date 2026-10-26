@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessageDto } from "@pitavern/shared";
+import { isToolItem, TOOL_META, toolArgPreview, type ChatItem, type ToolItem } from "../chatItems.ts";
 
 interface ChatViewProps {
-  chat: { id: string; character: string; messages: ChatMessageDto[] } | null;
+  chat: { id: string; character: string; items: ChatItem[] } | null;
   personaName: string;
   streamingText: string | null;
   onSend: (text: string) => void;
@@ -15,7 +16,7 @@ function MessageBubble({ message, avatarUrl }: { message: ChatMessageDto; avatar
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       {!isUser && avatarUrl && <img src={avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />}
-      <div className={`max-w-[80%] ${isUser ? "items-end" : "items-start"} flex flex-col`}>
+      <div className={`flex max-w-[80%] flex-col ${isUser ? "items-end" : "items-start"}`}>
         <span className="mb-1 px-1 text-xs text-tavern-dim">{message.name}</span>
         <div
           className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed ${
@@ -29,6 +30,48 @@ function MessageBubble({ message, avatarUrl }: { message: ChatMessageDto; avatar
   );
 }
 
+function ToolCard({ item }: { item: ToolItem }) {
+  const [open, setOpen] = useState(false);
+  const meta = TOOL_META[item.toolName] ?? { icon: "🔧", label: item.toolName };
+  const refused = item.status === "done" && item.summary?.startsWith("被拒");
+  return (
+    <div className="flex justify-center">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex max-w-[85%] items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+          item.status === "error"
+            ? "border-red-500/50 text-red-300"
+            : refused
+              ? "border-amber-500/40 text-amber-300"
+              : "border-tavern-border text-tavern-dim hover:border-tavern-accent-dim"
+        }`}
+      >
+        <span>{meta.icon}</span>
+        <span>{meta.label}</span>
+        {toolArgPreview(item.toolName, item.args) && (
+          <span className="max-w-64 truncate text-tavern-dim/80">{toolArgPreview(item.toolName, item.args)}</span>
+        )}
+        <span>·</span>
+        {item.status === "running" ? (
+          <span className="animate-pulse">调用中…</span>
+        ) : (
+          <span className={item.summary ? "" : "opacity-60"}>{item.summary ?? (item.status === "error" ? "失败" : "完成")}</span>
+        )}
+        {item.durationMs != null && item.status !== "running" && (
+          <span className="text-tavern-dim/60">{item.durationMs}ms</span>
+        )}
+        <span className="text-tavern-dim/50">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="mt-1 w-full max-w-[85%] rounded-lg border border-tavern-border bg-tavern-bg/60 p-2 text-left text-xs text-tavern-dim">
+          <pre className="overflow-x-auto whitespace-pre-wrap break-all">{JSON.stringify(item.args, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatView({ chat, personaName, streamingText, onSend, onStop, disabled }: ChatViewProps) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -36,7 +79,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, dis
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat?.messages.length, streamingText]);
+  }, [chat?.items.length, streamingText]);
 
   if (!chat) {
     return (
@@ -61,10 +104,14 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, dis
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-5">
-          {chat.messages.map((m) => (
-            <MessageBubble key={m.id} message={m} avatarUrl={avatarUrl} />
-          ))}
+        <div className="mx-auto flex max-w-3xl flex-col gap-4">
+          {chat.items.map((item, i) =>
+            isToolItem(item) ? (
+              <ToolCard key={item.key} item={item} />
+            ) : (
+              <MessageBubble key={item.id || `msg-${i}`} message={item} avatarUrl={avatarUrl} />
+            ),
+          )}
           {isStreaming && (
             <div className="flex gap-3">
               <img src={avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />

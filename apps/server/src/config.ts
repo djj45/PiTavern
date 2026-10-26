@@ -47,6 +47,8 @@ export interface TavernConfig {
   /** 桥接模式额外启用的全局世界书（worlds/ 下的文件名） */
   activeWorlds: string[];
   worldInfo: WorldInfoConfig;
+  /** 酒馆工具四件套（worldbook_search/recall/variables/skill） */
+  toolsEnabled: boolean;
 }
 
 export const CONFIG_PATH = process.env.PITAVERN_CONFIG ?? "data/config.json";
@@ -71,6 +73,7 @@ export function defaultConfig(): TavernConfig {
     activePreset: "",
     activeWorlds: [],
     worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true },
+    toolsEnabled: true,
   };
 }
 
@@ -93,7 +96,7 @@ export function saveConfig(config: TavernConfig): void {
 
 /** 在 stDataDir 下播种 ST 兼容目录结构 */
 export function seedDataDirs(stDataDir: string): void {
-  for (const dir of ["characters", "chats", "worlds", "OpenAI Settings"]) {
+  for (const dir of ["characters", "chats", "worlds", "OpenAI Settings", "skills"]) {
     fs.mkdirSync(path.join(stDataDir, dir), { recursive: true });
   }
 }

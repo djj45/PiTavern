@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ChatMessageDto, ServerEvent } from "@pitavern/shared";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages } from "../agent/engine.ts";
+import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import { assembleBridgeContext } from "../context/bridge.ts";
+import { substituteMacros } from "../context/macros.ts";
+import type { MacroEnv } from "../context/macros.ts";
 import type { RegexScript } from "../context/regex.ts";
 import { loadPreset, presetsDir } from "../context/preset.ts";
 import { normalizeCardBook, normalizeWorldFile, type WiEntry } from "../context/worldinfo.ts";
@@ -14,11 +17,11 @@ import type { CharacterCard } from "../stdata/types.ts";
 import type { CharacterStore } from "../stdata/characters.ts";
 import type { ChatStore } from "../stdata/chats.ts";
 
-/** 单个聊天的运行时：Agent 实例缓存 + 事件转发 + 落库 */
+/** 单个聊天的运行时：Agent 引用 + 事件转发 + 召回限次冷却计数 */
 class ChatSession {
   agent: Agent | null = null;
-  agentKey = "";
   character = "";
+  enforcement: RecallEnforcement = { turn: 0, usedThisTurn: 0, cooldownUntilTurn: 0 };
 }
 
 export class SessionManager {
@@ -71,59 +74,85 @@ export class SessionManager {
       return;
     }
 
-    // 用户消息先落库（文件是唯一事实源）
+    const session = this.ensureSession(chatId, character.name);
+    // 用户消息先落库（文件是唯一事实源），并推进剧情轮次/复位本轮召回配额
     this.chats.appendMessage(chatId, { name: this.config.persona.name, is_user: true, is_system: false, mes: text });
+    session.enforcement.turn += 1;
+    session.enforcement.usedThisTurn = 0;
 
     const models = this.models();
     const model = resolveModel(models, this.config);
-    const session = this.ensureSession(chatId, character.name);
 
     this.emit({ type: "chat.started", chatId });
     try {
+      // 工具上下文：当轮有效（世界书全量条目、含本轮用户消息的历史、存档变量）
+      const macroEnv: MacroEnv = {
+        char: character.name,
+        user: this.config.persona.name,
+        personaDescription: this.config.persona.description,
+        variables: {},
+      };
+      const toolCtx: ToolContext = {
+        chatId,
+        lines: this.chats.readChat(chatId) ?? [],
+        worldEntries: this.collectWorldEntries(character),
+        variables: (this.chats.readMetadata(chatId).variables as unknown) ?? {},
+        skillsDir: path.join(this.stDataDir, "skills"),
+        substitute: (s) => substituteMacros(s, macroEnv),
+        enforcement: session.enforcement,
+        maxRecallsPerTurn: 6,
+        recallCooldownTurns: 10,
+      };
+      const tools = this.config.toolsEnabled ? createTavernTools(toolCtx) : [];
+
+      // 每轮重建 Agent：桥接/简洁两模式统一（工具闭包与组装上下文都依赖当轮状态）
+      session.agent?.reset();
+      let agent: Agent;
       if (this.config.contextMode === "bridge") {
-        await this.runBridgeTurn(chatId, session, character, model, models);
+        agent = this.buildBridgeAgent(chatId, character, model, models, toolCtx, tools);
+        session.agent = agent;
+        this.wireAgent(agent, chatId);
+        await agent.continue();
       } else {
-        await this.runSimpleTurn(chatId, session, character, model, models, text);
+        agent = createTavernAgent({
+          models,
+          model,
+          chatId,
+          thinkingLevel: this.config.thinkingLevel,
+          systemPrompt: buildSystemPrompt(character, this.config.persona) + this.toolGuidance(tools.length > 0),
+          history: historyToAgentMessages(lines),
+          tools,
+        });
+        session.agent = agent;
+        this.wireAgent(agent, chatId);
+        await agent.prompt(text);
       }
     } catch (error) {
       this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  /** simple 模式：Agent 跨轮缓存，本轮用户消息经 prompt() 追加 */
-  private async runSimpleTurn(
-    chatId: string,
-    session: ChatSession,
-    character: CharacterCard,
-    model: ReturnType<typeof resolveModel>,
-    models: Models,
-    text: string,
-  ): Promise<void> {
-    const modelKey = `simple:${model.provider}/${model.id}/${this.config.thinkingLevel}`;
-    if (!session.agent || session.agentKey !== modelKey) {
-      session.agent?.reset();
-      session.agent = createTavernAgent({
-        models,
-        model,
-        chatId,
-        thinkingLevel: this.config.thinkingLevel,
-        systemPrompt: buildSystemPrompt(character, this.config.persona),
-        history: historyToAgentMessages(this.chats.readChat(chatId) ?? []),
-      });
-      session.agentKey = modelKey;
-      this.wireAgent(session.agent, chatId);
-    }
-    await session.agent.prompt(text);
+  /** simple 模式下给模型的工具使用指引（桥接模式由预设自行约定） */
+  private toolGuidance(hasTools: boolean): string {
+    if (!hasTools) return "";
+    return [
+      "",
+      "### 可用工具",
+      "- 缺少人物/地点/门派等设定时，先用 worldbook_search 查世界书，不要凭常识编造。",
+      "- 需要回忆较早剧情细节时，用 tavern_recall_history 检索（每轮限 6 次；读完整正文后冷却 10 轮）。",
+      "- 需要确认好感度/属性等存档数值时，用 tavern_read_variables 只读查询。",
+      "工具返回的资料不是当前场景，不得照搬旧台词或让已发生的事件重演。",
+    ].join("\n");
   }
 
-  /** bridge 模式：每轮按预设重新组装完整上下文（世界书扫描依赖最新历史），Agent 一次性 */
-  private async runBridgeTurn(
+  private buildBridgeAgent(
     chatId: string,
-    session: ChatSession,
     character: CharacterCard,
     model: ReturnType<typeof resolveModel>,
     models: Models,
-  ): Promise<void> {
+    toolCtx: ToolContext,
+    tools: ReturnType<typeof createTavernTools>,
+  ): Agent {
     const presetName = this.config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
     if (!presetName || !fs.existsSync(presetFile)) {
@@ -133,13 +162,12 @@ export class SessionManager {
     const regexScripts = ((preset.extensions as { regex_scripts?: RegexScript[] } | undefined)?.regex_scripts ?? []).filter(
       (s) => !s.disabled,
     );
-    const worldEntries = this.collectWorldEntries(character);
     const assembled = assembleBridgeContext({
       preset,
       card: character,
       persona: this.config.persona,
-      chatLines: this.chats.readChat(chatId) ?? [],
-      worldEntries,
+      chatLines: toolCtx.lines,
+      worldEntries: toolCtx.worldEntries,
       regexScripts,
       options: {
         ...this.config.worldInfo,
@@ -147,20 +175,15 @@ export class SessionManager {
         maxHistoryChars: Math.floor((model.contextWindow || 128_000) * 1.5),
       },
     });
-
-    session.agent?.reset();
-    const agent = createTavernAgent({
+    return createTavernAgent({
       models,
       model,
       chatId,
       thinkingLevel: this.config.thinkingLevel,
       messages: assembled.messages,
       sampling: assembled.sampling,
+      tools,
     });
-    session.agent = agent;
-    session.agentKey = `bridge:${model.provider}/${model.id}/${presetName}`;
-    this.wireAgent(agent, chatId);
-    await agent.continue();
   }
 
   /** 世界书条目收集：卡内书 + 卡片引用世界 + 全局启用世界，按 world+uid 去重 */
@@ -255,6 +278,7 @@ export class SessionManager {
             toolName: event.toolName,
             isError: event.isError,
             durationMs: event.durationMs,
+            details: (event.result as { details?: { summary?: string; [key: string]: unknown } } | undefined)?.details,
           });
           break;
         case "agent_end": {
@@ -266,11 +290,10 @@ export class SessionManager {
     });
   }
 
-  /** 配置或模型变更后，丢弃缓存的 Agent（下轮重建，系统提示词/模型都会刷新） */
+  /** 配置变更后，丢弃缓存的 Agent（下一轮重建） */
   invalidateAll(): void {
     for (const session of this.sessions.values()) {
       session.agent = null;
-      session.agentKey = "";
     }
   }
 }

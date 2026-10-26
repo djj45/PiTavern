@@ -185,13 +185,16 @@ try {
   console.log(`✓ WS 流式往返（${events.filter((e) => e.type === "chat.delta").length} 个 delta）`);
   ws.close();
 
-  // 7. 落库校验
-  const lines = fs.readFileSync(path.join(DATA_DIR, chatId), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  assert.equal(lines.length, 3);
-  assert.equal(lines[1].is_user, true);
-  assert.equal(lines[1].name, "测试员");
-  assert.equal(lines[2].is_user, false);
-  console.log("✓ JSONL 落库（3 行：开场白 + 用户 + 助手）");
+  // 7. 落库校验（首行为 ST 元数据头，其余 3 条消息）
+  const rawLines = fs.readFileSync(path.join(DATA_DIR, chatId), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(rawLines[0].chat_metadata !== undefined, "首行应为 ST 元数据头");
+  assert.equal(rawLines[0].character_name, "测试看板娘");
+  const msgs = rawLines.filter((l) => typeof l.mes === "string");
+  assert.equal(msgs.length, 3);
+  assert.equal(msgs[1].is_user, true);
+  assert.equal(msgs[1].name, "测试员");
+  assert.equal(msgs[2].is_user, false);
+  console.log("✓ JSONL 落库（元数据头 + 3 条：开场白/用户/助手）");
 
   // 8. 桥接模式全链路：迷你 ST 预设 + 世界书 + 提示词正则
   const presetDir = path.join(DATA_DIR, "OpenAI Settings");
@@ -253,9 +256,17 @@ try {
     await sleep(100);
   }
   assert.ok(events2.some((e) => e.type === "chat.done"), `桥接轮应成功: ${JSON.stringify(events2.filter((e) => e.type === "chat.error"))}`);
+
+  // 工具循环断言：worldbook_search 被调用并返回了世界书全文
+  const toolStart = events2.find((e) => e.type === "chat.tool_start");
+  const toolEnd = events2.find((e) => e.type === "chat.tool_end" && e.toolName === "worldbook_search");
+  assert.ok(toolStart && toolStart.toolName === "worldbook_search", "应有 worldbook_search tool_start 事件");
+  assert.ok(toolEnd && !toolEnd.isError, "worldbook_search 应成功结束");
+  assert.ok(toolEnd.details?.summary, "tool_end 应携带 UI 摘要");
+  console.log(`✓ 工具循环（worldbook_search 调用→返回全文→续写，${toolEnd.durationMs}ms）`);
   ws2.close();
 
-  // 校验 mock 中转实际收到的请求结构
+  // 校验 mock 中转实际收到的请求结构（最后一次请求 = 工具结果回传后的续写请求）
   const sent = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
   assert.equal(sent.temperature, 0.7, "预设采样参数应透传");
   assert.equal(sent.top_p, 0.9);
@@ -265,15 +276,17 @@ try {
   assert.ok(msgTexts.includes("[E2E常驻设定]"), "世界书常驻条目应注入");
   assert.ok(msgTexts.includes("[E2E银剑设定]"), "世界书关键词条目应注入");
   assert.ok(!msgTexts.includes("<think>"), "提示词正则应去除 think 标签");
+  // 工具结果以 role=tool 回传给上游，内容含世界书全文
+  const toolMsg = sent.messages.find((m) => m.role === "tool");
+  assert.ok(toolMsg, "应有 role=tool 的工具结果消息");
+  assert.ok(JSON.stringify(toolMsg.content).includes("[E2E银剑设定] 银剑会鸣响"), "工具结果应含世界书全文");
   const lastUser = sent.messages.map((m) => m.role).lastIndexOf("user");
-  assert.ok(lastUser === sent.messages.length - 1 || sent.messages[lastUser + 1]?.role !== "user", "用户消息定位正确");
-  // pi-ai 的 transcript 语义：所有 system 消息按序重放合并为开头一条 leading system，
-  // 尾部注入的内容保留、位置前移（与 ST 的差异已文档化）
+  assert.ok(lastUser >= 0, "用户消息定位正确");
   assert.ok(msgTexts.includes("|e2e深度注入|"), "depth0 绝对注入内容应在请求中");
   assert.equal(sent.messages[0].role, "system");
   console.log("✓ 桥接模式全链路（预设/宏/世界书/正则/深度注入/采样透传）");
 
-  console.log("\n=== M1+M2 冒烟全部通过 ===");
+  console.log("\n=== M1+M2+M3 冒烟全部通过 ===");
 } finally {
   mock.kill();
   server.kill();

@@ -1,0 +1,83 @@
+import { isToolItem, TOOL_META, type ChatItem } from "../chatItems.ts";
+
+export interface UsageStats {
+  input: number;
+  output: number;
+  totalTokens: number;
+  costTotal: number;
+  turns: number;
+}
+
+interface ActivityPanelProps {
+  items: ChatItem[];
+  usage: UsageStats;
+}
+
+function fmt(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+export function ActivityPanel({ items, usage }: ActivityPanelProps) {
+  const tools = items.filter(isToolItem);
+  const byTool = new Map<string, number>();
+  for (const t of tools) byTool.set(t.toolName, (byTool.get(t.toolName) ?? 0) + 1);
+  const recalls = tools.filter((t) => t.toolName === "tavern_recall_history");
+  const refused = recalls.filter((t) => t.summary?.startsWith("被拒")).length;
+  const fullReads = recalls.filter((t) => t.summary?.includes("完整正文")).length;
+
+  return (
+    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-tavern-border bg-tavern-panel p-4 text-sm">
+      <h3 className="mb-3 font-medium text-tavern-accent">本轮活动</h3>
+
+      <section className="mb-5">
+        <h4 className="mb-2 text-xs font-medium text-tavern-dim">用量统计</h4>
+        <dl className="grid grid-cols-2 gap-y-1.5 text-tavern-text">
+          <dt className="text-tavern-dim">对话轮次</dt>
+          <dd className="text-right">{usage.turns}</dd>
+          <dt className="text-tavern-dim">输入 tokens</dt>
+          <dd className="text-right">{fmt(usage.input)}</dd>
+          <dt className="text-tavern-dim">输出 tokens</dt>
+          <dd className="text-right">{fmt(usage.output)}</dd>
+          <dt className="text-tavern-dim">合计</dt>
+          <dd className="text-right font-medium">{fmt(usage.totalTokens)}</dd>
+        </dl>
+      </section>
+
+      <section className="mb-5">
+        <h4 className="mb-2 text-xs font-medium text-tavern-dim">工具调用（本次会话）</h4>
+        {byTool.size === 0 ? (
+          <p className="text-xs text-tavern-dim">还没有工具调用。角色缺少设定或需要回忆旧剧情时会自动调用。</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {[...byTool.entries()].map(([name, count]) => (
+              <li key={name} className="flex items-center justify-between">
+                <span className="text-tavern-text">
+                  {TOOL_META[name]?.icon ?? "🔧"} {TOOL_META[name]?.label ?? name}
+                </span>
+                <span className="text-tavern-dim">×{count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {recalls.length > 0 && (
+          <p className="mt-2 text-xs text-tavern-dim">
+            召回 {recalls.length} 次（完整正文 {fullReads}、被限额拒绝 {refused}）
+            <br />
+            预算：每轮 ≤6 次；读完整正文后冷却 10 轮（运行时强制）
+          </p>
+        )}
+      </section>
+
+      <section>
+        <h4 className="mb-2 text-xs font-medium text-tavern-dim">机制说明</h4>
+        <ul className="list-disc space-y-1 pl-4 text-xs leading-5 text-tavern-dim">
+          <li>世界书未注入的资料由模型按需检索，零命中不等于不存在</li>
+          <li>召回制历史：token 随"这轮需要什么"增长，而不是随历史长度</li>
+          <li>限额与冷却由服务端强制执行，不依赖模型自觉</li>
+        </ul>
+      </section>
+    </aside>
+  );
+}

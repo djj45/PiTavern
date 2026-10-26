@@ -112,6 +112,53 @@ export class ChatStore {
     return this.readLines(file);
   }
 
+  /**
+   * ST 约定：JSONL 首行是头对象 {user_name, character_name, chat_metadata}（无 mes 字段）。
+   * 变量等工具数据存放在 chat_metadata.variables。
+   */
+  readMetadata(chatId: string): Record<string, unknown> {
+    const file = this.resolveChatFile(chatId);
+    if (!file || !fs.existsSync(file)) return {};
+    const first = fs.readFileSync(file, "utf8").split("\n", 1)[0]?.trim();
+    if (!first) return {};
+    try {
+      const obj = JSON.parse(first);
+      if (obj && typeof obj === "object" && typeof obj.mes !== "string") {
+        return (obj.chat_metadata as Record<string, unknown>) ?? {};
+      }
+    } catch {
+      // 无头或损坏 → 空元数据
+    }
+    return {};
+  }
+
+  /** 更新首行 chat_metadata（原位重写，保留其余消息行） */
+  writeMetadata(chatId: string, metadata: Record<string, unknown>): void {
+    const file = this.resolveChatFile(chatId);
+    if (!file || !fs.existsSync(file)) throw new Error(`聊天文件不存在: ${chatId}`);
+    const raw = fs.readFileSync(file, "utf8");
+    const lines = raw.split("\n");
+    let header: Record<string, unknown>;
+    const first = lines[0]?.trim();
+    if (first) {
+      try {
+        const obj = JSON.parse(first);
+        if (obj && typeof obj === "object" && typeof obj.mes !== "string") {
+          header = obj;
+          lines.shift();
+        } else {
+          header = {};
+        }
+      } catch {
+        header = {};
+      }
+    } else {
+      header = {};
+    }
+    header.chat_metadata = { ...(header.chat_metadata as object), ...metadata };
+    fs.writeFileSync(file, [JSON.stringify(header), ...lines.filter((l) => l.trim().length > 0)].join("\n") + "\n", "utf8");
+  }
+
   appendMessage(chatId: string, line: Omit<StChatLine, "send_date"> & { send_date?: string }): void {
     const file = this.resolveChatFile(chatId);
     if (!file || !fs.existsSync(file)) throw new Error(`聊天文件不存在: ${chatId}`);
@@ -119,7 +166,11 @@ export class ChatStore {
     fs.appendFileSync(file, `${JSON.stringify(full)}\n`, "utf8");
   }
 
-  createChat(character: string, greeting: (Omit<StChatLine, "send_date"> & { send_date?: string }) | null): ChatMeta {
+  createChat(
+    character: string,
+    greeting: (Omit<StChatLine, "send_date"> & { send_date?: string }) | null,
+    userName = "User",
+  ): ChatMeta {
     const dir = this.characterChatsDir(character);
     fs.mkdirSync(dir, { recursive: true });
     let file = path.join(dir, stChatFileName());
@@ -127,7 +178,12 @@ export class ChatStore {
     for (let i = 0; fs.existsSync(file); i++) {
       file = path.join(dir, stChatFileName(new Date(Date.now() + (i + 1) * 1000)));
     }
-    const content = greeting ? `${JSON.stringify(greeting)}\n` : "";
+    const header = JSON.stringify({
+      user_name: userName,
+      character_name: character,
+      chat_metadata: {},
+    });
+    const content = greeting ? `${header}\n${JSON.stringify(greeting)}\n` : `${header}\n`;
     fs.writeFileSync(file, content, "utf8");
     return this.statChat(file)!;
   }
