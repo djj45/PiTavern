@@ -37,6 +37,10 @@ export interface ConnectionDto {
   activePreset: string;
   activeWorlds: string[];
   worldInfo: { scanDepth: number; recursionSteps: number; caseSensitive: boolean; matchWholeWords: boolean };
+  /** native=纯文本流式；game_tool=强制工具调用防截断 */
+  outputProtocol: "native" | "game_tool";
+  protocolStrict: boolean;
+  compression: { enabled: boolean; keepFullTurns: number };
 }
 
 export interface PresetSummaryDto {
@@ -82,6 +86,8 @@ export interface ChatMessageDto {
   name: string;
   text: string;
   sendDate: string;
+  /** 思维链（输出协议 tavern_think 或 reasoning 模型思考），前端折叠展示 */
+  thinking?: string;
 }
 
 // ---------------------------------------------------------------- WS 协议

@@ -30,6 +30,12 @@ export interface WorldInfoConfig {
   matchWholeWords: boolean;
 }
 
+export interface CompressionConfig {
+  enabled: boolean;
+  /** 尾部保留全文的轮数（一轮 = 用户+剧情） */
+  keepFullTurns: number;
+}
+
 export interface TavernConfig {
   port: number;
   /** SillyTavern 兼容数据目录（characters/ chats/ worlds/ OpenAI Settings/） */
@@ -49,6 +55,11 @@ export interface TavernConfig {
   worldInfo: WorldInfoConfig;
   /** 酒馆工具四件套（worldbook_search/recall/variables/skill） */
   toolsEnabled: boolean;
+  /** native=纯文本流式；game_tool=强制工具调用防截断（game_content + tavern_think） */
+  outputProtocol: "native" | "game_tool";
+  /** game_tool 下向中转透传 tool_choice=required（不兼容的中转可关） */
+  protocolStrict: boolean;
+  compression: CompressionConfig;
 }
 
 export const CONFIG_PATH = process.env.PITAVERN_CONFIG ?? "data/config.json";
@@ -74,6 +85,9 @@ export function defaultConfig(): TavernConfig {
     activeWorlds: [],
     worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true },
     toolsEnabled: true,
+    outputProtocol: "native",
+    protocolStrict: true,
+    compression: { enabled: true, keepFullTurns: 6 },
   };
 }
 
@@ -86,6 +100,7 @@ export function loadConfig(): TavernConfig {
     ...raw,
     persona: { ...defaults.persona, ...raw.persona },
     worldInfo: { ...defaults.worldInfo, ...raw.worldInfo },
+    compression: { ...defaults.compression, ...raw.compression },
   };
 }
 

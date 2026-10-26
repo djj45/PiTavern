@@ -4,6 +4,14 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ChatMessageDto, ServerEvent } from "@pitavern/shared";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
+import {
+  consumeProtocolCalls,
+  createProtocolTools,
+  extractStreamingContentDelta,
+  extractSummary,
+  GAME_TOOL_NAME,
+  OUTPUT_PROTOCOL_INSTRUCTION,
+} from "../agent/protocol/game-content.ts";
 import { assembleBridgeContext } from "../context/bridge.ts";
 import { substituteMacros } from "../context/macros.ts";
 import type { MacroEnv } from "../context/macros.ts";
@@ -12,7 +20,7 @@ import { loadPreset, presetsDir } from "../context/preset.ts";
 import { normalizeCardBook, normalizeWorldFile, type WiEntry } from "../context/worldinfo.ts";
 import type { TavernConfig } from "../config.ts";
 import { resolveModel } from "../providers/models.ts";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Models, ToolCall } from "@earendil-works/pi-ai";
 import type { CharacterCard } from "../stdata/types.ts";
 import type { CharacterStore } from "../stdata/characters.ts";
 import type { ChatStore } from "../stdata/chats.ts";
@@ -104,14 +112,16 @@ export class SessionManager {
         recallCooldownTurns: 10,
       };
       const tools = this.config.toolsEnabled ? createTavernTools(toolCtx) : [];
+      const useProtocol = this.config.outputProtocol === "game_tool";
+      const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
 
       // 每轮重建 Agent：桥接/简洁两模式统一（工具闭包与组装上下文都依赖当轮状态）
       session.agent?.reset();
       let agent: Agent;
       if (this.config.contextMode === "bridge") {
-        agent = this.buildBridgeAgent(chatId, character, model, models, toolCtx, tools);
+        agent = this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol);
         session.agent = agent;
-        this.wireAgent(agent, chatId);
+        this.wireAgent(agent, chatId, useProtocol);
         await agent.continue();
       } else {
         agent = createTavernAgent({
@@ -119,12 +129,18 @@ export class SessionManager {
           model,
           chatId,
           thinkingLevel: this.config.thinkingLevel,
-          systemPrompt: buildSystemPrompt(character, this.config.persona) + this.toolGuidance(tools.length > 0),
+          systemPrompt:
+            buildSystemPrompt(character, this.config.persona) +
+            this.toolGuidance(tools.length > 0) +
+            (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
           history: historyToAgentMessages(lines),
-          tools,
+          tools: allTools,
+          outputProtocol: this.config.outputProtocol,
+          protocolStrict: this.config.protocolStrict,
+          compression: this.config.compression,
         });
         session.agent = agent;
-        this.wireAgent(agent, chatId);
+        this.wireAgent(agent, chatId, useProtocol);
         await agent.prompt(text);
       }
     } catch (error) {
@@ -152,6 +168,7 @@ export class SessionManager {
     models: Models,
     toolCtx: ToolContext,
     tools: ReturnType<typeof createTavernTools>,
+    useProtocol: boolean,
   ): Agent {
     const presetName = this.config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
@@ -175,14 +192,23 @@ export class SessionManager {
         maxHistoryChars: Math.floor((model.contextWindow || 128_000) * 1.5),
       },
     });
+    const messages = [...assembled.messages];
+    if (useProtocol) {
+      // 协议指令压尾注入（pi 会把 system 重放合并到前部，但内容与顺序保留），
+      // 明确覆盖预设里的伪 JSON/预填充输出指令
+      messages.push({ role: "system", content: OUTPUT_PROTOCOL_INSTRUCTION, timestamp: Date.now() });
+    }
     return createTavernAgent({
       models,
       model,
       chatId,
       thinkingLevel: this.config.thinkingLevel,
-      messages: assembled.messages,
+      messages,
       sampling: assembled.sampling,
       tools,
+      outputProtocol: this.config.outputProtocol,
+      protocolStrict: this.config.protocolStrict,
+      compression: this.config.compression,
     });
   }
 
@@ -222,33 +248,87 @@ export class SessionManager {
   }
 
   /** Agent 事件 → ServerEvent 广播 + 助手消息落库 */
-  private wireAgent(agent: Agent, chatId: string): void {
+  private wireAgent(agent: Agent, chatId: string, useProtocol: boolean): void {
+    // game_tool 流式：按 contentIndex 累积参数原文，宽松提取 content 增量转发
+    const streamState = new Map<number, { name: string; raw: string; sent: number }>();
+
     agent.subscribe((event) => {
       switch (event.type) {
+        case "agent_start":
+          streamState.clear();
+          break;
         case "message_update": {
           const { assistantMessageEvent } = event;
           if (assistantMessageEvent.type === "text_delta") {
             this.emit({ type: "chat.delta", chatId, delta: assistantMessageEvent.delta });
           } else if (assistantMessageEvent.type === "thinking_delta") {
             this.emit({ type: "chat.thinking", chatId, delta: assistantMessageEvent.delta });
+          } else if (useProtocol && assistantMessageEvent.type === "toolcall_start") {
+            const call = event.message.content[assistantMessageEvent.contentIndex];
+            streamState.set(assistantMessageEvent.contentIndex, {
+              name: call && typeof call === "object" && call.type === "toolCall" ? call.name : "",
+              raw: "",
+              sent: 0,
+            });
+          } else if (useProtocol && assistantMessageEvent.type === "toolcall_delta") {
+            const state = streamState.get(assistantMessageEvent.contentIndex);
+            if (state) {
+              state.raw += assistantMessageEvent.delta;
+              if (state.name === GAME_TOOL_NAME) {
+                const visible = extractStreamingContentDelta(state.raw);
+                if (visible.length > state.sent) {
+                  this.emit({ type: "chat.delta", chatId, delta: visible.slice(state.sent) });
+                  state.sent = visible.length;
+                }
+              }
+            }
           }
           break;
         }
         case "message_end": {
           if (event.message.role !== "assistant") break;
-          const text = event.message.content
+          const textContent = event.message.content
             .filter((c): c is { type: "text"; text: string } => c.type === "text")
             .map((c) => c.text)
             .join("");
-          if (!text.trim()) break;
+          const toolCalls = event.message.content.filter(
+            (c): c is ToolCall => typeof c === "object" && c.type === "toolCall",
+          );
+
+          // 输出协议：consumeToolCalls 还原（工具参数 → 正文/思考），普通文本作宽容回退
+          let text = textContent;
+          let thinking = "";
+          if (toolCalls.length > 0) {
+            const consumed = consumeProtocolCalls(
+              toolCalls.map((c) => ({ name: c.name, arguments: c.arguments, argumentsRaw: c.argumentsError })),
+            );
+            if (consumed) {
+              text = consumed.content || textContent;
+              thinking = consumed.thinking;
+            }
+          }
+          if (!text.trim() && !thinking.trim()) break;
+
           const name = this.sessions.get(chatId)?.character ?? "";
-          this.chats.appendMessage(chatId, { name, is_user: false, is_system: false, mes: text });
+          const summary = extractSummary(text);
+          this.chats.appendMessage(chatId, {
+            name,
+            is_user: false,
+            is_system: false,
+            mes: text,
+            extra: {
+              ...(thinking ? { thinking } : {}),
+              ...(summary ? { summary } : {}),
+              ...(toolCalls.length ? { protocol: "game_tool" } : {}),
+            },
+          });
           const dto: ChatMessageDto = {
             id: `assistant-${event.message.timestamp}`,
             role: "assistant",
             name,
             text,
             sendDate: new Date(event.message.timestamp).toISOString(),
+            ...(thinking ? { thinking } : {}),
           };
           this.emit({ type: "chat.done", chatId, message: dto });
           this.emit({

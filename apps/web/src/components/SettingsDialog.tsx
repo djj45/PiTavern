@@ -36,6 +36,10 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
   const [activeWorlds, setActiveWorlds] = useState<string[]>(connection?.activeWorlds ?? []);
   const [scanDepth, setScanDepth] = useState(connection?.worldInfo?.scanDepth ?? 2);
   const [recursionSteps, setRecursionSteps] = useState(connection?.worldInfo?.recursionSteps ?? 0);
+  const [outputProtocol, setOutputProtocol] = useState<"native" | "game_tool">(connection?.outputProtocol ?? "native");
+  const [protocolStrict, setProtocolStrict] = useState(connection?.protocolStrict ?? true);
+  const [compressionEnabled, setCompressionEnabled] = useState(connection?.compression?.enabled ?? true);
+  const [keepFullTurns, setKeepFullTurns] = useState(connection?.compression?.keepFullTurns ?? 6);
 
   useEffect(() => {
     api.presets().then(setPresets).catch(() => setPresets([]));
@@ -93,6 +97,9 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
           caseSensitive: connection?.worldInfo?.caseSensitive ?? false,
           matchWholeWords: connection?.worldInfo?.matchWholeWords ?? true,
         },
+        outputProtocol,
+        protocolStrict,
+        compression: { enabled: compressionEnabled, keepFullTurns },
       };
       await api.saveConnection(payload);
       onSaved();
@@ -286,6 +293,56 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
               </div>
             </div>
           )}
+        </section>
+
+        {/* 输出协议与压缩 */}
+        <section className="mb-5">
+          <h3 className="mb-2 text-sm font-medium">输出协议与历史压缩</h3>
+          <div className="mb-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setOutputProtocol("native")}
+              className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
+                outputProtocol === "native" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
+              }`}
+            >
+              原生文本流式
+              <span className="block text-xs text-tavern-dim">直接输出正文，最简单</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setOutputProtocol("game_tool")}
+              className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
+                outputProtocol === "game_tool" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
+              }`}
+            >
+              强制工具防截断
+              <span className="block text-xs text-tavern-dim">正文必须走 game_content 工具（原生 function calling 取代伪 JSON 预填）</span>
+            </button>
+          </div>
+          {outputProtocol === "game_tool" && (
+            <label className="mb-2 flex items-center gap-2 text-xs text-tavern-dim">
+              <input type="checkbox" checked={protocolStrict} onChange={(e) => setProtocolStrict(e.target.checked)} />
+              向中转透传 tool_choice=required（部分中转不兼容时关闭）
+            </label>
+          )}
+          <div className="flex items-center gap-4 rounded-lg border border-tavern-border bg-tavern-bg p-3 text-xs text-tavern-dim">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={compressionEnabled} onChange={(e) => setCompressionEnabled(e.target.checked)} />
+              历史压缩（超上下文预算时：旧轮摘要折叠为 |用户|/|游戏剧情| 块）
+            </label>
+            <label className="flex items-center gap-1.5">
+              保留全文轮数
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={keepFullTurns}
+                onChange={(e) => setKeepFullTurns(Number(e.target.value) || 6)}
+                className="w-16 rounded border border-tavern-border bg-tavern-raised px-1.5 py-0.5 text-tavern-text"
+              />
+            </label>
+          </div>
         </section>
 
         {/* persona 与数据目录 */}

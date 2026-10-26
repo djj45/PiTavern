@@ -12,6 +12,7 @@ npm run check        # 全仓类型检查
 npm run e2e          # mock 中转端到端冒烟（含工具循环）
 npm run verify:bridge # 桥接组装器对齐验证（真实猫神预设）
 npm run verify:tools # 工具四件套 + 限次冷却强制验证
+npm run verify:m4    # 输出协议还原 + 流式提取 + 历史压缩验证
 ```
 
 首次使用：打开前端 → 设置 → 添加中转（OpenAI 兼容 baseUrl + API Key + 模型 id）→ 保存并测试连通 → 把角色卡 PNG 放进 `data/st/characters/` → 开始新对话。
@@ -23,7 +24,7 @@ npm run verify:tools # 工具四件套 + 限次冷却强制验证
 - **M1 行走骨架** ✅ pi Agent 引擎 + 中转接入 + WS 流式 + ST 人物卡/聊天读写 + 基础聊天 UI
 - **M2 桥接组装器** ✅ ST 预设兼容组装（prompt_order 引擎 / 宏核心集 / 世界书扫描递归 / 提示词正则 / 深度注入 / 采样透传），猫神预设实测对齐（`npm run verify:bridge`）
 - **M3 工具四件套** ✅ worldbook_search（片段→refs 两级检索）/ tavern_recall_history（query 片段 + turn 全文）/ tavern_read_variables（ST chat_metadata.variables 兼容）/ tavern_read_skill_reference；召回限次（每轮≤6）与冷却（全文召回后 10 轮）由**运行时强制**；UI 工具卡片流 + 用量/召回面板（`npm run verify:tools`）
-- **M4 输出协议 + 历史压缩** 强制工具调用防截断 + consumeToolCalls 还原 + squash/summary 折叠
+- **M4 输出协议 + 历史压缩** ✅ game_tool 模式：`game_content`（正文，MANDATORY）+ `tavern_think`（思维链）双工具原生 function calling 取代伪 JSON 预填；consumeToolCalls 还原落库（mes 正文 + extra.thinking/summary）；参数流式宽松提取（toolcall_delta 实时渲染正文）；`tool_choice=required` 可透传；历史压缩 transformContext（超预算时旧轮 summary 优先折叠为 |用户|/|游戏剧情| 块，UI/落库永远全文）（`npm run verify:m4`）
 - **M5 接管模式** agent 原生上下文组装 + 每轮状态投影
 
 ## 工具四件套（M3）

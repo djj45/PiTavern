@@ -9,6 +9,7 @@
     "check": "tsc -p tsconfig.json",
     "verify:bridge": "tsx scripts/bridge-verify.ts",
     "verify:tools": "tsx scripts/tools-verify.ts",
+    "verify:m4": "tsx scripts/m4-verify.ts",
     "e2e": "node scripts/e2e-smoke.mjs"
   },
   "dependencies": {

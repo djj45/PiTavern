@@ -24,26 +24,27 @@ const server = http.createServer((req, res) => {
     } catch {}
     const chars = [...REPLY];
 
-    // 工具循环模拟：带工具且最后一条是 user → 发起 worldbook_search 调用；
-    // 最后一条是 tool 结果 → 收尾输出正文
+    // 工具循环模拟：game_tool 协议优先（think+game 双调用），
+    // 否则 worldbook_search；最后一条是 tool 结果 → 收尾输出正文
     const lastMsg = payload.messages?.[payload.messages.length - 1];
-    if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-      const tool = lastMsg?.role === "tool"
-        ? null
-        : lastMsg?.role === "user"
-          ? {
-              index: 0,
-              id: "call_mock_1",
-              type: "function",
-              function: { name: "worldbook_search", arguments: JSON.stringify({ query: "银剑", read: true }) },
-            }
-          : null;
-      if (tool) {
+    if (Array.isArray(payload.tools) && payload.tools.length > 0 && lastMsg?.role !== "tool") {
+      const toolNames = payload.tools.map((t) => t.function?.name);
+      let calls = null;
+      if (toolNames.includes("game_content")) {
+        calls = [
+          { index: 0, id: "call_mock_think", type: "function", function: { name: "tavern_think", arguments: JSON.stringify({ thinking: "用户问了银剑，我调用世界书确认设定。" }) } },
+          { index: 1, id: "call_mock_game", type: "function", function: { name: "game_content", arguments: JSON.stringify({ content: "（她抚过剑脊，剑身发出清越的鸣响）这是会认主的家伙。\n<summary>测试员拔出银剑，酒保说明银剑特性。</summary>" }) } },
+        ];
+        console.log("[mock] → protocol tool_calls tavern_think + game_content");
+      } else if (toolNames.includes("worldbook_search") && lastMsg?.role === "user") {
+        calls = [{ index: 0, id: "call_mock_1", type: "function", function: { name: "worldbook_search", arguments: JSON.stringify({ query: "银剑", read: true }) } }];
         console.log("[mock] → tool_call worldbook_search(银剑)");
+      }
+      if (calls) {
         const chunk = {
           id: "mock-2",
           object: "chat.completion.chunk",
-          choices: [{ index: 0, delta: { role: "assistant", tool_calls: [tool] }, finish_reason: null }],
+          choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls }, finish_reason: null }],
         };
         if (payload.stream) {
           res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
@@ -56,7 +57,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({
             id: "mock-2",
             object: "chat.completion",
-            choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [tool] }, finish_reason: "tool_calls" }],
+            choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: calls.map(({ index, ...rest }) => rest) }, finish_reason: "tool_calls" }],
           }));
         }
         return;

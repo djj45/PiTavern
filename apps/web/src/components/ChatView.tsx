@@ -13,11 +13,28 @@ interface ChatViewProps {
 
 function MessageBubble({ message, avatarUrl }: { message: ChatMessageDto; avatarUrl?: string }) {
   const isUser = message.role === "user";
+  const [thinkOpen, setThinkOpen] = useState(false);
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       {!isUser && avatarUrl && <img src={avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />}
       <div className={`flex max-w-[80%] flex-col ${isUser ? "items-end" : "items-start"}`}>
         <span className="mb-1 px-1 text-xs text-tavern-dim">{message.name}</span>
+        {message.thinking && (
+          <div className="mb-1 w-full">
+            <button
+              type="button"
+              onClick={() => setThinkOpen((v) => !v)}
+              className="rounded-full border border-tavern-border px-2.5 py-0.5 text-xs text-tavern-dim hover:border-tavern-accent-dim"
+            >
+              💭 思考过程 {thinkOpen ? "▲" : "▼"}
+            </button>
+            {thinkOpen && (
+              <div className="mt-1 whitespace-pre-wrap rounded-lg border border-tavern-border bg-tavern-bg/60 px-3 py-2 text-xs leading-5 text-tavern-dim">
+                {message.thinking}
+              </div>
+            )}
+          </div>
+        )}
         <div
           className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed ${
             isUser ? "bg-tavern-accent/20 text-tavern-text" : "bg-tavern-raised text-tavern-text"

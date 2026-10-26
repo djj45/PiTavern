@@ -2,6 +2,9 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
 import type { BridgeSampling } from "../context/bridge.ts";
+import type { CompressionConfig } from "../context/compression.ts";
+import { compressHistory } from "../context/compression.ts";
+import { GAME_TOOL_NAME } from "./protocol/game-content.ts";
 import type { CharacterCard, StChatLine } from "../stdata/types.ts";
 
 const ZERO_USAGE: Usage = {
@@ -74,6 +77,11 @@ export interface TavernAgentOptions {
   sampling?: BridgeSampling;
   /** 酒馆工具四件套（M3） */
   tools?: AgentTool<any>[];
+  /** M4 输出协议：game_tool 时透传 tool_choice=required */
+  outputProtocol?: "native" | "game_tool";
+  protocolStrict?: boolean;
+  /** M4 历史压缩（transformContext 挂载） */
+  compression?: CompressionConfig;
 }
 
 /**
@@ -84,13 +92,23 @@ export interface TavernAgentOptions {
  */
 export function createTavernAgent(options: TavernAgentOptions): Agent {
   const { sampling } = options;
+  const strictToolChoice =
+    options.outputProtocol === "game_tool" && options.protocolStrict !== false
+      ? ({ tool_choice: "required" } as Record<string, unknown>)
+      : undefined;
   const streamFn: typeof options.models.streamSimple = (model, context, streamOptions) => {
     const merged = {
       ...streamOptions,
       ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
       ...(sampling?.maxTokens !== undefined ? { maxTokens: sampling.maxTokens } : {}),
-      ...(sampling?.samplingParams
-        ? { samplingParams: { ...(streamOptions?.samplingParams ?? {}), ...sampling.samplingParams } }
+      ...(sampling?.samplingParams || strictToolChoice
+        ? {
+            samplingParams: {
+              ...(streamOptions?.samplingParams ?? {}),
+              ...sampling?.samplingParams,
+              ...strictToolChoice,
+            },
+          }
         : {}),
     };
     return options.models.streamSimple(model, context, merged);
@@ -117,17 +135,27 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
       ? { model: options.model, thinkingLevel, messages: initialMessages, tools }
       : { systemPrompt: options.systemPrompt ?? "", model: options.model, thinkingLevel, messages: initialMessages, tools };
 
-  // 单回合 RP 语义：模型输出纯文本即结束；有工具结果则继续循环（查书/召回后续写）。
-  // MAX_TURNS 上限防止模型无限工具循环。
+  // 单回合 RP 语义：纯文本或 game_content 已产出正文即收尾；
+  // 四件套工具回合续跑（查书/召回后续写）；MAX_TURNS 上限防失控。
   const MAX_TURNS = 10;
   let turnCount = 0;
+  const compression = options.compression;
 
   return new Agent({
     initialState,
     streamFn,
+    transformContext:
+      compression?.enabled
+        ? async (messages) =>
+            compressHistory(messages, compression, Math.floor((options.model.contextWindow || 128_000) * 1.5)).messages
+        : undefined,
     finishTurn: async (turn) => {
       turnCount += 1;
       if (turnCount >= MAX_TURNS) return { action: "end" };
+      const calledGameContent = turn.message.content.some(
+        (c) => c.type === "toolCall" && c.name === GAME_TOOL_NAME,
+      );
+      if (calledGameContent) return { action: "end" };
       return turn.toolResults.length > 0 ? undefined : { action: "end" };
     },
     sessionId: options.chatId,

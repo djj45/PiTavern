@@ -54,6 +54,9 @@ function chatLinesToDto(lines: import("../stdata/types.ts").StChatLine[], config
       name: l.is_user ? config.persona.name : l.name,
       text: l.mes,
       sendDate: l.send_date,
+      ...(typeof (l.extra as { thinking?: unknown } | undefined)?.thinking === "string"
+        ? { thinking: (l.extra as { thinking: string }).thinking }
+        : {}),
     }));
 }
 
@@ -77,6 +80,9 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       activePreset: config.activePreset,
       activeWorlds: config.activeWorlds,
       worldInfo: config.worldInfo,
+      outputProtocol: config.outputProtocol,
+      protocolStrict: config.protocolStrict,
+      compression: config.compression,
     };
     res.json(dto);
   });
@@ -139,6 +145,13 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       if (typeof wi.recursionSteps === "number") config.worldInfo.recursionSteps = Math.max(0, Math.min(10, wi.recursionSteps));
       if (typeof wi.caseSensitive === "boolean") config.worldInfo.caseSensitive = wi.caseSensitive;
       if (typeof wi.matchWholeWords === "boolean") config.worldInfo.matchWholeWords = wi.matchWholeWords;
+    }
+    if (body.outputProtocol === "native" || body.outputProtocol === "game_tool") config.outputProtocol = body.outputProtocol;
+    if (typeof body.protocolStrict === "boolean") config.protocolStrict = body.protocolStrict;
+    if (body.compression && typeof body.compression === "object") {
+      const c = body.compression as Partial<ConnectionDto["compression"]>;
+      if (typeof c.enabled === "boolean") config.compression.enabled = c.enabled;
+      if (typeof c.keepFullTurns === "number") config.compression.keepFullTurns = Math.max(1, Math.min(100, c.keepFullTurns));
     }
     if (typeof body.stDataDir === "string" && body.stDataDir.trim() && body.stDataDir.trim() !== config.stDataDir) {
       config.stDataDir = body.stDataDir.trim();

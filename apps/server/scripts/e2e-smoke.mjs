@@ -286,7 +286,75 @@ try {
   assert.equal(sent.messages[0].role, "system");
   console.log("✓ 桥接模式全链路（预设/宏/世界书/正则/深度注入/采样透传）");
 
-  console.log("\n=== M1+M2+M3 冒烟全部通过 ===");
+  // 9. 输出协议（game_tool）：mock 返回 think+game 双工具调用 → 服务端还原落库
+  res = await fetch(`${BASE}/api/connection`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ outputProtocol: "game_tool" }),
+  });
+  assert.ok((await res.json()).ok);
+
+  const ws3 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  await new Promise((resolve, reject) => { ws3.on("open", resolve); ws3.on("error", reject); });
+  const events3 = [];
+  ws3.on("message", (raw) => events3.push(JSON.parse(String(raw))));
+  ws3.send(JSON.stringify({ type: "chat.send", chatId, text: "这把银剑有什么来历？" }));
+  const deadline3 = Date.now() + 30000;
+  while (Date.now() < deadline3) {
+    if (events3.some((e) => e.type === "chat.done") || events3.some((e) => e.type === "chat.error")) break;
+    await sleep(100);
+  }
+  const done3 = events3.find((e) => e.type === "chat.done");
+  assert.ok(done3, `协议轮应完成: ${JSON.stringify(events3.filter((e) => e.type === "chat.error"))}`);
+  assert.ok(done3.message.text.includes("会认主"), "正文应从 game_content 参数还原");
+  assert.ok(done3.message.thinking?.includes("调用世界书"), "思考应从 tavern_think 参数还原");
+  // 参数流式宽松提取：toolcall_delta 期间应产生 chat.delta
+  assert.ok(events3.some((e) => e.type === "chat.delta"), "协议模式下正文应流式渲染");
+  // 请求层：tool_choice=required 透传
+  const sent2 = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
+  assert.equal(sent2.tool_choice, "required", "strict 模式应透传 tool_choice=required");
+  ws3.close();
+
+  // 落库校验：mes=正文，extra 带 thinking/summary/protocol
+  const saved = fs.readFileSync(path.join(DATA_DIR, chatId), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const lastMsg = saved[saved.length - 1];
+  assert.equal(lastMsg.is_user, false);
+  assert.ok(lastMsg.mes.includes("会认主"));
+  assert.ok(lastMsg.mes.includes("<summary>"), "正文应带 summary 标签（供压缩层提取）");
+  assert.ok(lastMsg.extra?.thinking?.includes("调用世界书"));
+  assert.equal(lastMsg.extra?.protocol, "game_tool");
+  assert.ok(typeof lastMsg.extra?.summary === "string");
+  console.log("✓ 输出协议（game_tool 双工具调用→还原落库→参数流式→tool_choice 透传）");
+
+  // 10. 协议轮之后的下一轮：历史里 assistant 是还原后的纯文本（无 tool_calls 形态）
+  res = await fetch(`${BASE}/api/connection`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ outputProtocol: "native", contextMode: "simple" }),
+  });
+  assert.ok((await res.json()).ok);
+  const ws4 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  await new Promise((resolve, reject) => { ws4.on("open", resolve); ws4.on("error", reject); });
+  ws4.on("message", () => {});
+  ws4.send(JSON.stringify({ type: "chat.send", chatId, text: "收剑入鞘，再讲讲。" }));
+  const deadline4 = Date.now() + 30000;
+  const done4 = { value: false };
+  const onMsg4 = (raw) => { const e = JSON.parse(String(raw)); if (e.type === "chat.done" || e.type === "chat.error") done4.value = e; };
+  ws4.on("message", (raw) => onMsg4(raw));
+  while (Date.now() < deadline4 && !done4.value) await sleep(100);
+  assert.ok(done4.value?.type === "chat.done", `native 回归轮应成功: ${JSON.stringify(done4.value)}`);
+  ws4.close();
+  const finalSent = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
+  const assistantHistory = finalSent.messages.filter((m) => m.role === "assistant");
+  assert.ok(assistantHistory.some((m) => JSON.stringify(m.content).includes("会认主")), "历史应含还原后的协议正文");
+  // 协议正文只应出现在消息 content（还原态），而不是藏在任何 tool_calls 参数里
+  assert.ok(
+    !finalSent.messages.some((m) => m.tool_calls && JSON.stringify(m.tool_calls).includes("会认主")),
+    "协议正文不应以 tool_calls 形态残留在历史",
+  );
+  console.log("✓ 协议轮后历史还原为纯文本（正文不在 tool_calls 里）");
+
+  console.log("\n=== M1+M2+M3+M4 冒烟全部通过 ===");
 } finally {
   mock.kill();
   server.kill();
