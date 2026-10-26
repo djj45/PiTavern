@@ -1,0 +1,20 @@
+{
+  "name": "pitavern",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PiTavern — 基于 pi 运行时的 agent 化酒馆",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w apps/server",
+    "dev:web": "npm run dev -w apps/web",
+    "build": "npm run build --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present",
+    "e2e": "npm run e2e -w apps/server"
+  },
+  "engines": {
+    "node": ">=22.19"
+  }
+}

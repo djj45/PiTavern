@@ -1,0 +1,107 @@
+/**
+ * PiTavern 前后端共享契约：WS 事件协议与 DTO。
+ *
+ * 这是 server ⇄ web 的唯一协议定义。新增事件时先改这里，
+ * 两端 TS 会同时报错，避免契约漂移。
+ */
+
+export const PITAVERN_VERSION = "0.1.0";
+
+// ---------------------------------------------------------------- DTO
+
+export interface ProviderModelDto {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  contextWindow: number;
+  maxTokens: number;
+}
+
+export interface ProviderDto {
+  id: string;
+  name: string;
+  baseUrl: string;
+  hasApiKey: boolean;
+  models: ProviderModelDto[];
+}
+
+/** 连接设置（apiKey 永不下发到前端，只回传 hasApiKey） */
+export interface ConnectionDto {
+  providers: ProviderDto[];
+  defaultProvider: string;
+  defaultModel: string;
+  stDataDir: string;
+  persona: { name: string; description: string };
+}
+
+export interface CharacterDto {
+  /** 人物卡名（也是头像接口的 key） */
+  name: string;
+  avatarUrl: string;
+  description: string;
+  personality: string;
+  scenario: string;
+  firstMes: string;
+  alternateGreetings: string[];
+  tags: string[];
+  creator: string;
+}
+
+export interface ChatSummaryDto {
+  /** 相对 dataDir 的路径，作为唯一 id，如 "chats/Seraphina/2026-10-26@20h30m00s.jsonl" */
+  id: string;
+  character: string;
+  title: string;
+  messageCount: number;
+  lastMessage: string;
+  updatedAt: string;
+}
+
+export type ChatRole = "user" | "assistant";
+
+export interface ChatMessageDto {
+  id: string;
+  role: ChatRole;
+  /** 发送者显示名（角色名 / 用户 persona 名） */
+  name: string;
+  text: string;
+  sendDate: string;
+}
+
+// ---------------------------------------------------------------- WS 协议
+
+export type ClientMessage =
+  | { type: "chat.send"; chatId: string; text: string }
+  | { type: "chat.abort"; chatId: string }
+  | { type: "ping" };
+
+export type ServerEvent =
+  | { type: "hello"; version: string }
+  | { type: "pong" }
+  /** 本轮生成开始 */
+  | { type: "chat.started"; chatId: string }
+  /** 正文流式增量 */
+  | { type: "chat.delta"; chatId: string; delta: string }
+  /** 思维链流式增量（M4 起协议输出会用到，先通管线） */
+  | { type: "chat.thinking"; chatId: string; delta: string }
+  /** 本轮生成完成，携带落库后的完整消息 */
+  | { type: "chat.done"; chatId: string; message: ChatMessageDto }
+  /** 本轮 token/成本统计 */
+  | {
+      type: "chat.usage";
+      chatId: string;
+      input: number;
+      output: number;
+      totalTokens: number;
+      costTotal: number;
+    }
+  | { type: "chat.error"; chatId: string; message: string }
+  | { type: "chat.tool_start"; chatId: string; toolCallId: string; toolName: string; args: unknown }
+  | {
+      type: "chat.tool_end";
+      chatId: string;
+      toolCallId: string;
+      toolName: string;
+      isError: boolean;
+      durationMs?: number;
+    };

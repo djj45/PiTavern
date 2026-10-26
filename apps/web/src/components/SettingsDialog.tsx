@@ -1,0 +1,232 @@
+import { useState } from "react";
+import type { ConnectionDto, ProviderDto } from "@pitavern/shared";
+import { api } from "../api.ts";
+
+interface SettingsDialogProps {
+  connection: ConnectionDto | null;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}
+
+interface EditableProvider extends ProviderDto {
+  apiKeyInput: string;
+  newModelId: string;
+}
+
+interface TestState {
+  running: boolean;
+  result: string | null;
+}
+
+export function SettingsDialog({ connection, onClose, onSaved, onError }: SettingsDialogProps) {
+  const [providers, setProviders] = useState<EditableProvider[]>(() =>
+    (connection?.providers ?? []).map((p) => ({ ...p, apiKeyInput: "", newModelId: "" })),
+  );
+  const [defaultProvider, setDefaultProvider] = useState(connection?.defaultProvider ?? "");
+  const [defaultModel, setDefaultModel] = useState(connection?.defaultModel ?? "");
+  const [stDataDir, setStDataDir] = useState(connection?.stDataDir ?? "");
+  const [personaName, setPersonaName] = useState(connection?.persona.name ?? "");
+  const [personaDescription, setPersonaDescription] = useState(connection?.persona.description ?? "");
+  const [test, setTest] = useState<TestState>({ running: false, result: null });
+
+  const updateProvider = (id: string, patch: Partial<EditableProvider>) => {
+    setProviders((list) => list.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+
+  const addProvider = () => {
+    const id = `relay-${Date.now().toString(36)}`;
+    setProviders((list) => [
+      ...list,
+      { id, name: "新中转", baseUrl: "https://", hasApiKey: false, models: [], apiKeyInput: "", newModelId: "" },
+    ]);
+  };
+
+  const addModel = (providerId: string) => {
+    const provider = providers.find((p) => p.id === providerId);
+    const modelId = provider?.newModelId.trim();
+    if (!modelId) return;
+    updateProvider(providerId, {
+      models: [...provider!.models, { id: modelId, name: modelId, reasoning: false, contextWindow: 1_000_000, maxTokens: 16_384 }],
+      newModelId: "",
+    });
+    if (!defaultProvider || !defaultModel) {
+      setDefaultProvider(providerId);
+      setDefaultModel(modelId);
+    }
+  };
+
+  const save = async () => {
+    try {
+      const payload = {
+        providers: providers.map((p) => ({
+          ...p,
+          // 空串 = 服务端保持原 key 不变；填了新值 = 更新
+          apiKey: p.apiKeyInput,
+          models: p.models,
+        })),
+        defaultProvider,
+        defaultModel,
+        stDataDir,
+        persona: { name: personaName || "旅人", description: personaDescription },
+      };
+      await api.saveConnection(payload);
+      onSaved();
+      onClose();
+    } catch (e) {
+      onError(`保存失败: ${(e as Error).message}`);
+    }
+  };
+
+  const runTest = async () => {
+    setTest({ running: true, result: null });
+    try {
+      await save();
+      const result = await api.testConnection();
+      setTest({
+        running: false,
+        result: result.ok ? `✓ 连通（${result.provider}/${result.model}）` : `✗ ${result.error ?? "无输出"}`,
+      });
+    } catch (e) {
+      setTest({ running: false, result: `✗ ${(e as Error).message}` });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-tavern-border bg-tavern-panel p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="mb-4 text-lg font-semibold text-tavern-accent">设置</h2>
+
+        {/* 模型连接 */}
+        <section className="mb-5">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-medium">模型连接（OpenAI 兼容中转 / API）</h3>
+            <button type="button" onClick={addProvider} className="rounded-md bg-tavern-raised px-2 py-0.5 text-xs text-tavern-accent hover:bg-tavern-raised/70">
+              ＋ 添加
+            </button>
+          </div>
+          {providers.length === 0 && (
+            <p className="rounded-md border border-dashed border-tavern-border p-3 text-xs text-tavern-dim">
+              还没有连接。添加一个中转（填 baseUrl 与 API Key），再给它加模型（模型 id 需与中转上游一致，如 gemini-2.5-pro）。
+            </p>
+          )}
+          <div className="flex flex-col gap-3">
+            {providers.map((p) => (
+              <div key={p.id} className="rounded-lg border border-tavern-border bg-tavern-bg p-3">
+                <div className="mb-2 grid grid-cols-2 gap-2">
+                  <input
+                    value={p.name}
+                    onChange={(e) => updateProvider(p.id, { name: e.target.value })}
+                    placeholder="名称"
+                    className="rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
+                  />
+                  <input
+                    value={p.baseUrl}
+                    onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })}
+                    placeholder="https://中转域名/v1"
+                    className="rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
+                  />
+                </div>
+                <input
+                  type="password"
+                  value={p.apiKeyInput}
+                  onChange={(e) => updateProvider(p.id, { apiKeyInput: e.target.value })}
+                  placeholder={p.hasApiKey ? "API Key 已保存（留空保持不变）" : "API Key"}
+                  className="mb-2 w-full rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
+                />
+                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                  {p.models.map((m) => {
+                    const selected = defaultProvider === p.id && defaultModel === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setDefaultProvider(p.id);
+                          setDefaultModel(m.id);
+                        }}
+                        onDoubleClick={() => updateProvider(p.id, { models: p.models.filter((x) => x.id !== m.id) })}
+                        title="单击设为默认；双击移除"
+                        className={`rounded-full px-2.5 py-0.5 text-xs ${
+                          selected ? "bg-tavern-accent text-tavern-bg" : "bg-tavern-raised text-tavern-dim hover:text-tavern-text"
+                        }`}
+                      >
+                        {m.id}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    value={p.newModelId}
+                    onChange={(e) => updateProvider(p.id, { newModelId: e.target.value })}
+                    onKeyDown={(e) => e.key === "Enter" && addModel(p.id)}
+                    placeholder="模型 id，如 gemini-2.5-pro"
+                    className="flex-1 rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-xs outline-none"
+                  />
+                  <button type="button" onClick={() => addModel(p.id)} className="rounded-md bg-tavern-raised px-2 py-1.5 text-xs text-tavern-accent">
+                    加模型
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* persona 与数据目录 */}
+        <section className="mb-5 grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1 block text-sm">用户名（persona）</label>
+            <input
+              value={personaName}
+              onChange={(e) => setPersonaName(e.target.value)}
+              className="w-full rounded-md border border-tavern-border bg-tavern-bg px-2 py-1.5 text-sm outline-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm">用户人设</label>
+            <input
+              value={personaDescription}
+              onChange={(e) => setPersonaDescription(e.target.value)}
+              placeholder="一句话人设，可选"
+              className="w-full rounded-md border border-tavern-border bg-tavern-bg px-2 py-1.5 text-sm outline-none"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="mb-1 block text-sm">
+              ST 数据目录 <span className="text-xs text-tavern-dim">（可指向现有 SillyTavern 的 data/default-user，改后需重启）</span>
+            </label>
+            <input
+              value={stDataDir}
+              onChange={(e) => setStDataDir(e.target.value)}
+              className="w-full rounded-md border border-tavern-border bg-tavern-bg px-2 py-1.5 text-sm outline-none"
+            />
+          </div>
+        </section>
+
+        <div className="flex items-center gap-3 border-t border-tavern-border pt-4">
+          <button
+            type="button"
+            onClick={runTest}
+            disabled={test.running || !defaultProvider}
+            className="rounded-md border border-tavern-border px-3 py-1.5 text-sm text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40"
+          >
+            {test.running ? "测试中…" : "保存并测试连通"}
+          </button>
+          {test.result && <span className={`text-sm ${test.result.startsWith("✓") ? "text-emerald-400" : "text-red-400"}`}>{test.result}</span>}
+          <div className="ml-auto flex gap-2">
+            <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-tavern-dim hover:text-tavern-text">
+              取消
+            </button>
+            <button type="button" onClick={save} className="rounded-md bg-tavern-accent px-4 py-1.5 text-sm font-medium text-tavern-bg">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

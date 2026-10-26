@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --color-tavern-bg: #14121a;
+  --color-tavern-panel: #1d1a26;
+  --color-tavern-raised: #262233;
+  --color-tavern-border: #35304a;
+  --color-tavern-accent: #d4a24e;
+  --color-tavern-accent-dim: #9a7736;
+  --color-tavern-text: #e8e2f0;
+  --color-tavern-dim: #9c93b0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-tavern-bg);
+  color: var(--color-tavern-text);
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-tavern-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
