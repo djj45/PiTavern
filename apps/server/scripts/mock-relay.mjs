@@ -5,8 +5,13 @@
  */
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 
 const PORT = Number(process.env.MOCK_PORT ?? 18789);
+const requestRoot = process.env.MOCK_REQUEST_DIR ?? path.resolve(import.meta.dirname, "../../../data/mock-requests");
+fs.mkdirSync(requestRoot, { recursive: true });
+const requestDir = fs.mkdtempSync(path.join(requestRoot, "relay-"));
+let requestNumber = 0;
 const REPLY = "（她抬起眼，烛光在眸中晃了晃）今晚的风很吵……你是来找酒，还是来找故事的？";
 
 const server = http.createServer((req, res) => {
@@ -20,7 +25,7 @@ const server = http.createServer((req, res) => {
     const payload = JSON.parse(body || "{}");
     console.log(`[mock] model=${payload.model} stream=${payload.stream} messages=${payload.messages?.length ?? 0} tools=${payload.tools?.length ?? 0}`);
     try {
-      fs.writeFileSync("/tmp/mock-last-request.json", JSON.stringify(payload, null, 2));
+      fs.writeFileSync(path.join(requestDir, `${String(++requestNumber).padStart(6, "0")}.json`), JSON.stringify(payload, null, 2));
     } catch {}
     const chars = [...REPLY];
 
@@ -83,6 +88,7 @@ const server = http.createServer((req, res) => {
           clearInterval(timer);
         }
       }, 30);
+      res.on("close", () => clearInterval(timer));
     } else {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(

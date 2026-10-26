@@ -21,8 +21,8 @@ export interface BridgeOptions {
   recursionSteps: number;
   caseSensitive: boolean;
   matchWholeWords: boolean;
-  /** 历史部分的粗略字符预算（M4 的 token 级压缩会取代它） */
-  maxHistoryChars: number;
+  /** 兼容旧调用方；预算统一由 Agent 压缩层处理。 */
+  maxHistoryChars?: number;
 }
 
 export interface BridgeInput {
@@ -215,17 +215,8 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
     (sawHistory ? tail : head).push({ role: prompt.role, text: content });
   }
 
-  // 历史：全量行 → 宏+正则 → 深度注入 → 预算裁剪（从旧端截断）
+  // 保留旧轮全文供统一压缩层提取摘要，不在组装阶段提前截断。
   let history = historyPieces(chatLines, regexScripts, env);
-  const historyChars = history.reduce((sum, p) => sum + p.text.length, 0);
-  if (historyChars > options.maxHistoryChars) {
-    let kept = 0;
-    const cut = [...history].reverse().findIndex((p) => {
-      kept += p.text.length;
-      return kept > options.maxHistoryChars;
-    });
-    history = cut === -1 ? history : history.slice(history.length - Math.max(1, cut));
-  }
   history = injectAtDepth(history, absoluteInjections);
 
   // ST 语义：chatHistory 在 order 中出现的位置之前是 head、之后是 tail。

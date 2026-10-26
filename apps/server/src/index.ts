@@ -11,7 +11,7 @@ import { ChatStore } from "./stdata/chats.ts";
 import { SessionManager } from "./session/manager.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const webDistDir = path.resolve(here, "../../../web/dist");
+const webDistDir = path.resolve(here, "../../web/dist");
 const config = loadConfig();
 const configPath = resolveDataPath(CONFIG_PATH);
 if (!fs.existsSync(configPath)) {

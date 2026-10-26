@@ -13,7 +13,14 @@ npm run e2e          # mock 中转端到端冒烟（含工具循环）
 npm run verify:bridge # 桥接组装器对齐验证（真实猫神预设）
 npm run verify:tools # 工具四件套 + 限次冷却强制验证
 npm run verify:m4    # 输出协议还原 + 流式提取 + 历史压缩验证
+npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话状态回归
 ```
+
+聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。
+
+两种上下文模式统一在 Agent 层压缩完整旧轮次，保留当前工具调用链，并为输出预留预算。预算仍采用保守字符估算；模型的 `contextWindow`、`maxTokens` 应按实际能力配置。压缩后仍超预算时会返回明确错误。
+
+`npm run e2e` 使用独立测试目录和动态端口，测试数据与逐次 mock 请求记录保留在 `data/test-runs/`，不依赖真实 API Key。
 
 首次使用：打开前端 → 设置 → 添加中转（OpenAI 兼容 baseUrl + API Key + 模型 id）→ 保存并测试连通 → 把角色卡 PNG 放进 `data/st/characters/` → 开始新对话。
 

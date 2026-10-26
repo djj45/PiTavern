@@ -3,7 +3,6 @@ import path from "node:path";
 import express, { type Request, type Response } from "express";
 import type {
   CharacterDto,
-  ChatMessageDto,
   ChatSummaryDto,
   ConnectionDto,
   PresetSummaryDto,
@@ -43,21 +42,6 @@ function characterDto(card: import("../stdata/types.ts").CharacterCard): Charact
     tags: card.tags,
     creator: card.creator,
   };
-}
-
-function chatLinesToDto(lines: import("../stdata/types.ts").StChatLine[], config: TavernConfig): ChatMessageDto[] {
-  return lines
-    .filter((l) => !l.is_system && l.mes.trim())
-    .map((l, i) => ({
-      id: `line-${i}`,
-      role: (l.is_user ? "user" : "assistant") as ChatMessageDto["role"],
-      name: l.is_user ? config.persona.name : l.name,
-      text: l.mes,
-      sendDate: l.send_date,
-      ...(typeof (l.extra as { thinking?: unknown } | undefined)?.thinking === "string"
-        ? { thinking: (l.extra as { thinking: string }).thinking }
-        : {}),
-    }));
 }
 
 export function createHttpApp(deps: HttpDeps): express.Express {
@@ -219,7 +203,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       res.status(404).json({ error: `角色不存在: ${character}` });
       return;
     }
-    const firstMes = greeting ?? card.firstMes ?? card.alternateGreetings[0] ?? "";
+    const firstMes = greeting ?? (card.firstMes || card.alternateGreetings[0] || "");
     const meta = chats.createChat(
       card.name,
       firstMes ? { name: card.name, is_user: false, is_system: false, mes: firstMes } : null,
@@ -231,16 +215,20 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   app.get("/api/chats/*splat", (req, res) => {
     // Express 5 通配参数跨斜杠时是数组
     const chatId = (Array.isArray(req.params.splat) ? req.params.splat : [req.params.splat]).join("/");
-    const lines = chats.readChat(chatId);
-    if (!lines) {
+    const snapshot = sessions.snapshot(chatId);
+    if (!snapshot) {
       res.status(404).json({ error: `聊天不存在: ${chatId}` });
       return;
     }
-    res.json({ id: chatId, character: lines[0]?.name ?? "", messages: chatLinesToDto(lines, config) });
+    res.json(snapshot);
   });
 
   app.delete("/api/chats/*splat", (req, res) => {
     const chatId = (Array.isArray(req.params.splat) ? req.params.splat : [req.params.splat]).join("/");
+    if (sessions.isStreaming(chatId)) {
+      res.status(409).json({ error: "请先停止生成，再删除聊天" });
+      return;
+    }
     res.json({ ok: chats.deleteChat(chatId) });
   });
 

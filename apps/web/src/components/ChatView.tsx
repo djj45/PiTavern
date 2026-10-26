@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import type { ChatMessageDto } from "@pitavern/shared";
 import { isToolItem, TOOL_META, toolArgPreview, type ChatItem, type ToolItem } from "../chatItems.ts";
 
@@ -6,9 +6,10 @@ interface ChatViewProps {
   chat: { id: string; character: string; items: ChatItem[] } | null;
   personaName: string;
   streamingText: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean;
   onStop: () => void;
   disabled: boolean;
+  connected: boolean;
 }
 
 function MessageBubble({ message, avatarUrl }: { message: ChatMessageDto; avatarUrl?: string }) {
@@ -89,13 +90,28 @@ function ToolCard({ item }: { item: ToolItem }) {
   );
 }
 
-export function ChatView({ chat, personaName, streamingText, onSend, onStop, disabled }: ChatViewProps) {
-  const [input, setInput] = useState("");
+const History = memo(function History({ items, avatarUrl }: { items: ChatItem[]; avatarUrl: string }) {
+  return <>{items.map((item) => isToolItem(item)
+    ? <ToolCard key={item.key} item={item} />
+    : <MessageBubble key={item.id} message={item} avatarUrl={avatarUrl} />)}</>;
+});
+
+export function ChatView({ chat, personaName, streamingText, onSend, onStop, disabled, connected }: ChatViewProps) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const input = chat ? drafts[chat.id] ?? "" : "";
+  const setInput = (value: string) => {
+    if (chat) setDrafts((previous) => ({ ...previous, [chat.id]: value }));
+  };
   const bottomRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
   const isStreaming = streamingText !== null;
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  useLayoutEffect(() => {
+    followRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [chat?.id]);
+  useLayoutEffect(() => {
+    if (followRef.current) bottomRef.current?.scrollIntoView({ behavior: "auto" });
   }, [chat?.items.length, streamingText]);
 
   if (!chat) {
@@ -113,22 +129,18 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, dis
   const avatarUrl = `/api/characters/${encodeURIComponent(chat.character)}/avatar`;
   const submit = () => {
     const text = input.trim();
-    if (!text || isStreaming || disabled) return;
-    onSend(text);
-    setInput("");
+    if (!text || isStreaming || disabled || !connected) return;
+    if (onSend(text)) setInput("");
   };
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div className="flex-1 overflow-y-auto px-6 py-4" onScroll={(event) => {
+        const element = event.currentTarget;
+        followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+      }}>
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
-          {chat.items.map((item, i) =>
-            isToolItem(item) ? (
-              <ToolCard key={item.key} item={item} />
-            ) : (
-              <MessageBubble key={item.id || `msg-${i}`} message={item} avatarUrl={avatarUrl} />
-            ),
-          )}
+          <History items={chat.items} avatarUrl={avatarUrl} />
           {isStreaming && (
             <div className="flex gap-3">
               <img src={avatarUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
@@ -164,6 +176,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, dis
             <button
               type="button"
               onClick={onStop}
+              disabled={!connected}
               className="rounded-xl border border-tavern-border bg-tavern-raised px-4 py-2.5 text-sm text-tavern-text hover:border-red-400 hover:text-red-400"
             >
               停止
@@ -172,7 +185,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, dis
             <button
               type="button"
               onClick={submit}
-              disabled={disabled || !input.trim()}
+              disabled={disabled || !connected || !input.trim()}
               className="rounded-xl bg-tavern-accent px-4 py-2.5 text-sm font-medium text-tavern-bg disabled:opacity-40"
             >
               发送

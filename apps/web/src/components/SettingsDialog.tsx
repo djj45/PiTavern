@@ -5,7 +5,7 @@ import { api } from "../api.ts";
 interface SettingsDialogProps {
   connection: ConnectionDto | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (restartRequired?: boolean) => void;
   onError: (message: string) => void;
 }
 
@@ -28,6 +28,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
   const [stDataDir, setStDataDir] = useState(connection?.stDataDir ?? "");
   const [personaName, setPersonaName] = useState(connection?.persona.name ?? "");
   const [personaDescription, setPersonaDescription] = useState(connection?.persona.description ?? "");
+  const [saving, setSaving] = useState(false);
   const [test, setTest] = useState<TestState>({ running: false, result: null });
   const [presets, setPresets] = useState<PresetSummaryDto[]>([]);
   const [worlds, setWorlds] = useState<WorldSummaryDto[]>([]);
@@ -72,47 +73,59 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
     }
   };
 
+  const persist = async () => {
+    const payload = {
+      providers: providers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        hasApiKey: p.hasApiKey,
+        models: p.models,
+        // 空串 = 服务端保持原 key 不变；填了新值 = 更新
+        apiKey: p.apiKeyInput,
+      })),
+      defaultProvider,
+      defaultModel,
+      stDataDir,
+      persona: { name: personaName || "旅人", description: personaDescription },
+      contextMode,
+      activePreset,
+      activeWorlds,
+      worldInfo: {
+        scanDepth,
+        recursionSteps,
+        caseSensitive: connection?.worldInfo?.caseSensitive ?? false,
+        matchWholeWords: connection?.worldInfo?.matchWholeWords ?? true,
+      },
+      outputProtocol,
+      protocolStrict,
+      compression: { enabled: compressionEnabled, keepFullTurns },
+    };
+    const result = await api.saveConnection(payload);
+    onSaved(result.restartRequired);
+    return result;
+  };
+
   const save = async () => {
+    setSaving(true);
     try {
-      const payload = {
-        providers: providers.map((p) => ({
-          id: p.id,
-          name: p.name,
-          baseUrl: p.baseUrl,
-          hasApiKey: p.hasApiKey,
-          models: p.models,
-          // 空串 = 服务端保持原 key 不变；填了新值 = 更新
-          apiKey: p.apiKeyInput,
-        })),
-        defaultProvider,
-        defaultModel,
-        stDataDir,
-        persona: { name: personaName || "旅人", description: personaDescription },
-        contextMode,
-        activePreset,
-        activeWorlds,
-        worldInfo: {
-          scanDepth,
-          recursionSteps,
-          caseSensitive: connection?.worldInfo?.caseSensitive ?? false,
-          matchWholeWords: connection?.worldInfo?.matchWholeWords ?? true,
-        },
-        outputProtocol,
-        protocolStrict,
-        compression: { enabled: compressionEnabled, keepFullTurns },
-      };
-      await api.saveConnection(payload);
-      onSaved();
+      await persist();
       onClose();
     } catch (e) {
       onError(`保存失败: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   const runTest = async () => {
     setTest({ running: true, result: null });
     try {
-      await save();
+      const saved = await persist();
+      if (saved.restartRequired) {
+        setTest({ running: false, result: "数据目录已更改，请重启服务后再测试" });
+        return;
+      }
       const result = await api.testConnection();
       setTest({
         running: false,
@@ -380,7 +393,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
           <button
             type="button"
             onClick={runTest}
-            disabled={test.running || !defaultProvider}
+            disabled={saving || test.running || !defaultProvider}
             className="rounded-md border border-tavern-border px-3 py-1.5 text-sm text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40"
           >
             {test.running ? "测试中…" : "保存并测试连通"}
@@ -390,8 +403,8 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
             <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-tavern-dim hover:text-tavern-text">
               取消
             </button>
-            <button type="button" onClick={save} className="rounded-md bg-tavern-accent px-4 py-1.5 text-sm font-medium text-tavern-bg">
-              保存
+            <button type="button" onClick={save} disabled={saving || test.running} className="rounded-md bg-tavern-accent px-4 py-1.5 text-sm font-medium text-tavern-bg">
+              {saving ? "保存中…" : "保存"}
             </button>
           </div>
         </div>

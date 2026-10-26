@@ -1,5 +1,5 @@
 import type {
-  ChatMessageDto,
+  ChatSnapshotDto,
   ChatSummaryDto,
   CharacterDto,
   ConnectionDto,
@@ -44,7 +44,7 @@ export const api = {
     }).then((r) => json<{ id: string }>(r)),
   chat: (id: string) =>
     fetch(`/api/chats/${id.split("/").map(encodeURIComponent).join("/")}`).then((r) =>
-      json<{ id: string; character: string; messages: ChatMessageDto[] }>(r),
+      json<ChatSnapshotDto>(r),
     ),
   deleteChat: (id: string) =>
     fetch(`/api/chats/${id.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }).then((r) =>

@@ -3,7 +3,7 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
 import type { BridgeSampling } from "../context/bridge.ts";
 import type { CompressionConfig } from "../context/compression.ts";
-import { compressHistory } from "../context/compression.ts";
+import { compressHistory, contextChars, inputBudgetChars } from "../context/compression.ts";
 import { GAME_TOOL_NAME } from "./protocol/game-content.ts";
 import type { CharacterCard, StChatLine } from "../stdata/types.ts";
 
@@ -92,6 +92,8 @@ export interface TavernAgentOptions {
  */
 export function createTavernAgent(options: TavernAgentOptions): Agent {
   const { sampling } = options;
+  const maxTokens = sampling?.maxTokens ?? options.model.maxTokens;
+  const budgetChars = inputBudgetChars(options.model.contextWindow || 128_000, maxTokens);
   const strictToolChoice =
     options.outputProtocol === "game_tool" && options.protocolStrict !== false
       ? ({ tool_choice: "required" } as Record<string, unknown>)
@@ -111,6 +113,10 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
           }
         : {}),
     };
+    const requestChars = contextChars(context.messages) + (context.systemPrompt?.length ?? 0) + JSON.stringify(context.tools ?? []).length;
+    if (options.compression?.enabled && requestChars > budgetChars) {
+      throw new Error("压缩后上下文仍超过预留输出后的预算，请减少保留轮数、精简角色/世界书，或检查模型上下文长度设置");
+    }
     return options.models.streamSimple(model, context, merged);
   };
 
@@ -147,7 +153,7 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
     transformContext:
       compression?.enabled
         ? async (messages) =>
-            compressHistory(messages, compression, Math.floor((options.model.contextWindow || 128_000) * 1.5)).messages
+            compressHistory(messages, compression, budgetChars).messages
         : undefined,
     finishTurn: async (turn) => {
       turnCount += 1;

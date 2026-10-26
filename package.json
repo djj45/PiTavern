@@ -15,7 +15,8 @@
     "e2e": "npm run e2e -w apps/server",
     "verify:bridge": "npm run verify:bridge -w apps/server",
     "verify:tools": "npm run verify:tools -w apps/server",
-    "verify:m4": "npm run verify:m4 -w apps/server"
+    "verify:m4": "npm run verify:m4 -w apps/server",
+    "verify:regression": "npm run verify:regression -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

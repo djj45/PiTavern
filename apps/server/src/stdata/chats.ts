@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import type { ChatMessageDto } from "@pitavern/shared";
 import type { StChatLine } from "./types.ts";
 
 export interface ChatMeta {
-  /** 相对 stDataDir 的路径，作为 chatId */
   id: string;
   file: string;
   character: string;
@@ -12,31 +13,52 @@ export interface ChatMeta {
   updatedAt: string;
 }
 
-/** ST 的聊天文件名格式：2026-10-26@20h30m00s.jsonl */
-function stChatFileName(date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const d = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  const t = `${pad(date.getHours())}h${pad(date.getMinutes())}m${pad(date.getSeconds())}s`;
-  return `${d}@${t}.jsonl`;
+export interface ChatDocument {
+  character: string;
+  metadata: Record<string, unknown>;
+  lines: StChatLine[];
 }
 
-/** ST 只对路径分隔符等少数字符做处理，这里保持一致以兼容真实 ST 数据目录 */
+interface CachedDocument {
+  fingerprint: string;
+  document: ChatDocument;
+}
+
+function fingerprint(stat: fs.Stats): string {
+  return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}`;
+}
+
+function stChatFileName(date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}@${pad(date.getHours())}h${pad(date.getMinutes())}m${pad(date.getSeconds())}s.jsonl`;
+}
+
 function characterDirName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "_";
 }
 
-function formatSendDate(date = new Date()): string {
-  return date.toISOString();
+export function chatMessages(lines: StChatLine[]): ChatMessageDto[] {
+  return lines.flatMap((line, i) => !line.is_system && (line.mes.trim() || line.extra?.thinking) ? [{
+    id: typeof line.extra?.messageId === "string" ? line.extra.messageId : `line-${i}`,
+    role: line.is_user ? "user" as const : "assistant" as const,
+    name: line.name,
+    text: line.mes,
+    sendDate: line.send_date,
+    ...(typeof line.extra?.thinking === "string" ? { thinking: line.extra.thinking } : {}),
+  }] : []);
 }
 
 export class ChatStore {
+  private readonly summaries = new Map<string, { fingerprint: string; meta: ChatMeta }>();
+  // 列表只保留轻量摘要；正文限制为最近访问的 8 个文件。
+  private readonly documents = new Map<string, CachedDocument>();
+
   constructor(private readonly stDataDir: string) {}
 
   private characterChatsDir(character: string): string {
     return path.join(this.stDataDir, "chats", characterDirName(character));
   }
 
-  /** 把相对路径限制在 stDataDir 内，防目录穿越；非法返回 null */
   resolveChatFile(chatId: string): string | null {
     const file = path.resolve(this.stDataDir, chatId);
     const root = path.resolve(this.stDataDir);
@@ -44,17 +66,73 @@ export class ChatStore {
     return file;
   }
 
+  private remember(file: string, document: ChatDocument, stat: fs.Stats): void {
+    this.documents.delete(file);
+    this.documents.set(file, { fingerprint: fingerprint(stat), document });
+    while (this.documents.size > 8) this.documents.delete(this.documents.keys().next().value!);
+    this.summaries.set(file, {
+      fingerprint: fingerprint(stat),
+      meta: {
+        id: path.relative(this.stDataDir, file).split(path.sep).join("/"),
+        file,
+        character: document.character,
+        messageCount: document.lines.length,
+        lastMessage: document.lines.at(-1)?.mes.slice(0, 80) ?? "",
+        updatedAt: new Date(stat.mtimeMs).toISOString(),
+      },
+    });
+  }
+
+  private readFile(file: string, stat = fs.statSync(file)): ChatDocument {
+    const cached = this.documents.get(file);
+    if (cached?.fingerprint === fingerprint(stat)) {
+      this.documents.delete(file);
+      this.documents.set(file, cached);
+      return cached.document;
+    }
+    const raw = fs.readFileSync(file, "utf8");
+    const lines: StChatLine[] = [];
+    let header: Record<string, unknown> = {};
+    for (const [index, line] of raw.split("\n").entries()) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (typeof obj?.mes === "string" && typeof obj?.name === "string") {
+          lines.push({
+            name: obj.name, is_user: Boolean(obj.is_user), is_system: Boolean(obj.is_system),
+            send_date: typeof obj.send_date === "string" ? obj.send_date : "",
+            mes: obj.mes, extra: obj.extra,
+          });
+        } else if (index === 0 && obj && typeof obj === "object") {
+          header = obj;
+        }
+      } catch {
+        // 与 ST 一样跳过损坏行，不影响其他消息读取。
+      }
+    }
+    const document: ChatDocument = {
+      character: typeof header.character_name === "string" && header.character_name
+        ? header.character_name
+        : lines.find((line) => !line.is_user && !line.is_system)?.name ?? path.basename(path.dirname(file)),
+      metadata: header.chat_metadata && typeof header.chat_metadata === "object"
+        ? header.chat_metadata as Record<string, unknown> : {},
+      lines,
+    };
+    this.remember(file, document, stat);
+    return document;
+  }
+
   listChats(character?: string): ChatMeta[] {
-    const chatsRoot = path.join(this.stDataDir, "chats");
-    if (!fs.existsSync(chatsRoot)) return [];
-    const dirs = character
-      ? [this.characterChatsDir(character)]
-      : fs.readdirSync(chatsRoot).map((d) => path.join(chatsRoot, d));
+    const root = path.join(this.stDataDir, "chats");
+    if (!fs.existsSync(root)) return [];
+    const dirs = character ? [this.characterChatsDir(character)]
+      : fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(root, d.name));
     const metas: ChatMeta[] = [];
     for (const dir of dirs) {
       if (!fs.existsSync(dir)) continue;
-      for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort()) {
-        const meta = this.statChat(path.join(dir, file));
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        const meta = this.statChat(path.join(dir, entry.name));
         if (meta) metas.push(meta);
       }
     }
@@ -62,136 +140,86 @@ export class ChatStore {
   }
 
   statChat(file: string): ChatMeta | null {
-    let lines: StChatLine[];
     try {
-      lines = this.readLines(file);
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) return null;
+      if (this.summaries.get(file)?.fingerprint !== fingerprint(stat)) this.readFile(file, stat);
+      return this.summaries.get(file)?.meta ?? null;
     } catch {
+      this.documents.delete(file);
+      this.summaries.delete(file);
       return null;
     }
-    if (lines.length === 0) return null;
-    const relPath = path.relative(this.stDataDir, file).split(path.sep).join("/");
-    const last = lines[lines.length - 1];
-    return {
-      id: relPath,
-      file,
-      character: lines[0]?.name ?? path.basename(path.dirname(file)),
-      messageCount: lines.length,
-      lastMessage: (last.mes ?? "").slice(0, 80),
-      updatedAt: new Date(fs.statSync(file).mtimeMs).toISOString(),
-    };
   }
 
   readLines(file: string): StChatLine[] {
-    const raw = fs.readFileSync(file, "utf8");
-    const lines: StChatLine[] = [];
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const obj = JSON.parse(trimmed);
-        if (typeof obj?.mes === "string" && typeof obj?.name === "string") {
-          lines.push({
-            name: obj.name,
-            is_user: Boolean(obj.is_user),
-            is_system: Boolean(obj.is_system),
-            send_date: typeof obj.send_date === "string" ? obj.send_date : "",
-            mes: obj.mes,
-            extra: obj.extra,
-          });
-        }
-      } catch {
-        // 跳过损坏行，保持与 ST 宽松读取行为一致
-      }
-    }
-    return lines;
+    return this.readFile(file).lines;
+  }
+
+  readDocument(chatId: string): ChatDocument | null {
+    const file = this.resolveChatFile(chatId);
+    if (!file || !fs.existsSync(file)) return null;
+    return this.readFile(file);
   }
 
   readChat(chatId: string): StChatLine[] | null {
-    const file = this.resolveChatFile(chatId);
-    if (!file || !fs.existsSync(file)) return null;
-    return this.readLines(file);
+    return this.readDocument(chatId)?.lines ?? null;
   }
 
-  /**
-   * ST 约定：JSONL 首行是头对象 {user_name, character_name, chat_metadata}（无 mes 字段）。
-   * 变量等工具数据存放在 chat_metadata.variables。
-   */
   readMetadata(chatId: string): Record<string, unknown> {
-    const file = this.resolveChatFile(chatId);
-    if (!file || !fs.existsSync(file)) return {};
-    const first = fs.readFileSync(file, "utf8").split("\n", 1)[0]?.trim();
-    if (!first) return {};
-    try {
-      const obj = JSON.parse(first);
-      if (obj && typeof obj === "object" && typeof obj.mes !== "string") {
-        return (obj.chat_metadata as Record<string, unknown>) ?? {};
-      }
-    } catch {
-      // 无头或损坏 → 空元数据
-    }
-    return {};
+    return this.readDocument(chatId)?.metadata ?? {};
   }
 
-  /** 更新首行 chat_metadata（原位重写，保留其余消息行） */
   writeMetadata(chatId: string, metadata: Record<string, unknown>): void {
     const file = this.resolveChatFile(chatId);
     if (!file || !fs.existsSync(file)) throw new Error(`聊天文件不存在: ${chatId}`);
-    const raw = fs.readFileSync(file, "utf8");
-    const lines = raw.split("\n");
-    let header: Record<string, unknown>;
-    const first = lines[0]?.trim();
-    if (first) {
-      try {
-        const obj = JSON.parse(first);
-        if (obj && typeof obj === "object" && typeof obj.mes !== "string") {
-          header = obj;
-          lines.shift();
-        } else {
-          header = {};
-        }
-      } catch {
-        header = {};
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    let header: Record<string, unknown> = {};
+    try {
+      const first = JSON.parse(lines[0] ?? "");
+      if (first && typeof first === "object" && typeof first.mes !== "string") {
+        header = first;
+        lines.shift();
       }
-    } else {
-      header = {};
-    }
+    } catch { /* 无头文件需要补头 */ }
     header.chat_metadata = { ...(header.chat_metadata as object), ...metadata };
-    fs.writeFileSync(file, [JSON.stringify(header), ...lines.filter((l) => l.trim().length > 0)].join("\n") + "\n", "utf8");
+    fs.writeFileSync(file, [JSON.stringify(header), ...lines.filter((line) => line.trim())].join("\n") + "\n", "utf8");
+    this.documents.delete(file);
+    this.summaries.delete(file);
   }
 
-  appendMessage(chatId: string, line: Omit<StChatLine, "send_date"> & { send_date?: string }): void {
+  appendMessage(chatId: string, line: Omit<StChatLine, "send_date"> & { send_date?: string }): StChatLine {
     const file = this.resolveChatFile(chatId);
     if (!file || !fs.existsSync(file)) throw new Error(`聊天文件不存在: ${chatId}`);
-    const full: StChatLine = { ...line, send_date: line.send_date ?? formatSendDate() };
+    const document = this.readFile(file);
+    const full: StChatLine = {
+      ...line, send_date: line.send_date ?? new Date().toISOString(),
+      extra: { ...line.extra, messageId: line.extra?.messageId ?? randomUUID() },
+    };
     fs.appendFileSync(file, `${JSON.stringify(full)}\n`, "utf8");
+    this.remember(file, { ...document, lines: [...document.lines, full] }, fs.statSync(file));
+    return full;
   }
 
-  createChat(
-    character: string,
-    greeting: (Omit<StChatLine, "send_date"> & { send_date?: string }) | null,
-    userName = "User",
-  ): ChatMeta {
+  createChat(character: string, greeting: (Omit<StChatLine, "send_date"> & { send_date?: string }) | null, userName = "User"): ChatMeta {
     const dir = this.characterChatsDir(character);
     fs.mkdirSync(dir, { recursive: true });
     let file = path.join(dir, stChatFileName());
-    // 同秒内重复建卡时避让
-    for (let i = 0; fs.existsSync(file); i++) {
-      file = path.join(dir, stChatFileName(new Date(Date.now() + (i + 1) * 1000)));
-    }
-    const header = JSON.stringify({
-      user_name: userName,
-      character_name: character,
-      chat_metadata: {},
-    });
-    const content = greeting ? `${header}\n${JSON.stringify(greeting)}\n` : `${header}\n`;
-    fs.writeFileSync(file, content, "utf8");
-    return this.statChat(file)!;
+    for (let i = 0; fs.existsSync(file); i++) file = path.join(dir, stChatFileName(new Date(Date.now() + (i + 1) * 1000)));
+    const header = JSON.stringify({ user_name: userName, character_name: character, chat_metadata: {} });
+    const first = greeting ? { ...greeting, send_date: greeting.send_date ?? new Date().toISOString() } : null;
+    fs.writeFileSync(file, first ? `${header}\n${JSON.stringify(first)}\n` : `${header}\n`, "utf8");
+    const meta = this.statChat(file);
+    if (!meta) throw new Error("无法读取新建的聊天");
+    return meta;
   }
 
   deleteChat(chatId: string): boolean {
     const file = this.resolveChatFile(chatId);
     if (!file || !fs.existsSync(file)) return false;
     fs.rmSync(file);
+    this.documents.delete(file);
+    this.summaries.delete(file);
     return true;
   }
 }

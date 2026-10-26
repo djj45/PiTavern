@@ -10,7 +10,8 @@
     "verify:bridge": "tsx scripts/bridge-verify.ts",
     "verify:tools": "tsx scripts/tools-verify.ts",
     "verify:m4": "tsx scripts/m4-verify.ts",
-    "e2e": "node scripts/e2e-smoke.mjs"
+    "e2e": "node scripts/e2e-smoke.mjs",
+    "verify:regression": "tsx scripts/regression-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

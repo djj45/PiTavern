@@ -1,12 +1,7 @@
+import { memo } from "react";
 import { isToolItem, TOOL_META, type ChatItem } from "../chatItems.ts";
 
-export interface UsageStats {
-  input: number;
-  output: number;
-  totalTokens: number;
-  costTotal: number;
-  turns: number;
-}
+import type { UsageStats } from "../chatState.ts";
 
 interface ActivityPanelProps {
   items: ChatItem[];
@@ -19,7 +14,7 @@ function fmt(n: number): string {
   return String(n);
 }
 
-export function ActivityPanel({ items, usage }: ActivityPanelProps) {
+export const ActivityPanel = memo(function ActivityPanel({ items, usage }: ActivityPanelProps) {
   const tools = items.filter(isToolItem);
   const byTool = new Map<string, number>();
   for (const t of tools) byTool.set(t.toolName, (byTool.get(t.toolName) ?? 0) + 1);
@@ -80,4 +75,4 @@ export function ActivityPanel({ items, usage }: ActivityPanelProps) {
       </section>
     </aside>
   );
-}
+});

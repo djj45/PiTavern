@@ -6,20 +6,36 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import path from "node:path";
+import net from "node:net";
 import zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import WebSocket from "ws";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
-const PORT = 8790;
-const BASE = `http://127.0.0.1:${PORT}`;
-const DATA_DIR = path.join(ROOT, "data/e2e-test");
-const CONFIG = path.join(ROOT, "data/e2e-config.json");
-
-function cleanup() {
-  for (const p of [DATA_DIR, CONFIG]) fs.rmSync(p, { recursive: true, force: true });
+async function freePort() {
+  const probe = net.createServer();
+  await new Promise((resolve, reject) => { probe.once("error", reject); probe.listen(0, "127.0.0.1", resolve); });
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
 }
-cleanup();
+const PORT = await freePort();
+const MOCK_PORT = await freePort();
+const BASE = `http://127.0.0.1:${PORT}`;
+const runsRoot = path.join(ROOT, "data/test-runs");
+fs.mkdirSync(runsRoot, { recursive: true });
+const RUN_DIR = fs.mkdtempSync(path.join(runsRoot, "e2e-"));
+const DATA_DIR = path.join(RUN_DIR, "st");
+const CONFIG = path.join(RUN_DIR, "config.json");
+const REQUEST_DIR = path.join(RUN_DIR, "requests");
+const sockets = [];
+const createSocket = (url) => { const ws = new WebSocket(url); sockets.push(ws); return ws; };
+const lastRequest = () => {
+  const relayDir = path.join(REQUEST_DIR, fs.readdirSync(REQUEST_DIR)[0]);
+  const file = fs.readdirSync(relayDir).filter((name) => name.endsWith(".json")).sort().at(-1);
+  return JSON.parse(fs.readFileSync(path.join(relayDir, file), "utf8"));
+};
+console.log(`测试数据与请求记录: ${RUN_DIR}`);
 
 function waitProcess(child, label) {
   return new Promise((resolve, reject) => {
@@ -69,7 +85,11 @@ function buildTestCardPng(name) {
   ]);
 }
 
-const mock = spawn("node", ["scripts/mock-relay.mjs"], { cwd: path.join(ROOT, "apps/server"), stdio: "pipe" });
+const mock = spawn(process.execPath, ["scripts/mock-relay.mjs"], {
+  cwd: path.join(ROOT, "apps/server"), stdio: "pipe",
+  env: { ...process.env, MOCK_PORT: String(MOCK_PORT), MOCK_REQUEST_DIR: REQUEST_DIR },
+});
+const mockReady = waitProcess(mock, "mock 中转已启动");
 
 // 预写配置（stDataDir 必须在启动前给定：CharacterStore 启动时锁定目录）
 fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
@@ -83,7 +103,7 @@ fs.writeFileSync(
         {
           id: "mock",
           name: "Mock",
-          baseUrl: "http://127.0.0.1:18789/v1",
+          baseUrl: `http://127.0.0.1:${MOCK_PORT}/v1`,
           apiKey: "sk-test",
           models: [{ id: "mock-rp", name: "Mock RP" }],
         },
@@ -97,15 +117,14 @@ fs.writeFileSync(
   ),
 );
 
-const server = spawn("npx", ["tsx", "src/index.ts"], {
+const server = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
   cwd: path.join(ROOT, "apps/server"),
   stdio: "pipe",
   env: { ...process.env, PORT: String(PORT), PITAVERN_CONFIG: CONFIG },
 });
 
 try {
-  await waitProcess(mock, "mock 中转已启动");
-  await waitProcess(server, "PiTavern 服务已启动");
+  await Promise.all([mockReady, waitProcess(server, "PiTavern 服务已启动")]);
 
   // 1. 状态
   let res = await fetch(`${BASE}/api/status`);
@@ -167,7 +186,7 @@ try {
 
   // 6. WS 流式往返
   const events = [];
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  const ws = createSocket(`ws://127.0.0.1:${PORT}/ws`);
   await new Promise((resolve, reject) => { ws.on("open", resolve); ws.on("error", reject); });
   ws.on("message", (raw) => events.push(JSON.parse(String(raw))));
   ws.send(JSON.stringify({ type: "chat.send", chatId, text: "来一杯热的。" }));
@@ -245,7 +264,7 @@ try {
     `${JSON.stringify({ name: "测试看板娘", is_user: false, is_system: false, send_date: new Date().toISOString(), mes: "<think>客人提到银剑，翻下设定</think>（她眯起眼）银剑？您倒是识货。" })}\n`,
     "utf8",
   );
-  const ws2 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  const ws2 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
   await new Promise((resolve, reject) => { ws2.on("open", resolve); ws2.on("error", reject); });
   ws2.send(JSON.stringify({ type: "chat.send", chatId, text: "我拔出银剑。" }));
   const deadline2 = Date.now() + 30000;
@@ -267,7 +286,7 @@ try {
   ws2.close();
 
   // 校验 mock 中转实际收到的请求结构（最后一次请求 = 工具结果回传后的续写请求）
-  const sent = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
+  const sent = lastRequest();
   assert.equal(sent.temperature, 0.7, "预设采样参数应透传");
   assert.equal(sent.top_p, 0.9);
   assert.equal(sent.max_tokens ?? sent.max_completion_tokens, 2048, "maxTokens 应透传（compat 决定字段名）");
@@ -294,7 +313,7 @@ try {
   });
   assert.ok((await res.json()).ok);
 
-  const ws3 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  const ws3 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
   await new Promise((resolve, reject) => { ws3.on("open", resolve); ws3.on("error", reject); });
   const events3 = [];
   ws3.on("message", (raw) => events3.push(JSON.parse(String(raw))));
@@ -311,7 +330,7 @@ try {
   // 参数流式宽松提取：toolcall_delta 期间应产生 chat.delta
   assert.ok(events3.some((e) => e.type === "chat.delta"), "协议模式下正文应流式渲染");
   // 请求层：tool_choice=required 透传
-  const sent2 = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
+  const sent2 = lastRequest();
   assert.equal(sent2.tool_choice, "required", "strict 模式应透传 tool_choice=required");
   ws3.close();
 
@@ -333,7 +352,7 @@ try {
     body: JSON.stringify({ outputProtocol: "native", contextMode: "simple" }),
   });
   assert.ok((await res.json()).ok);
-  const ws4 = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+  const ws4 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
   await new Promise((resolve, reject) => { ws4.on("open", resolve); ws4.on("error", reject); });
   ws4.on("message", () => {});
   ws4.send(JSON.stringify({ type: "chat.send", chatId, text: "收剑入鞘，再讲讲。" }));
@@ -344,7 +363,7 @@ try {
   while (Date.now() < deadline4 && !done4.value) await sleep(100);
   assert.ok(done4.value?.type === "chat.done", `native 回归轮应成功: ${JSON.stringify(done4.value)}`);
   ws4.close();
-  const finalSent = JSON.parse(fs.readFileSync("/tmp/mock-last-request.json", "utf8"));
+  const finalSent = lastRequest();
   const assistantHistory = finalSent.messages.filter((m) => m.role === "assistant");
   assert.ok(assistantHistory.some((m) => JSON.stringify(m.content).includes("会认主")), "历史应含还原后的协议正文");
   // 协议正文只应出现在消息 content（还原态），而不是藏在任何 tool_calls 参数里
@@ -354,9 +373,74 @@ try {
   );
   console.log("✓ 协议轮后历史还原为纯文本（正文不在 tool_calls 里）");
 
+  // 11. 构建后的前端可由服务端托管。
+  if (fs.existsSync(path.join(ROOT, "apps/web/dist/index.html"))) {
+    const page = await fetch(`${BASE}/`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /<div id="root">/);
+    console.log("✓ 生产前端托管目录");
+  }
+
+  // 12. 空白聊天、生成中保存设置后停止、断线重连恢复。
+  res = await fetch(`${BASE}/api/chats`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character: "测试看板娘", greeting: "" }),
+  });
+  assert.equal(res.status, 200);
+  const emptyId = (await res.json()).id;
+  const emptyChat = await (await fetch(`${BASE}/api/chats/${emptyId.split("/").map(encodeURIComponent).join("/")}`)).json();
+  assert.equal(emptyChat.character, "测试看板娘");
+  assert.equal(emptyChat.messages.length, 0);
+  const lifecycle = [];
+  const ws5 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
+  ws5.on("message", (raw) => lifecycle.push(JSON.parse(String(raw))));
+  await new Promise((resolve, reject) => { ws5.on("open", resolve); ws5.on("error", reject); });
+  const until = async (predicate, label) => {
+    const deadline = Date.now() + 10000;
+    while (!predicate() && Date.now() < deadline) await sleep(20);
+    assert.ok(predicate(), label);
+  };
+  ws5.send(JSON.stringify({ type: "chat.send", chatId: emptyId, text: "测试生成中修改设置" }));
+  await until(() => lifecycle.some((e) => e.type === "chat.delta"), "应开始流式生成");
+  const started = lifecycle.find((e) => e.type === "chat.started");
+  assert.equal(started.message.role, "user");
+  assert.equal(started.message.name, "测试员");
+  res = await fetch(`${BASE}/api/connection`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ persona: { name: "改名后的测试员", description: "" } }),
+  });
+  assert.ok((await res.json()).ok);
+  ws5.send(JSON.stringify({ type: "chat.abort", chatId: emptyId }));
+  await until(() => lifecycle.some((e) => e.type === "chat.finished"), "改设置后仍能停止当前 Agent");
+  assert.ok(!lifecycle.some((e) => e.type === "chat.error"), "用户停止不应当作生成错误");
+  lifecycle.length = 0;
+  ws5.send(JSON.stringify({ type: "chat.send", chatId: emptyId, text: "测试断线恢复" }));
+  await until(() => lifecycle.some((e) => e.type === "chat.delta"), "第二轮应开始");
+  assert.equal(lifecycle.find((e) => e.type === "chat.started").message.name, "改名后的测试员");
+  ws5.close();
+  const restored = [];
+  const ws6 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
+  ws6.on("message", (raw) => restored.push(JSON.parse(String(raw))));
+  await new Promise((resolve, reject) => { ws6.on("open", resolve); ws6.on("error", reject); });
+  ws6.send(JSON.stringify({ type: "chat.sync", chatId: emptyId }));
+  await until(() => restored.some((e) => e.type === "chat.snapshot"), "重连应获取快照");
+  const runningSnapshot = restored.find((e) => e.type === "chat.snapshot").snapshot;
+  assert.equal(runningSnapshot.running, true);
+  assert.ok(runningSnapshot.streamingText.length > 0);
+  await until(() => restored.some((e) => e.type === "chat.finished"), "重连后仍收到结束事件");
+  restored.length = 0;
+  ws6.send(JSON.stringify({ type: "chat.sync", chatId: emptyId }));
+  await until(() => restored.some((e) => e.type === "chat.snapshot"), "结束后可再次同步");
+  const finalSnapshot = restored.find((e) => e.type === "chat.snapshot").snapshot;
+  assert.equal(finalSnapshot.running, false);
+  assert.equal(finalSnapshot.streamingText, "");
+  assert.ok(finalSnapshot.messages.at(-1).text.length > 5);
+  ws6.close();
+  console.log("✓ 空白聊天、配置隔离、生成中停止、重连快照与后续事件");
+
   console.log("\n=== M1+M2+M3+M4 冒烟全部通过 ===");
 } finally {
   mock.kill();
   server.kill();
-  cleanup();
+  for (const ws of sockets) ws.terminate();
 }

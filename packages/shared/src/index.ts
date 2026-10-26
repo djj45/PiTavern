@@ -90,23 +90,35 @@ export interface ChatMessageDto {
   thinking?: string;
 }
 
+export interface ChatSnapshotDto {
+  id: string;
+  character: string;
+  messages: ChatMessageDto[];
+  running: boolean;
+  streamingText: string;
+}
+
 // ---------------------------------------------------------------- WS 协议
 
 export type ClientMessage =
   | { type: "chat.send"; chatId: string; text: string }
   | { type: "chat.abort"; chatId: string }
+  | { type: "chat.sync"; chatId: string }
   | { type: "ping" };
 
 export type ServerEvent =
   | { type: "hello"; version: string }
   | { type: "pong" }
   /** 本轮生成开始 */
-  | { type: "chat.started"; chatId: string }
+  | { type: "chat.started"; chatId: string; message: ChatMessageDto }
+  | { type: "chat.snapshot"; chatId: string; snapshot: ChatSnapshotDto }
+  /** 整个用户回合结束，包括停止、失败和没有正文的情况。 */
+  | { type: "chat.finished"; chatId: string }
   /** 正文流式增量 */
   | { type: "chat.delta"; chatId: string; delta: string }
   /** 思维链流式增量（M4 起协议输出会用到，先通管线） */
   | { type: "chat.thinking"; chatId: string; delta: string }
-  /** 本轮生成完成，携带落库后的完整消息 */
+  /** 一条助手消息已落库；工具回合可能继续，chat.finished 才表示整轮结束。 */
   | { type: "chat.done"; chatId: string; message: ChatMessageDto }
   /** 本轮 token/成本统计 */
   | {

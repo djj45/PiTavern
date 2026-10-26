@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { ChatMessageDto, ServerEvent } from "@pitavern/shared";
+import type { ChatSnapshotDto, ServerEvent } from "@pitavern/shared";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -23,12 +23,15 @@ import { resolveModel } from "../providers/models.ts";
 import type { Models, ToolCall } from "@earendil-works/pi-ai";
 import type { CharacterCard } from "../stdata/types.ts";
 import type { CharacterStore } from "../stdata/characters.ts";
-import type { ChatStore } from "../stdata/chats.ts";
+import { chatMessages, type ChatStore } from "../stdata/chats.ts";
 
 /** 单个聊天的运行时：Agent 引用 + 事件转发 + 召回限次冷却计数 */
 class ChatSession {
   agent: Agent | null = null;
   character = "";
+  running = false;
+  streamingText = "";
+  aborted = false;
   enforcement: RecallEnforcement = { turn: 0, usedThisTurn: 0, cooldownUntilTurn: 0 };
 }
 
@@ -45,6 +48,13 @@ export class SessionManager {
   ) {}
 
   private emit(event: ServerEvent): void {
+    if ("chatId" in event) {
+      const session = this.sessions.get(event.chatId);
+      if (session) {
+        if (event.type === "chat.delta") session.streamingText += event.delta;
+        if (event.type === "chat.started" || event.type === "chat.done" || event.type === "chat.finished") session.streamingText = "";
+      }
+    }
     for (const listener of this.listeners) listener(event);
   }
 
@@ -55,96 +65,94 @@ export class SessionManager {
   }
 
   isStreaming(chatId: string): boolean {
-    return this.sessions.get(chatId)?.agent?.state.isStreaming ?? false;
+    return this.sessions.get(chatId)?.running ?? false;
   }
 
   abort(chatId: string): boolean {
-    const agent = this.sessions.get(chatId)?.agent;
-    if (!agent?.state.isStreaming) return false;
-    agent.abort();
+    const session = this.sessions.get(chatId);
+    if (!session?.running || !session.agent) return false;
+    session.aborted = true;
+    session.agent.abort();
     return true;
   }
 
-  /** 用户发言 → 流式生成 → 落库。事件全程广播。 */
+  snapshot(chatId: string): ChatSnapshotDto | null {
+    const document = this.chats.readDocument(chatId);
+    if (!document) return null;
+    const session = this.sessions.get(chatId);
+    return {
+      id: chatId, character: document.character, messages: chatMessages(document.lines),
+      running: session?.running ?? false, streamingText: session?.streamingText ?? "",
+    };
+  }
+
+  /** 用户发言 → 流式生成 → 落库。配置在回合开始时固定。 */
   async send(chatId: string, text: string): Promise<void> {
     if (this.isStreaming(chatId)) {
       this.emit({ type: "chat.error", chatId, message: "生成中，请先停止或等待完成" });
       return;
     }
-    const lines = this.chats.readChat(chatId);
-    if (!lines) {
-      this.emit({ type: "chat.error", chatId, message: `聊天不存在: ${chatId}` });
-      return;
-    }
-    const character = this.characters.getCharacter(lines[0]?.name ?? "");
-    if (!character) {
-      this.emit({ type: "chat.error", chatId, message: `找不到角色卡: ${lines[0]?.name}` });
-      return;
-    }
-
-    const session = this.ensureSession(chatId, character.name);
-    // 用户消息先落库（文件是唯一事实源），并推进剧情轮次/复位本轮召回配额
-    this.chats.appendMessage(chatId, { name: this.config.persona.name, is_user: true, is_system: false, mes: text });
-    session.enforcement.turn += 1;
-    session.enforcement.usedThisTurn = 0;
-
-    const models = this.models();
-    const model = resolveModel(models, this.config);
-
-    this.emit({ type: "chat.started", chatId });
+    const session = this.ensureSession(chatId, "");
+    session.running = true;
+    session.aborted = false;
+    session.streamingText = "";
     try {
-      // 工具上下文：当轮有效（世界书全量条目、含本轮用户消息的历史、存档变量）
+      const config = structuredClone(this.config);
+      const document = this.chats.readDocument(chatId);
+      if (!document) throw new Error(`聊天不存在: ${chatId}`);
+      const character = this.characters.getCharacter(document.character);
+      if (!character) throw new Error(`找不到角色卡: ${document.character}`);
+      session.character = character.name;
+      const models = this.models();
+      const model = resolveModel(models, config);
+      const userLine = this.chats.appendMessage(chatId, {
+        name: config.persona.name, is_user: true, is_system: false, mes: text,
+      });
+      session.enforcement.turn += 1;
+      session.enforcement.usedThisTurn = 0;
+      this.emit({ type: "chat.started", chatId, message: chatMessages([userLine])[0] });
       const macroEnv: MacroEnv = {
-        char: character.name,
-        user: this.config.persona.name,
-        personaDescription: this.config.persona.description,
-        variables: {},
+        char: character.name, user: config.persona.name,
+        personaDescription: config.persona.description,
+        variables: document.metadata.variables as Record<string, unknown> ?? {},
       };
       const toolCtx: ToolContext = {
         chatId,
-        lines: this.chats.readChat(chatId) ?? [],
-        worldEntries: this.collectWorldEntries(character),
-        variables: (this.chats.readMetadata(chatId).variables as unknown) ?? {},
+        lines: [...document.lines, userLine],
+        worldEntries: this.collectWorldEntries(character, config),
+        variables: document.metadata.variables ?? {},
         skillsDir: path.join(this.stDataDir, "skills"),
         substitute: (s) => substituteMacros(s, macroEnv),
         enforcement: session.enforcement,
         maxRecallsPerTurn: 6,
         recallCooldownTurns: 10,
       };
-      const tools = this.config.toolsEnabled ? createTavernTools(toolCtx) : [];
-      const useProtocol = this.config.outputProtocol === "game_tool";
+      const tools = config.toolsEnabled ? createTavernTools(toolCtx) : [];
+      const useProtocol = config.outputProtocol === "game_tool";
       const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
-
-      // 每轮重建 Agent：桥接/简洁两模式统一（工具闭包与组装上下文都依赖当轮状态）
-      session.agent?.reset();
-      let agent: Agent;
-      if (this.config.contextMode === "bridge") {
-        agent = this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol);
-        session.agent = agent;
-        this.wireAgent(agent, chatId, useProtocol);
-        await agent.continue();
-      } else {
-        agent = createTavernAgent({
-          models,
-          model,
-          chatId,
-          thinkingLevel: this.config.thinkingLevel,
-          systemPrompt:
-            buildSystemPrompt(character, this.config.persona) +
-            this.toolGuidance(tools.length > 0) +
-            (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
-          history: historyToAgentMessages(lines),
-          tools: allTools,
-          outputProtocol: this.config.outputProtocol,
-          protocolStrict: this.config.protocolStrict,
-          compression: this.config.compression,
-        });
-        session.agent = agent;
-        this.wireAgent(agent, chatId, useProtocol);
-        await agent.prompt(text);
+      const agent = config.contextMode === "bridge"
+        ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config)
+        : createTavernAgent({
+            models, model, chatId, thinkingLevel: config.thinkingLevel,
+            systemPrompt: buildSystemPrompt(character, config.persona) + this.toolGuidance(tools.length > 0) +
+              (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
+            history: historyToAgentMessages(document.lines), tools: allTools,
+            outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
+            compression: config.compression,
+          });
+      session.agent = agent;
+      this.wireAgent(agent, chatId, useProtocol);
+      if (config.contextMode === "bridge") await agent.continue();
+      else await agent.prompt(text);
+      if (agent.state.errorMessage && !session.aborted) {
+        this.emit({ type: "chat.error", chatId, message: agent.state.errorMessage });
       }
     } catch (error) {
       this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      session.running = false;
+      session.agent = null;
+      this.emit({ type: "chat.finished", chatId });
     }
   }
 
@@ -169,8 +177,9 @@ export class SessionManager {
     toolCtx: ToolContext,
     tools: ReturnType<typeof createTavernTools>,
     useProtocol: boolean,
+    config: TavernConfig,
   ): Agent {
-    const presetName = this.config.activePreset;
+    const presetName = config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
     if (!presetName || !fs.existsSync(presetFile)) {
       throw new Error(`桥接模式未选择有效预设: ${presetName || "(空)"}。请到设置里选择 OpenAI Settings/ 下的预设`);
@@ -182,14 +191,12 @@ export class SessionManager {
     const assembled = assembleBridgeContext({
       preset,
       card: character,
-      persona: this.config.persona,
+      persona: config.persona,
       chatLines: toolCtx.lines,
       worldEntries: toolCtx.worldEntries,
       regexScripts,
       options: {
-        ...this.config.worldInfo,
-        // 粗字符预算（≈token*4），M4 的 token 级压缩会取代它
-        maxHistoryChars: Math.floor((model.contextWindow || 128_000) * 1.5),
+        ...config.worldInfo,
       },
     });
     const messages = [...assembled.messages];
@@ -202,18 +209,18 @@ export class SessionManager {
       models,
       model,
       chatId,
-      thinkingLevel: this.config.thinkingLevel,
+      thinkingLevel: config.thinkingLevel,
       messages,
       sampling: assembled.sampling,
       tools,
-      outputProtocol: this.config.outputProtocol,
-      protocolStrict: this.config.protocolStrict,
-      compression: this.config.compression,
+      outputProtocol: config.outputProtocol,
+      protocolStrict: config.protocolStrict,
+      compression: config.compression,
     });
   }
 
   /** 世界书条目收集：卡内书 + 卡片引用世界 + 全局启用世界，按 world+uid 去重 */
-  private collectWorldEntries(card: CharacterCard): WiEntry[] {
+  private collectWorldEntries(card: CharacterCard, config: TavernConfig): WiEntry[] {
     const entries: WiEntry[] = normalizeCardBook(card.characterBook, `${card.name}(卡内书)`);
     const worldsRoot = path.join(this.stDataDir, "worlds");
     const seen = new Set(entries.map((e) => `${e.world}/${e.uid}`));
@@ -233,7 +240,7 @@ export class SessionManager {
       }
     };
     if (card.worldName) loadWorld(card.worldName);
-    for (const name of this.config.activeWorlds) loadWorld(name);
+    for (const name of config.activeWorlds) loadWorld(name);
     return entries;
   }
 
@@ -287,6 +294,14 @@ export class SessionManager {
         }
         case "message_end": {
           if (event.message.role !== "assistant") break;
+          this.emit({
+            type: "chat.usage",
+            chatId,
+            input: event.message.usage.input,
+            output: event.message.usage.output,
+            totalTokens: event.message.usage.totalTokens,
+            costTotal: event.message.usage.cost.total,
+          });
           const textContent = event.message.content
             .filter((c): c is { type: "text"; text: string } => c.type === "text")
             .map((c) => c.text)
@@ -311,7 +326,7 @@ export class SessionManager {
 
           const name = this.sessions.get(chatId)?.character ?? "";
           const summary = extractSummary(text);
-          this.chats.appendMessage(chatId, {
+          const saved = this.chats.appendMessage(chatId, {
             name,
             is_user: false,
             is_system: false,
@@ -322,23 +337,7 @@ export class SessionManager {
               ...(toolCalls.length ? { protocol: "game_tool" } : {}),
             },
           });
-          const dto: ChatMessageDto = {
-            id: `assistant-${event.message.timestamp}`,
-            role: "assistant",
-            name,
-            text,
-            sendDate: new Date(event.message.timestamp).toISOString(),
-            ...(thinking ? { thinking } : {}),
-          };
-          this.emit({ type: "chat.done", chatId, message: dto });
-          this.emit({
-            type: "chat.usage",
-            chatId,
-            input: event.message.usage.input,
-            output: event.message.usage.output,
-            totalTokens: event.message.usage.totalTokens,
-            costTotal: event.message.usage.cost.total,
-          });
+          this.emit({ type: "chat.done", chatId, message: chatMessages([saved])[0] });
           break;
         }
         case "tool_execution_start":
@@ -361,19 +360,14 @@ export class SessionManager {
             details: (event.result as { details?: { summary?: string; [key: string]: unknown } } | undefined)?.details,
           });
           break;
-        case "agent_end": {
-          const error = agent.state.errorMessage;
-          if (error) this.emit({ type: "chat.error", chatId, message: error });
-          break;
-        }
       }
     });
   }
 
-  /** 配置变更后，丢弃缓存的 Agent（下一轮重建） */
+  /** 配置变更仅清理空闲引用，运行中的 Agent 使用本轮配置快照直到结束。 */
   invalidateAll(): void {
     for (const session of this.sessions.values()) {
-      session.agent = null;
+      if (!session.running) session.agent = null;
     }
   }
 }

@@ -41,6 +41,18 @@ export function attachWebSocket(server: http.Server, sessions: SessionManager): 
         case "chat.abort":
           sessions.abort(message.chatId);
           break;
+        case "chat.sync": {
+          // 快照和后续增量使用同一连接，保证客户端按服务器顺序应用。
+          try {
+            const snapshot = sessions.snapshot(message.chatId);
+            ws.send(JSON.stringify(snapshot
+              ? { type: "chat.snapshot", chatId: message.chatId, snapshot }
+              : { type: "chat.error", chatId: message.chatId, message: "聊天不存在" }));
+          } catch (error) {
+            ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: error instanceof Error ? error.message : String(error) }));
+          }
+          break;
+        }
       }
     });
 
