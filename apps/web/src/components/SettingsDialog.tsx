@@ -32,7 +32,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
   const [test, setTest] = useState<TestState>({ running: false, result: null });
   const [presets, setPresets] = useState<PresetSummaryDto[]>([]);
   const [worlds, setWorlds] = useState<WorldSummaryDto[]>([]);
-  const [contextMode, setContextMode] = useState<"simple" | "bridge">(connection?.contextMode ?? "simple");
+  const [contextMode, setContextMode] = useState<"simple" | "bridge" | "takeover">(connection?.contextMode ?? "simple");
   const [activePreset, setActivePreset] = useState(connection?.activePreset ?? "");
   const [activeWorlds, setActiveWorlds] = useState<string[]>(connection?.activeWorlds ?? []);
   const [scanDepth, setScanDepth] = useState(connection?.worldInfo?.scanDepth ?? 2);
@@ -41,6 +41,8 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
   const [protocolStrict, setProtocolStrict] = useState(connection?.protocolStrict ?? true);
   const [compressionEnabled, setCompressionEnabled] = useState(connection?.compression?.enabled ?? true);
   const [keepFullTurns, setKeepFullTurns] = useState(connection?.compression?.keepFullTurns ?? 6);
+  const [recentTurns, setRecentTurns] = useState(connection?.takeover?.recentTurns ?? 3);
+  const [stateProjection, setStateProjection] = useState(connection?.takeover?.stateProjection ?? true);
 
   useEffect(() => {
     api.presets().then(setPresets).catch(() => setPresets([]));
@@ -100,6 +102,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
       outputProtocol,
       protocolStrict,
       compression: { enabled: compressionEnabled, keepFullTurns },
+      takeover: { recentTurns, stateProjection },
     };
     const result = await api.saveConnection(payload);
     onSaved(result.restartRequired);
@@ -244,7 +247,36 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
               ST 预设桥接
               <span className="block text-xs text-tavern-dim">prompt_order + 宏 + 世界书 + 提示词正则</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setContextMode("takeover")}
+              className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
+                contextMode === "takeover" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
+              }`}
+            >
+              Agent 接管
+              <span className="block text-xs text-tavern-dim">仅常驻世界书注入 + 近 N 轮历史，其余全靠工具召回</span>
+            </button>
           </div>
+          {contextMode === "takeover" && (
+            <div className="flex items-center gap-4 rounded-lg border border-tavern-border bg-tavern-bg p-3 text-xs text-tavern-dim">
+              <label className="flex items-center gap-1.5">
+                保留全文轮数
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={recentTurns}
+                  onChange={(e) => setRecentTurns(Number(e.target.value) || 3)}
+                  className="w-16 rounded border border-tavern-border bg-tavern-raised px-1.5 py-0.5 text-tavern-text"
+                />
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={stateProjection} onChange={(e) => setStateProjection(e.target.checked)} />
+                状态投影（tavern_set_state 每轮结算现场快照）
+              </label>
+            </div>
+          )}
           {contextMode === "bridge" && (
             <div className="rounded-lg border border-tavern-border bg-tavern-bg p-3">
               <label className="mb-1 block text-xs text-tavern-dim">预设（OpenAI Settings/ 目录）</label>

@@ -27,6 +27,8 @@ export interface ToolContext {
   enforcement: RecallEnforcement;
   maxRecallsPerTurn: number;
   recallCooldownTurns: number;
+  /** 接管模式：状态投影写入回调（tavern_set_state 用），未启用时缺省 */
+  setState?: (projection: string) => void;
 }
 
 /** 为消息行标注剧情轮次：开场白=0，此后每条用户消息开启新一轮 */

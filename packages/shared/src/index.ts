@@ -32,8 +32,8 @@ export interface ConnectionDto {
   defaultModel: string;
   stDataDir: string;
   persona: { name: string; description: string };
-  /** simple=内置简洁组装；bridge=ST 预设桥接组装 */
-  contextMode: "simple" | "bridge";
+  /** simple=内置简洁组装；bridge=ST 预设桥接组装；takeover=agent 原生接管组装 */
+  contextMode: "simple" | "bridge" | "takeover";
   activePreset: string;
   activeWorlds: string[];
   worldInfo: { scanDepth: number; recursionSteps: number; caseSensitive: boolean; matchWholeWords: boolean };
@@ -41,6 +41,8 @@ export interface ConnectionDto {
   outputProtocol: "native" | "game_tool";
   protocolStrict: boolean;
   compression: { enabled: boolean; keepFullTurns: number };
+  /** 接管模式：历史保留轮数与状态投影开关 */
+  takeover: { recentTurns: number; stateProjection: boolean };
 }
 
 export interface PresetSummaryDto {
@@ -96,6 +98,8 @@ export interface ChatSnapshotDto {
   messages: ChatMessageDto[];
   running: boolean;
   streamingText: string;
+  /** 接管模式的状态投影（chat_metadata.projection） */
+  projection?: string;
 }
 
 // ---------------------------------------------------------------- WS 协议

@@ -6,6 +6,7 @@ import type { UsageStats } from "../chatState.ts";
 interface ActivityPanelProps {
   items: ChatItem[];
   usage: UsageStats;
+  projection?: string;
 }
 
 function fmt(n: number): string {
@@ -14,7 +15,7 @@ function fmt(n: number): string {
   return String(n);
 }
 
-export const ActivityPanel = memo(function ActivityPanel({ items, usage }: ActivityPanelProps) {
+export const ActivityPanel = memo(function ActivityPanel({ items, usage, projection }: ActivityPanelProps) {
   const tools = items.filter(isToolItem);
   const byTool = new Map<string, number>();
   for (const t of tools) byTool.set(t.toolName, (byTool.get(t.toolName) ?? 0) + 1);
@@ -25,6 +26,15 @@ export const ActivityPanel = memo(function ActivityPanel({ items, usage }: Activ
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-tavern-border bg-tavern-panel p-4 text-sm">
       <h3 className="mb-3 font-medium text-tavern-accent">本轮活动</h3>
+
+      {projection && (
+        <section className="mb-5">
+          <h4 className="mb-2 text-xs font-medium text-tavern-dim">现场状态投影（每轮结算更新）</h4>
+          <p className="whitespace-pre-wrap rounded-lg border border-tavern-accent/30 bg-tavern-accent/5 px-3 py-2 text-xs leading-5 text-tavern-text">
+            {projection}
+          </p>
+        </section>
+      )}
 
       <section className="mb-5">
         <h4 className="mb-2 text-xs font-medium text-tavern-dim">用量统计</h4>

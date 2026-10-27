@@ -36,6 +36,13 @@ export interface CompressionConfig {
   keepFullTurns: number;
 }
 
+export interface TakeoverConfig {
+  /** 历史保留全文的最近轮数；更早的靠 tavern_recall_history 召回 */
+  recentTurns: number;
+  /** 状态投影（tavern_set_state 工具 + 每轮回注 system） */
+  stateProjection: boolean;
+}
+
 export interface TavernConfig {
   port: number;
   /** SillyTavern 兼容数据目录（characters/ chats/ worlds/ OpenAI Settings/） */
@@ -46,8 +53,8 @@ export interface TavernConfig {
   persona: { name: string; description: string };
   /** off | low | medium | high（仅对 reasoning 模型生效） */
   thinkingLevel: "off" | "low" | "medium" | "high";
-  /** simple=内置简洁组装；bridge=ST 预设桥接组装 */
-  contextMode: "simple" | "bridge";
+  /** simple=内置简洁组装；bridge=ST 预设桥接组装；takeover=agent 原生接管组装 */
+  contextMode: "simple" | "bridge" | "takeover";
   /** 桥接模式使用的预设（文件名，OpenAI Settings/ 下） */
   activePreset: string;
   /** 桥接模式额外启用的全局世界书（worlds/ 下的文件名） */
@@ -60,6 +67,7 @@ export interface TavernConfig {
   /** game_tool 下向中转透传 tool_choice=required（不兼容的中转可关） */
   protocolStrict: boolean;
   compression: CompressionConfig;
+  takeover: TakeoverConfig;
 }
 
 export const CONFIG_PATH = process.env.PITAVERN_CONFIG ?? "data/config.json";
@@ -88,6 +96,7 @@ export function defaultConfig(): TavernConfig {
     outputProtocol: "native",
     protocolStrict: true,
     compression: { enabled: true, keepFullTurns: 6 },
+    takeover: { recentTurns: 3, stateProjection: true },
   };
 }
 
@@ -101,6 +110,7 @@ export function loadConfig(): TavernConfig {
     persona: { ...defaults.persona, ...raw.persona },
     worldInfo: { ...defaults.worldInfo, ...raw.worldInfo },
     compression: { ...defaults.compression, ...raw.compression },
+    takeover: { ...defaults.takeover, ...raw.takeover },
   };
 }
 

@@ -58,6 +58,10 @@ export function App() {
       void refreshChats();
     } else if (event.type === "chat.finished") {
       void refreshChats();
+      // 接管模式：tavern_set_state 可能在本轮更新了投影，重新拉快照
+      if (activeChatIdRef.current === event.chatId) {
+        sendRef.current({ type: "chat.sync", chatId: event.chatId });
+      }
     } else if (event.type === "chat.error") {
       showNotice(`聊天失败: ${event.message}`);
     }
@@ -126,7 +130,13 @@ export function App() {
         <ChatView chat={activeChat} personaName={connection?.persona.name ?? "你"}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
           onSend={sendMessage} onStop={stopGeneration} disabled={!connection?.defaultModel} connected={socket.connected} />
-        {panelOpen && <ActivityPanel items={activeChat?.items ?? []} usage={activeChat?.usage ?? EMPTY_USAGE} />}
+        {panelOpen && (
+          <ActivityPanel
+            items={activeChat?.items ?? []}
+            usage={activeChat?.usage ?? EMPTY_USAGE}
+            projection={activeChat?.projection}
+          />
+        )}
       </div>
       {notice && <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-text shadow-xl">{notice}</div>}
       {settingsOpen && <SettingsDialog connection={connection} onClose={() => setSettingsOpen(false)}

@@ -13,6 +13,7 @@ import {
   OUTPUT_PROTOCOL_INSTRUCTION,
 } from "../agent/protocol/game-content.ts";
 import { assembleBridgeContext } from "../context/bridge.ts";
+import { assembleTakeoverContext } from "../context/takeover.ts";
 import { substituteMacros } from "../context/macros.ts";
 import type { MacroEnv } from "../context/macros.ts";
 import type { RegexScript } from "../context/regex.ts";
@@ -24,6 +25,7 @@ import type { Models, ToolCall } from "@earendil-works/pi-ai";
 import type { CharacterCard } from "../stdata/types.ts";
 import type { CharacterStore } from "../stdata/characters.ts";
 import { chatMessages, type ChatStore } from "../stdata/chats.ts";
+import { createSetStateTool } from "../agent/tools/set-state.ts";
 
 /** 单个聊天的运行时：Agent 引用 + 事件转发 + 召回限次冷却计数 */
 class ChatSession {
@@ -80,9 +82,11 @@ export class SessionManager {
     const document = this.chats.readDocument(chatId);
     if (!document) return null;
     const session = this.sessions.get(chatId);
+    const projection = typeof document.metadata.projection === "string" ? document.metadata.projection : undefined;
     return {
       id: chatId, character: document.character, messages: chatMessages(document.lines),
       running: session?.running ?? false, streamingText: session?.streamingText ?? "",
+      ...(projection ? { projection } : {}),
     };
   }
 
@@ -127,19 +131,28 @@ export class SessionManager {
         maxRecallsPerTurn: 6,
         recallCooldownTurns: 10,
       };
-      const tools = config.toolsEnabled ? createTavernTools(toolCtx) : [];
+      let tools = config.toolsEnabled ? createTavernTools(toolCtx) : [];
       const useProtocol = config.outputProtocol === "game_tool";
+      if (config.contextMode === "takeover" && config.takeover.stateProjection) {
+        // 状态投影：工具写 chat_metadata.projection，下一轮组装回注 system section
+        toolCtx.setState = (projection: string) => {
+          this.chats.writeMetadata(chatId, { projection });
+        };
+        tools = [...tools, createSetStateTool(toolCtx)];
+      }
       const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
       const agent = config.contextMode === "bridge"
         ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config)
-        : createTavernAgent({
-            models, model, chatId, thinkingLevel: config.thinkingLevel,
-            systemPrompt: buildSystemPrompt(character, config.persona) + this.toolGuidance(tools.length > 0) +
-              (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
-            history: historyToAgentMessages(document.lines), tools: allTools,
-            outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
-            compression: config.compression,
-          });
+        : config.contextMode === "takeover"
+          ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, document.metadata, character)
+          : createTavernAgent({
+              models, model, chatId, thinkingLevel: config.thinkingLevel,
+              systemPrompt: buildSystemPrompt(character, config.persona) + this.toolGuidance(tools.length > 0) +
+                (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
+              history: historyToAgentMessages(document.lines), tools: allTools,
+              outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
+              compression: config.compression,
+            });
       session.agent = agent;
       this.wireAgent(agent, chatId, useProtocol);
       if (config.contextMode === "bridge") await agent.continue();
@@ -212,6 +225,42 @@ export class SessionManager {
       thinkingLevel: config.thinkingLevel,
       messages,
       sampling: assembled.sampling,
+      tools,
+      outputProtocol: config.outputProtocol,
+      protocolStrict: config.protocolStrict,
+      compression: config.compression,
+    });
+  }
+
+  /** 接管模式：sections 化 system + 常驻世界书 + 近 recentTurns 轮历史 + 状态投影回注 */
+  private buildTakeoverAgent(
+    model: ReturnType<typeof resolveModel>,
+    models: Models,
+    toolCtx: ToolContext,
+    tools: ReturnType<typeof createTavernTools>,
+    useProtocol: boolean,
+    config: TavernConfig,
+    metadata: Record<string, unknown>,
+    character: CharacterCard,
+  ): Agent {
+    const assembled = assembleTakeoverContext({
+      card: character,
+      persona: config.persona,
+      chatLines: toolCtx.lines,
+      worldEntries: toolCtx.worldEntries,
+      metadata,
+      options: {
+        recentTurns: config.takeover.recentTurns,
+        stateProjection: config.takeover.stateProjection,
+        useProtocol,
+      },
+    });
+    return createTavernAgent({
+      models,
+      model,
+      chatId: toolCtx.chatId,
+      thinkingLevel: config.thinkingLevel,
+      messages: assembled.messages,
       tools,
       outputProtocol: config.outputProtocol,
       protocolStrict: config.protocolStrict,

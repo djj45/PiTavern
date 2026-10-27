@@ -67,6 +67,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       outputProtocol: config.outputProtocol,
       protocolStrict: config.protocolStrict,
       compression: config.compression,
+      takeover: config.takeover,
     };
     res.json(dto);
   });
@@ -118,7 +119,9 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     if (typeof body.defaultModel === "string") config.defaultModel = body.defaultModel;
     if (body.persona?.name) config.persona.name = body.persona.name;
     if (typeof body.persona?.description === "string") config.persona.description = body.persona.description;
-    if (body.contextMode === "simple" || body.contextMode === "bridge") config.contextMode = body.contextMode;
+    if (body.contextMode === "simple" || body.contextMode === "bridge" || body.contextMode === "takeover") {
+      config.contextMode = body.contextMode;
+    }
     if (typeof body.activePreset === "string") config.activePreset = body.activePreset.replace(/\.json$/, "");
     if (Array.isArray(body.activeWorlds)) {
       config.activeWorlds = body.activeWorlds.filter((w): w is string => typeof w === "string").map((w) => w.replace(/\.json$/, ""));
@@ -136,6 +139,11 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       const c = body.compression as Partial<ConnectionDto["compression"]>;
       if (typeof c.enabled === "boolean") config.compression.enabled = c.enabled;
       if (typeof c.keepFullTurns === "number") config.compression.keepFullTurns = Math.max(1, Math.min(100, c.keepFullTurns));
+    }
+    if (body.takeover && typeof body.takeover === "object") {
+      const t = body.takeover as Partial<ConnectionDto["takeover"]>;
+      if (typeof t.recentTurns === "number") config.takeover.recentTurns = Math.max(1, Math.min(50, t.recentTurns));
+      if (typeof t.stateProjection === "boolean") config.takeover.stateProjection = t.stateProjection;
     }
     if (typeof body.stDataDir === "string" && body.stDataDir.trim() && body.stDataDir.trim() !== config.stDataDir) {
       config.stDataDir = body.stDataDir.trim();

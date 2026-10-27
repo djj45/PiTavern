@@ -438,7 +438,38 @@ try {
   ws6.close();
   console.log("✓ 空白聊天、配置隔离、生成中停止、重连快照与后续事件");
 
-  console.log("\n=== M1+M2+M3+M4 冒烟全部通过 ===");
+  // ---- M5 接管模式：常驻注入 + 关键词排除 + 历史截断 + set_state 工具就位
+  res = await fetch(`${BASE}/api/connection`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contextMode: "takeover", outputProtocol: "native", takeover: { recentTurns: 3, stateProjection: true } }),
+  });
+  assert.ok((await res.json()).ok);
+  const ws7 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
+  const events7 = [];
+  ws7.on("message", (raw) => events7.push(JSON.parse(String(raw))));
+  await until(() => ws7.readyState === 1, "ws7 连接");
+  ws7.send(JSON.stringify({ type: "chat.send", chatId, text: "接管模式下再讲一段。" }));
+  await until(() => events7.some((e) => e.type === "chat.done") || events7.some((e) => e.type === "chat.error"), "接管轮应完成");
+  assert.ok(events7.some((e) => e.type === "chat.done"), `接管轮: ${JSON.stringify(events7.filter((e) => e.type === "chat.error"))}`);
+  ws7.close();
+
+  const takeoverSent = lastRequest();
+  const toolNames = (takeoverSent.tools ?? []).map((t) => t.function?.name);
+  assert.ok(toolNames.includes("tavern_set_state"), `接管模式应挂 set_state 工具: ${toolNames}`);
+  assert.ok(!toolNames.includes("game_content"), "native 协议下不应有 game_content");
+  const sysMsg = takeoverSent.messages.find((m) => m.role === "system");
+  assert.ok(sysMsg, "应有 system 消息");
+  const sysText = JSON.stringify(sysMsg.content);
+  assert.ok(sysText.includes("[E2E常驻设定]"), "常驻世界书应注入 system");
+  assert.ok(!sysText.includes("[E2E银剑设定]"), "关键词条目不得注入 system（靠工具检索）");
+  assert.ok(sysText.includes("上下文规则（接管模式）"), "接管指引应在 system");
+  const allText = takeoverSent.messages.map((m) => JSON.stringify(m.content)).join("\n");
+  assert.ok(!allText.includes("来一杯热的"), "接管模式早期轮不应进上下文（近 3 轮截断）");
+  assert.ok(allText.includes("接管模式下再讲一段"), "本轮用户消息应在");
+  console.log("✓ 接管模式（常驻注入/关键词排除/近3轮截断/set_state 挂载）");
+
+  console.log("\n=== M1+M2+M3+M4+M5 冒烟全部通过 ===");
 } finally {
   mock.kill();
   server.kill();

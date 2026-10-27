@@ -17,6 +17,8 @@ export interface ChatState {
   streamingText: string | null;
   pending: boolean;
   usage: UsageStats;
+  /** 接管模式的状态投影 */
+  projection?: string;
 }
 
 export type ChatsState = Record<string, ChatState>;
@@ -40,6 +42,7 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       id: snapshot.id, character: snapshot.character, items: snapshot.messages,
       streamingText: snapshot.running ? snapshot.streamingText : null,
       pending: false, usage: previous?.usage ?? EMPTY_USAGE,
+      ...(snapshot.projection ? { projection: snapshot.projection } : {}),
     } };
   }
   if (!previous) return state;

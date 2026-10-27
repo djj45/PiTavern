@@ -13,6 +13,7 @@ npm run e2e          # mock 中转端到端冒烟（含工具循环）
 npm run verify:bridge # 桥接组装器对齐验证（真实猫神预设）
 npm run verify:tools # 工具四件套 + 限次冷却强制验证
 npm run verify:m4    # 输出协议还原 + 流式提取 + 历史压缩验证
+npm run verify:takeover # 接管模式组装 + 状态投影验证
 npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话状态回归
 ```
 
@@ -32,7 +33,7 @@ npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话�
 - **M2 桥接组装器** ✅ ST 预设兼容组装（prompt_order 引擎 / 宏核心集 / 世界书扫描递归 / 提示词正则 / 深度注入 / 采样透传），猫神预设实测对齐（`npm run verify:bridge`）
 - **M3 工具四件套** ✅ worldbook_search（片段→refs 两级检索）/ tavern_recall_history（query 片段 + turn 全文）/ tavern_read_variables（ST chat_metadata.variables 兼容）/ tavern_read_skill_reference；召回限次（每轮≤6）与冷却（全文召回后 10 轮）由**运行时强制**；UI 工具卡片流 + 用量/召回面板（`npm run verify:tools`）
 - **M4 输出协议 + 历史压缩** ✅ game_tool 模式：`game_content`（正文，MANDATORY）+ `tavern_think`（思维链）双工具原生 function calling 取代伪 JSON 预填；consumeToolCalls 还原落库（mes 正文 + extra.thinking/summary）；参数流式宽松提取（toolcall_delta 实时渲染正文）；`tool_choice=required` 可透传；历史压缩 transformContext（超预算时旧轮 summary 优先折叠为 |用户|/|游戏剧情| 块，UI/落库永远全文）（`npm run verify:m4`）
-- **M5 接管模式** agent 原生上下文组装 + 每轮状态投影
+- **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史只带近 N 轮（更早靠召回）——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，📊 面板实时显示（`npm run verify:takeover`）
 
 ## 工具四件套（M3）
 
@@ -46,6 +47,17 @@ npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话�
 | `tavern_read_skill_reference` | 读 `data/st/skills/<名>/references/*.md`（防目录穿越） |
 
 右上角 📊 面板：实时工具卡片（含拒绝/冷却态）、token 用量、召回预算状态。
+
+## 接管模式（M5）
+
+设置 → 对话上下文 → 「Agent 接管」。这是 dsh-tavern 模式的 pi 版——上下文经济学最优解：
+
+| 机制 | 说明 |
+|---|---|
+| system sections | 人物卡 / 常驻世界书 / persona / 状态投影 / 输出协议各自成 section，每轮重建 |
+| 世界书按需 | 常驻（constant）条目注入；关键词条目 0 注入，全部靠 `worldbook_search` 检索 |
+| 召回制历史 | 只带最近 N 轮全文（默认 3），更早剧情靠 `tavern_recall_history`；token 随"这轮需要什么"增长 |
+| 状态投影 | 模型每轮用 `tavern_set_state` 结算现场快照（人物/地点/关键物品），写入 `chat_metadata.projection` 回注下一轮 system；📊 面板可见 |
 
 ## 桥接模式（M2）
 
