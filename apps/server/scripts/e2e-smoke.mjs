@@ -249,6 +249,7 @@ try {
     JSON.stringify({ entries: {
       0: { uid: "0", key: [], keysecondary: [], content: "[E2E常驻设定] 月亮是蓝色的。", constant: true, disable: false, order: 10, position: 0 },
       1: { uid: "1", key: ["银剑"], keysecondary: [], content: "[E2E银剑设定] 银剑会鸣响。", constant: false, disable: false, order: 20, position: 0 },
+      2: { uid: "2", key: ["烛火"], keysecondary: [], content: "[E2E烛火] 烛火摇曳不定。", constant: false, disable: false, order: 30, position: 0, sticky: 5 },
     } }),
   );
   res = await fetch(`${BASE}/api/connection`, {
@@ -266,7 +267,7 @@ try {
   );
   const ws2 = createSocket(`ws://127.0.0.1:${PORT}/ws`);
   await new Promise((resolve, reject) => { ws2.on("open", resolve); ws2.on("error", reject); });
-  ws2.send(JSON.stringify({ type: "chat.send", chatId, text: "我拔出银剑。" }));
+  ws2.send(JSON.stringify({ type: "chat.send", chatId, text: "我拔出银剑，烛火晃了一下。" }));
   const deadline2 = Date.now() + 30000;
   const events2 = [];
   ws2.on("message", (raw) => events2.push(JSON.parse(String(raw))));
@@ -304,6 +305,60 @@ try {
   assert.ok(msgTexts.includes("|e2e深度注入|"), "depth0 绝对注入内容应在请求中");
   assert.equal(sent.messages[0].role, "system");
   console.log("✓ 桥接模式全链路（预设/宏/世界书/正则/深度注入/采样透传）");
+
+  // 8.5 计时效果：烛火（sticky=5）命中后写入 chat_metadata.timedWorldInfo
+  {
+    const headerLine = fs.readFileSync(path.join(DATA_DIR, chatId), "utf8").split("\n", 1)[0];
+    const header = JSON.parse(headerLine);
+    const timed = header.chat_metadata?.timedWorldInfo;
+    assert.ok(timed?.sticky?.["e2e世界/2"], `sticky 区间应持久化: ${JSON.stringify(timed)}`);
+    assert.equal(timed.sticky["e2e世界/2"].end - timed.sticky["e2e世界/2"].start, 5, "sticky 区间长度=5");
+    console.log("✓ 计时效果持久化（sticky 写入 chat_metadata.timedWorldInfo）");
+  }
+
+  // 8.6 导入导出
+  {
+    // 角色卡导入：复用造卡函数生成第二张 PNG
+    fs.mkdirSync(path.join(DATA_DIR, "characters"), { recursive: true });
+    const card2 = buildTestCardPng("异乡客");
+    const upRes = await fetch(`${BASE}/api/import/character`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent("异乡客.png") },
+      body: card2,
+    });
+    assert.ok((await upRes.json()).ok, "角色卡应可导入");
+    const chars = await (await fetch(`${BASE}/api/characters`)).json();
+    assert.ok(chars.some((c) => c.name === "异乡客"), "导入的卡应出现在列表");
+    const badRes = await fetch(`${BASE}/api/import/character`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent("坏卡.png") },
+      body: Buffer.from("not a png"),
+    });
+    assert.equal(badRes.status, 400, "非卡文件应被拒绝");
+
+    // 世界书导入
+    const wRes = await fetch(`${BASE}/api/import/world`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "导入世界", data: { entries: { 0: { uid: "0", key: ["秘境"], content: "[秘境] 有入口。", constant: false } } } }),
+    });
+    const wBody = await wRes.json();
+    assert.ok(wBody.ok && wBody.entryCount === 1, "世界书应可导入");
+    const worlds = await (await fetch(`${BASE}/api/worlds`)).json();
+    assert.ok(worlds.some((w) => w.name === "导入世界"));
+
+    // 聊天导出
+    const chatPath = chatId.split("/").map(encodeURIComponent).join("/");
+    const mdRes = await fetch(`${BASE}/api/chats/${chatPath}/export?format=md`);
+    assert.equal(mdRes.status, 200);
+    const md = await mdRes.text();
+    assert.ok(md.includes("# 测试看板娘"), "MD 导出应含标题");
+    assert.ok(md.includes("我拔出银剑"), "MD 导出应含消息正文");
+    const jlRes = await fetch(`${BASE}/api/chats/${chatPath}/export?format=jsonl`);
+    const jl = await jlRes.text();
+    assert.ok(JSON.parse(jl.split("\n")[0]).chat_metadata, "JSONL 导出首行应为元数据头");
+    console.log("✓ 导入导出（角色卡上传/世界书导入/MD+JSONL 导出）");
+  }
 
   // 9. 输出协议（game_tool）：mock 返回 think+game 双工具调用 → 服务端还原落库
   res = await fetch(`${BASE}/api/connection`, {
@@ -469,7 +524,7 @@ try {
   assert.ok(allText.includes("接管模式下再讲一段"), "本轮用户消息应在");
   console.log("✓ 接管模式（常驻注入/关键词排除/近3轮截断/set_state 挂载）");
 
-  console.log("\n=== M1+M2+M3+M4+M5 冒烟全部通过 ===");
+  console.log("\n=== M1~M6 冒烟全部通过 ===");
 } finally {
   mock.kill();
   server.kill();

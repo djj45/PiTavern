@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConnectionDto, PresetSummaryDto, ProviderDto, WorldSummaryDto } from "@pitavern/shared";
 import { api } from "../api.ts";
 
@@ -7,6 +7,7 @@ interface SettingsDialogProps {
   onClose: () => void;
   onSaved: (restartRequired?: boolean) => void;
   onError: (message: string) => void;
+  onNotice?: (message: string) => void;
 }
 
 interface EditableProvider extends ProviderDto {
@@ -19,7 +20,7 @@ interface TestState {
   result: string | null;
 }
 
-export function SettingsDialog({ connection, onClose, onSaved, onError }: SettingsDialogProps) {
+export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice }: SettingsDialogProps) {
   const [providers, setProviders] = useState<EditableProvider[]>(() =>
     (connection?.providers ?? []).map((p) => ({ ...p, apiKeyInput: "", newModelId: "" })),
   );
@@ -48,6 +49,20 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
     api.presets().then(setPresets).catch(() => setPresets([]));
     api.worlds().then(setWorlds).catch(() => setWorlds([]));
   }, []);
+
+  const worldFileRef = useRef<HTMLInputElement>(null);
+  const importWorld = async (file: File) => {
+    try {
+      const data = JSON.parse(await file.text());
+      const name = file.name.replace(/\.json$/i, "");
+      const result = await api.importWorld(name, data);
+      setWorlds(await api.worlds());
+      setActiveWorlds((list) => (list.includes(result.name) ? list : [...list, result.name]));
+      onNotice?.(`已导入世界书 ${result.name}（${result.entryCount} 条）`);
+    } catch (e) {
+      onNotice?.(`导入失败: ${(e as Error).message}`);
+    }
+  };
 
   const updateProvider = (id: string, patch: Partial<EditableProvider>) => {
     setProviders((list) => list.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -292,7 +307,27 @@ export function SettingsDialog({ connection, onClose, onSaved, onError }: Settin
                   </option>
                 ))}
               </select>
-              <label className="mb-1 block text-xs text-tavern-dim">全局世界书（卡内书与卡片引用世界自动生效）</label>
+              <label className="mb-1 flex items-center gap-2 text-xs text-tavern-dim">
+                全局世界书（卡内书与卡片引用世界自动生效）
+                <button
+                  type="button"
+                  onClick={() => worldFileRef.current?.click()}
+                  className="ml-auto rounded border border-tavern-border px-1.5 py-0.5 hover:border-tavern-accent-dim hover:text-tavern-text"
+                >
+                  ＋ 导入
+                </button>
+                <input
+                  ref={worldFileRef}
+                  type="file"
+                  accept=".json"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void importWorld(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
               {worlds.length === 0 ? (
                 <p className="mb-2 text-xs text-tavern-dim">worlds/ 目录暂无世界书文件</p>
               ) : (

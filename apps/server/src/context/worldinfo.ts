@@ -31,6 +31,12 @@ export interface WiEntry {
   preventRecursion?: boolean;
   /** true=第 1 层递归起可用，数字=第 N 层起 */
   delayUntilRecursion?: boolean | number;
+  /** 计时效果（单位：消息数）——激活后免关键词保活 N 条 */
+  sticky?: number;
+  /** 计时效果——期间关键词命中也不激活（sticky 结束时自动进入） */
+  cooldown?: number;
+  /** 计时效果——聊天前 N 条消息内压制 */
+  delay?: number;
   /** 条目来源（去重/调试用） */
   world: string;
 }
@@ -44,6 +50,10 @@ export interface WiScanOptions {
   matchWholeWords: boolean;
   /** 内容经此函数转出（提示词层正则 WORLD_INFO placement 的挂点） */
   transformContent?: (content: string, entry: WiEntry) => string;
+  /** 当前消息总数（计时效果的时间轴；缺省用 recentMessages.length） */
+  messageCount?: number;
+  /** 计时效果状态（可变对象：扫描内更新，调用方负责持久化） */
+  timed?: TimedEffectsState;
 }
 
 export interface WiDepthInjection {
@@ -103,6 +113,9 @@ export function normalizeCardBook(book: unknown, worldName: string): WiEntry[] {
         excludeRecursion: ext.excludeRecursion,
         preventRecursion: ext.preventRecursion,
         delayed: e.delayed ?? ext.delayUntilRecursion,
+        sticky: (e.sticky ?? ext.sticky) as number | undefined,
+        cooldown: (e.cooldown ?? ext.cooldown) as number | undefined,
+        delay: (e.delay ?? ext.delay) as number | undefined,
         extensions: ext,
       },
       worldName,
@@ -134,6 +147,9 @@ function normalizeEntry(uid: string, raw: Record<string, unknown>, world: string
     excludeRecursion: raw.excludeRecursion === true,
     preventRecursion: raw.preventRecursion === true,
     delayUntilRecursion: (raw.delayUntilRecursion ?? (raw as { delayed?: unknown }).delayed) as boolean | number | undefined,
+    sticky: typeof raw.sticky === "number" ? raw.sticky : undefined,
+    cooldown: typeof raw.cooldown === "number" ? raw.cooldown : undefined,
+    delay: typeof raw.delay === "number" ? raw.delay : undefined,
   };
 }
 
@@ -189,6 +205,97 @@ function recursionDelayLevel(entry: WiEntry): number {
   return Math.max(1, entry.delayUntilRecursion);
 }
 
+// ---------------------------------------------------------------- 计时效果
+
+/** 持久化形态（chat_metadata.timedWorldInfo，对照 ST 的 WITimedEffect） */
+export interface TimedEffectRecord {
+  start: number;
+  end: number;
+  /** sticky 结束时转入的 cooldown（当轮立即生效） */
+  protected?: boolean;
+}
+
+export interface TimedEffectsState {
+  sticky: Record<string, TimedEffectRecord>;
+  cooldown: Record<string, TimedEffectRecord>;
+}
+
+export function emptyTimedState(): TimedEffectsState {
+  return { sticky: {}, cooldown: {} };
+}
+
+/** 从 chat_metadata.timedWorldInfo 恢复（形状校验，坏数据重置为空） */
+export function normalizeTimedState(raw: unknown): TimedEffectsState {
+  const source = (raw && typeof raw === "object" ? raw : {}) as {
+    sticky?: unknown;
+    cooldown?: unknown;
+  };
+  const revive = (value: unknown): Record<string, TimedEffectRecord> => {
+    if (!value || typeof value !== "object") return {};
+    const out: Record<string, TimedEffectRecord> = {};
+    for (const [key, record] of Object.entries(value as Record<string, unknown>)) {
+      const r = record as Partial<TimedEffectRecord>;
+      if (typeof r.start === "number" && typeof r.end === "number") {
+        out[key] = { start: r.start, end: r.end, ...(r.protected ? { protected: true } : {}) };
+      }
+    }
+    return out;
+  };
+  return { sticky: revive(source.sticky), cooldown: revive(source.cooldown) };
+}
+
+interface TimedFlags {
+  isSticky: boolean;
+  isCooldown: boolean;
+}
+
+/**
+ * 计时效果引擎（对照 WorldInfoTimedEffects）：
+ * - 过期清理（end <= messageCount）；sticky 过期且有 cooldown → 立即进入 protected cooldown
+ * - 返回各条目的 sticky/cooldown 生效标记
+ * 单位统一为消息数。
+ */
+function timedFlagsFor(entries: WiEntry[], state: TimedEffectsState, messageCount: number): Map<WiEntry, TimedFlags> {
+  const flags = new Map<WiEntry, TimedFlags>();
+  for (const type of ["sticky", "cooldown"] as const) {
+    for (const [key, record] of Object.entries(state[type])) {
+      if (messageCount >= record.end) {
+        delete state[type][key];
+        if (type === "sticky") {
+          const entry = entries.find((e) => `${e.world}/${e.uid}` === key);
+          // sticky 到期 → 若配置了 cooldown 则从当前消息数起算（protected：当轮即生效）
+          if (entry?.cooldown) {
+            state.cooldown[key] = { start: messageCount, end: messageCount + entry.cooldown, protected: true };
+          }
+        }
+        continue;
+      }
+      const entry = entries.find((e) => `${e.world}/${e.uid}` === key);
+      if (!entry) continue;
+      flags.set(entry, {
+        isSticky: type === "sticky" || flags.get(entry)?.isSticky || false,
+        isCooldown: type === "cooldown" || flags.get(entry)?.isCooldown || false,
+      });
+    }
+  }
+  return flags;
+}
+
+/** 激活完成后记录新 sticky/cooldown 区间（对照 setTimedEffects） */
+function recordTimedEffects(activated: Set<WiEntry>, state: TimedEffectsState, messageCount: number): void {
+  for (const entry of activated) {
+    const key = `${entry.world}/${entry.uid}`;
+    if (entry.sticky && !state.sticky[key]) {
+      state.sticky[key] = { start: messageCount, end: messageCount + entry.sticky };
+    }
+    if (entry.cooldown && !state.cooldown[key]) {
+      state.cooldown[key] = { start: messageCount, end: messageCount + entry.cooldown };
+    }
+  }
+}
+
+// ---------------------------------------------------------------- 扫描
+
 /**
  * 扫描入口。recentMessages 为从旧到新的消息文本（正则后的）。
  * 返回按 order 升序分桶后的结果。
@@ -197,6 +304,11 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
   const enabled = entries.filter((e) => !e.disabled && e.content.trim().length > 0 && (e.key.length > 0 || e.constant));
   const activated = new Set<WiEntry>();
   const activatedContents: string[] = [];
+
+  // 计时效果（可选）：sticky 保活 / cooldown 压制 / delay 压制
+  const timed = opts.timed;
+  const messageCount = opts.messageCount ?? recentMessages.length;
+  const flags = timed ? timedFlagsFor(enabled, timed, messageCount) : null;
 
   // 深度缓冲：scanDepth 条消息 + 递归内容（对照 WorldInfoBuffer.get）
   const chatBuffer = recentMessages.slice(-Math.max(1, opts.scanDepth)).join("\n");
@@ -209,15 +321,30 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
 
     for (const entry of enabled) {
       if (activated.has(entry)) continue;
-      // 递归延迟：第 N 层递归起才可被激活（首轮为 step 0）
-      if (step < recursionDelayLevel(entry)) continue;
+
+      const flag = flags?.get(entry);
+      const isSticky = flag?.isSticky ?? false;
+      // delay：聊天前 N 条消息内压制
+      if (entry.delay && messageCount < entry.delay && !isSticky) continue;
+      // cooldown：期间关键词命中也不激活（sticky 保活豁免）
+      if (flag?.isCooldown && !isSticky) continue;
+
+      // 递归延迟：第 N 层递归起才可被激活（首轮为 step 0；sticky 豁免）
+      if (step < recursionDelayLevel(entry) && !isSticky) continue;
 
       if (entry.constant) {
         activated.add(entry);
         newActivations++;
         continue;
       }
-      if (entry.excludeRecursion && step > 0) continue;
+      if (entry.excludeRecursion && step > 0 && !isSticky) continue;
+
+      // sticky 保活：无需关键词（对照 "activated because active sticky"）
+      if (isSticky) {
+        activated.add(entry);
+        newActivations++;
+        continue;
+      }
 
       const scanText = entry.scanDepth
         ? recentMessages.slice(-entry.scanDepth).join("\n") + (step > 0 ? "\n" + recurseBuffer : "")
@@ -242,8 +369,14 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
     recurseBuffer = activatedContents.join("\n");
   }
 
-  // order 升序（对照 ST sortFn + unshift 的最终效果）
-  const sorted = [...activated].sort((a, b) => a.order - b.order);
+  if (timed) recordTimedEffects(activated, timed, messageCount);
+
+  // order 升序，sticky 优先（对照 ST 排序）
+  const sorted = [...activated].sort((a, b) => {
+    const stickyDiff =
+      (flags?.get(b) && flags.get(b)!.isSticky ? 1 : 0) - (flags?.get(a) && flags.get(a)!.isSticky ? 1 : 0);
+    return stickyDiff || a.order - b.order;
+  });
   const before: string[] = [];
   const after: string[] = [];
   const atDepth: WiDepthInjection[] = [];

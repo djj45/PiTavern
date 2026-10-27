@@ -50,4 +50,21 @@ export const api = {
     fetch(`/api/chats/${id.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }).then((r) =>
       json<{ ok: boolean }>(r),
     ),
+  importCharacter: (file: File) =>
+    fetch("/api/import/character", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent(file.name) },
+      body: file,
+    }).then((r) => json<{ ok: boolean; file: string }>(r)),
+  importWorld: (name: string, data: unknown) =>
+    fetch("/api/import/world", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, data }),
+    }).then((r) => json<{ ok: boolean; name: string; entryCount: number }>(r)),
 };
+
+/** 聊天导出下载地址（format: md | jsonl） */
+export function chatExportUrl(chatId: string, format: "md" | "jsonl"): string {
+  return `/api/chats/${chatId.split("/").map(encodeURIComponent).join("/")}/export?format=${format}`;
+}

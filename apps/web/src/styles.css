@@ -23,6 +23,31 @@ body {
   font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 
+/* ---------------------------------------------------------------- 主题
+   通过 body[data-theme] 覆盖 @theme 生成的 --color-tavern-* 变量实现切换 */
+
+body[data-theme="grove"] {
+  --color-tavern-bg: #101613;
+  --color-tavern-panel: #16201a;
+  --color-tavern-raised: #1d2b22;
+  --color-tavern-border: #2c4033;
+  --color-tavern-accent: #7fbf8e;
+  --color-tavern-accent-dim: #56946a;
+  --color-tavern-text: #e4efe6;
+  --color-tavern-dim: #94ab9b;
+}
+
+body[data-theme="light"] {
+  --color-tavern-bg: #f6f3ec;
+  --color-tavern-panel: #efeae0;
+  --color-tavern-raised: #e6dfd2;
+  --color-tavern-border: #d4c9b4;
+  --color-tavern-accent: #b07d2b;
+  --color-tavern-accent-dim: #8a6220;
+  --color-tavern-text: #2d2a24;
+  --color-tavern-dim: #7a7365;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

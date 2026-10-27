@@ -23,6 +23,10 @@ export interface BridgeOptions {
   matchWholeWords: boolean;
   /** 兼容旧调用方；预算统一由 Agent 压缩层处理。 */
   maxHistoryChars?: number;
+  /** 计时效果状态（sticky/cooldown；可变对象，扫描内更新，调用方持久化） */
+  timed?: import("./worldinfo.ts").TimedEffectsState;
+  /** 当前消息总数（计时效果时间轴） */
+  messageCount?: number;
 }
 
 export interface BridgeInput {
@@ -134,6 +138,8 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
       const substituted = substituteMacros(content, env);
       return applyRegex(substituted, regexScripts, { placement: RegexPlacement.WORLD_INFO, depth: null });
     },
+    ...(options.timed ? { timed: options.timed } : {}),
+    ...(options.messageCount !== undefined ? { messageCount: options.messageCount } : {}),
   });
 
   const promptsById = new Map(preset.prompts.map((p) => [p.identifier, p]));

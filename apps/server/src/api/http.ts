@@ -14,6 +14,7 @@ import type { TavernConfig } from "../config.ts";
 import { saveConfig, seedDataDirs } from "../config.ts";
 import { listPresets, presetsDir } from "../context/preset.ts";
 import { normalizeWorldFile } from "../context/worldinfo.ts";
+import { parseCardFromPng } from "../stdata/png.ts";
 import { providerDtoList, buildModels, resolveModel } from "../providers/models.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { CharacterStore } from "../stdata/characters.ts";
@@ -182,6 +183,63 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     res.json(characters.listCharacters().map(characterDto));
   });
 
+  /** 导入角色卡：PNG（tEXt 内嵌卡）或导出 JSON；同名文件覆盖 */
+  app.post("/api/import/character", express.raw({ type: "*/*", limit: "24mb" }), (req, res) => {
+    const fileName = path.basename(String(req.headers["x-file-name"] ?? "card.png"));
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      res.status(400).json({ error: "空文件" });
+      return;
+    }
+    const isPng = body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const lower = fileName.toLowerCase();
+    let safeName: string;
+    if (isPng && lower.endsWith(".png")) {
+      if (!parseCardFromPng(body)) {
+        res.status(400).json({ error: "PNG 里没有找到角色卡数据（chara/ccv3）" });
+        return;
+      }
+      safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
+    } else if (lower.endsWith(".json")) {
+      try {
+        const json = JSON.parse(body.toString("utf8"));
+        const data = json?.data && typeof json.data === "object" ? json.data : json;
+        if (typeof data?.name !== "string" || !data.name.trim()) {
+          res.status(400).json({ error: "JSON 缺少 name 字段（不是有效的角色卡）" });
+          return;
+        }
+      } catch {
+        res.status(400).json({ error: "JSON 解析失败" });
+        return;
+      }
+      safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
+    } else {
+      res.status(400).json({ error: "仅支持 .png（内嵌卡）或 .json 角色卡" });
+      return;
+    }
+    const target = path.join(deps.stDataDir, "characters", safeName);
+    fs.writeFileSync(target, body);
+    res.json({ ok: true, file: safeName });
+  });
+
+  /** 导入世界书：ST worlds JSON（entries 对象） */
+  app.post("/api/import/world", (req, res) => {
+    const { name, data } = req.body as { name?: unknown; data?: unknown };
+    const safeName = typeof name === "string" && name.trim() ? path.basename(name.trim().replace(/\.json$/, "")).replace(/[\\/:*?"<>|]/g, "_") : "";
+    if (!safeName) {
+      res.status(400).json({ error: "缺少世界书名称" });
+      return;
+    }
+    const entries = normalizeWorldFile(data, safeName);
+    if (entries.length === 0) {
+      res.status(400).json({ error: "没有有效条目（需要 entries 对象）" });
+      return;
+    }
+    fs.mkdirSync(path.join(deps.stDataDir, "worlds"), { recursive: true });
+    fs.writeFileSync(path.join(deps.stDataDir, "worlds", `${safeName}.json`), JSON.stringify(data, null, 2));
+    res.json({ ok: true, name: safeName, entryCount: entries.length });
+  });
+
   app.get("/api/characters/:name/avatar", (req: Request, res: Response) => {
     const card = characters.getCharacter(String(req.params.name));
     if (!card?.avatarFile) {
@@ -218,6 +276,36 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       config.persona.name,
     );
     res.json({ id: meta.id });
+  });
+
+  /** 聊天导出：?format=md（Markdown，思维链折叠）| jsonl（ST 原始格式）。需在通配路由前注册 */
+  app.get("/api/chats/*splat/export", (req, res) => {
+    const chatId = (Array.isArray(req.params.splat) ? req.params.splat : [req.params.splat]).join("/");
+    const snapshot = sessions.snapshot(chatId);
+    if (!snapshot) {
+      res.status(404).json({ error: `聊天不存在: ${chatId}` });
+      return;
+    }
+    const file = chats.resolveChatFile(chatId);
+    const baseName = (chatId.split("/").pop() ?? "chat").replace(/\.jsonl$/, "");
+    const format = req.query.format === "jsonl" ? "jsonl" : "md";
+    if (format === "jsonl" && file) {
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${baseName}.jsonl`)}`);
+      res.send(fs.readFileSync(file, "utf8"));
+      return;
+    }
+    const lines: string[] = [`# ${snapshot.character} — ${baseName}`, "", `> PiTavern 导出 · ${new Date().toLocaleString("zh-CN")} · ${snapshot.messages.length} 条消息`, ""];
+    for (const message of snapshot.messages) {
+      lines.push(`## ${message.name}${message.role === "user" ? "（用户）" : ""}`, "");
+      if (message.thinking) {
+        lines.push("<details><summary>💭 思考过程</summary>", "", message.thinking, "", "</details>", "");
+      }
+      lines.push(message.text, "");
+    }
+    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${baseName}.md`)}`);
+    res.send(lines.join("\n"));
   });
 
   app.get("/api/chats/*splat", (req, res) => {

@@ -18,7 +18,7 @@ import { substituteMacros } from "../context/macros.ts";
 import type { MacroEnv } from "../context/macros.ts";
 import type { RegexScript } from "../context/regex.ts";
 import { loadPreset, presetsDir } from "../context/preset.ts";
-import { normalizeCardBook, normalizeWorldFile, type WiEntry } from "../context/worldinfo.ts";
+import { normalizeCardBook, normalizeWorldFile, normalizeTimedState, type WiEntry } from "../context/worldinfo.ts";
 import type { TavernConfig } from "../config.ts";
 import { resolveModel } from "../providers/models.ts";
 import type { Models, ToolCall } from "@earendil-works/pi-ai";
@@ -141,8 +141,11 @@ export class SessionManager {
         tools = [...tools, createSetStateTool(toolCtx)];
       }
       const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
+      // 计时效果状态（sticky/cooldown）：从元数据恢复，扫描内更新，组装后回写
+      const timedState =
+        config.contextMode === "bridge" ? normalizeTimedState(document.metadata.timedWorldInfo) : undefined;
       const agent = config.contextMode === "bridge"
-        ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config)
+        ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, timedState)
         : config.contextMode === "takeover"
           ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, document.metadata, character)
           : createTavernAgent({
@@ -155,6 +158,7 @@ export class SessionManager {
             });
       session.agent = agent;
       this.wireAgent(agent, chatId, useProtocol);
+      if (timedState) this.chats.writeMetadata(chatId, { timedWorldInfo: timedState });
       if (config.contextMode === "bridge") await agent.continue();
       else await agent.prompt(text);
       if (agent.state.errorMessage && !session.aborted) {
@@ -191,6 +195,7 @@ export class SessionManager {
     tools: ReturnType<typeof createTavernTools>,
     useProtocol: boolean,
     config: TavernConfig,
+    timedState?: import("../context/worldinfo.ts").TimedEffectsState,
   ): Agent {
     const presetName = config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
@@ -210,6 +215,7 @@ export class SessionManager {
       regexScripts,
       options: {
         ...config.worldInfo,
+        ...(timedState ? { timed: timedState, messageCount: toolCtx.lines.length } : {}),
       },
     });
     const messages = [...assembled.messages];

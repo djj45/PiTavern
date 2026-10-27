@@ -14,6 +14,7 @@ npm run verify:bridge # 桥接组装器对齐验证（真实猫神预设）
 npm run verify:tools # 工具四件套 + 限次冷却强制验证
 npm run verify:m4    # 输出协议还原 + 流式提取 + 历史压缩验证
 npm run verify:takeover # 接管模式组装 + 状态投影验证
+npm run verify:m6    # 世界书计时效果（sticky/cooldown/delay）验证
 npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话状态回归
 ```
 
@@ -34,6 +35,8 @@ npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话�
 - **M3 工具四件套** ✅ worldbook_search（片段→refs 两级检索）/ tavern_recall_history（query 片段 + turn 全文）/ tavern_read_variables（ST chat_metadata.variables 兼容）/ tavern_read_skill_reference；召回限次（每轮≤6）与冷却（全文召回后 10 轮）由**运行时强制**；UI 工具卡片流 + 用量/召回面板（`npm run verify:tools`）
 - **M4 输出协议 + 历史压缩** ✅ game_tool 模式：`game_content`（正文，MANDATORY）+ `tavern_think`（思维链）双工具原生 function calling 取代伪 JSON 预填；consumeToolCalls 还原落库（mes 正文 + extra.thinking/summary）；参数流式宽松提取（toolcall_delta 实时渲染正文）；`tool_choice=required` 可透传；历史压缩 transformContext（超预算时旧轮 summary 优先折叠为 |用户|/|游戏剧情| 块，UI/落库永远全文）（`npm run verify:m4`）
 - **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史只带近 N 轮（更早靠召回）——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，📊 面板实时显示（`npm run verify:takeover`）
+- **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，🎨 切换）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
+- **后置** 多角色群聊；charx/byaf 卡格式；向量检索条目
 
 ## 工具四件套（M3）
 
@@ -71,7 +74,7 @@ npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话�
 | 提示词正则（promptOnly、placement、minDepth/maxDepth） | ✅ |
 | 采样参数透传（temperature/top_p/top_k/max_tokens…） | ✅（中转默认用 max_tokens 字段） |
 | system 消息位置 | ⚠️ pi 运行时把所有 system 按序合并为开头一条（内容无损，历史后指令的"尾部位置"效果不保留） |
-| 世界书 sticky/cooldown/delay 计时效果、向量条目、min activations | ❌ M4+ |
+| 向量条目、min activations | ❌ 后置 |
 | instruct 模板、text-completion 系 API、{{setvar}} 写变量 | ❌ 暂不支持 |
 
 ## 架构

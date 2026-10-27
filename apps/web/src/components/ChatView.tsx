@@ -2,6 +2,8 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import type { ChatMessageDto } from "@pitavern/shared";
 import { isToolItem, TOOL_META, toolArgPreview, type ChatItem, type ToolItem } from "../chatItems.ts";
 
+import { chatExportUrl } from "../api.ts";
+
 interface ChatViewProps {
   chat: { id: string; character: string; items: ChatItem[] } | null;
   personaName: string;
@@ -135,6 +137,24 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, dis
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-tavern-border bg-tavern-panel px-4 text-xs text-tavern-dim">
+        <span className="truncate font-medium text-tavern-text">{chat.character}</span>
+        <span>· {chat.items.filter((i) => !isToolItem(i)).length} 条消息</span>
+        <span className="ml-auto flex items-center gap-2">
+          <a
+            href={chatExportUrl(chat.id, "md")}
+            className="rounded border border-tavern-border px-1.5 py-0.5 hover:border-tavern-accent-dim hover:text-tavern-text"
+          >
+            导出 MD
+          </a>
+          <a
+            href={chatExportUrl(chat.id, "jsonl")}
+            className="rounded border border-tavern-border px-1.5 py-0.5 hover:border-tavern-accent-dim hover:text-tavern-text"
+          >
+            JSONL
+          </a>
+        </span>
+      </div>
       <div className="flex-1 overflow-y-auto px-6 py-4" onScroll={(event) => {
         const element = event.currentTarget;
         followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;

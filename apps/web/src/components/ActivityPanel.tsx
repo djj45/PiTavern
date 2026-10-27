@@ -7,6 +7,7 @@ interface ActivityPanelProps {
   items: ChatItem[];
   usage: UsageStats;
   projection?: string;
+  onClose?: () => void;
 }
 
 function fmt(n: number): string {
@@ -15,7 +16,7 @@ function fmt(n: number): string {
   return String(n);
 }
 
-export const ActivityPanel = memo(function ActivityPanel({ items, usage, projection }: ActivityPanelProps) {
+export const ActivityPanel = memo(function ActivityPanel({ items, usage, projection, onClose }: ActivityPanelProps) {
   const tools = items.filter(isToolItem);
   const byTool = new Map<string, number>();
   for (const t of tools) byTool.set(t.toolName, (byTool.get(t.toolName) ?? 0) + 1);
@@ -24,8 +25,16 @@ export const ActivityPanel = memo(function ActivityPanel({ items, usage, project
   const fullReads = recalls.filter((t) => t.summary?.includes("完整正文")).length;
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-tavern-border bg-tavern-panel p-4 text-sm">
-      <h3 className="mb-3 font-medium text-tavern-accent">本轮活动</h3>
+    // 小屏为右侧浮层（可关闭），lg 起为常驻侧栏
+    <aside className="fixed inset-y-0 right-0 z-40 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l border-tavern-border bg-tavern-panel p-4 text-shadow-sm shadow-2xl lg:static lg:z-auto lg:max-w-none lg:shadow-none">
+      <h3 className="mb-3 flex items-center gap-2 font-medium text-tavern-accent">
+        本轮活动
+        {onClose && (
+          <button type="button" onClick={onClose} className="ml-auto rounded border border-tavern-border px-1.5 text-xs text-tavern-dim hover:text-tavern-text lg:hidden">
+            ✕
+          </button>
+        )}
+      </h3>
 
       {projection && (
         <section className="mb-5">

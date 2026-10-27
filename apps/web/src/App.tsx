@@ -19,6 +19,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [navOpen, setNavOpen] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem("pitavern-theme") ?? "night");
   const activeChat = activeChatId ? chatStates[activeChatId] ?? null : null;
   const activeChatIdRef = useRef<string | null>(null);
   activeChatIdRef.current = activeChatId;
@@ -69,6 +71,18 @@ export function App() {
   const socket = useTavernSocket(onEvent);
   sendRef.current = socket.send;
   useEffect(() => { if (!socket.connected) dispatch({ type: "disconnected" }); }, [socket.connected]);
+
+  const cycleTheme = useCallback(() => {
+    setTheme((current) => {
+      const order = ["night", "grove", "light"];
+      const next = order[(order.indexOf(current) + 1) % order.length];
+      localStorage.setItem("pitavern-theme", next);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+  }, [theme]);
 
   const openChat = useCallback((chatId: string) => {
     activeChatIdRef.current = chatId;
@@ -123,10 +137,12 @@ export function App() {
   return (
     <div className="flex h-full flex-col">
       <TopBar connection={connection} wsConnected={socket.connected} onModelChange={changeModel}
-        onOpenSettings={() => setSettingsOpen(true)} panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((v) => !v)} />
+        onOpenSettings={() => setSettingsOpen(true)} panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((v) => !v)}
+        theme={theme} onCycleTheme={cycleTheme} onToggleNav={() => setNavOpen((v) => !v)} />
       <div className="flex min-h-0 flex-1">
         <Sidebar characters={characters} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
-          chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onDeleteChat={deleteChat} />
+          chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onDeleteChat={deleteChat}
+          onCharactersChanged={refreshCharacters} onNotice={showNotice} mobileOpen={navOpen} onClose={() => setNavOpen(false)} />
         <ChatView chat={activeChat} personaName={connection?.persona.name ?? "你"}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
           onSend={sendMessage} onStop={stopGeneration} disabled={!connection?.defaultModel} connected={socket.connected} />
@@ -135,6 +151,7 @@ export function App() {
             items={activeChat?.items ?? []}
             usage={activeChat?.usage ?? EMPTY_USAGE}
             projection={activeChat?.projection}
+            onClose={() => setPanelOpen(false)}
           />
         )}
       </div>
@@ -143,7 +160,7 @@ export function App() {
         onSaved={(restartRequired) => {
           void refreshConnection();
           showNotice(restartRequired ? "设置已保存，数据目录将在重启服务后生效" : "设置已保存");
-        }} onError={showNotice} />}
+        }} onError={showNotice} onNotice={showNotice} />}
     </div>
   );
 }

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ChatSummaryDto, CharacterDto } from "@pitavern/shared";
+import { api } from "../api.ts";
 
 interface SidebarProps {
   characters: CharacterDto[];
@@ -10,6 +11,11 @@ interface SidebarProps {
   onOpenChat: (chatId: string) => void;
   onNewChat: () => void;
   onDeleteChat: (chatId: string) => void;
+  onCharactersChanged: () => void;
+  onNotice: (message: string) => void;
+  /** 移动端抽屉开合（md 以上恒开） */
+  mobileOpen: boolean;
+  onClose: () => void;
 }
 
 export function Sidebar({
@@ -21,14 +27,51 @@ export function Sidebar({
   onOpenChat,
   onNewChat,
   onDeleteChat,
+  onCharactersChanged,
+  onNotice,
+  mobileOpen,
+  onClose,
 }: SidebarProps) {
   const [chatToDelete, setChatToDelete] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const importCards = async (files: FileList) => {
+    setImporting(true);
+    try {
+      for (const file of files) {
+        try {
+          const result = await api.importCharacter(file);
+          onNotice(`已导入 ${result.file}`);
+        } catch (e) {
+          onNotice(`${file.name} 导入失败: ${(e as Error).message}`);
+        }
+      }
+      onCharactersChanged();
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-tavern-border bg-tavern-panel">
-      <div className="border-b border-tavern-border p-3">
+    <>
+      {mobileOpen && (
         <button
           type="button"
+          aria-label="关闭菜单"
+          onClick={onClose}
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col border-r border-tavern-border bg-tavern-panel transition-transform duration-200 md:static md:z-auto md:w-64 md:translate-x-0 md:transition-none ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="border-b border-tavern-border p-3">
+          <button
+            type="button"
           onClick={onNewChat}
           className="w-full rounded-md bg-tavern-accent/15 px-3 py-1.5 text-sm font-medium text-tavern-accent hover:bg-tavern-accent/25"
         >
@@ -38,12 +81,28 @@ export function Sidebar({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <section className="p-2">
-          <h3 className="px-2 pb-1 text-xs font-medium text-tavern-dim">
-            角色 {characters.length > 0 && `(${characters.length})`}
+          <h3 className="flex items-center gap-2 px-2 pb-1 text-xs font-medium text-tavern-dim">
+            <span>角色 {characters.length > 0 && `(${characters.length})`}</span>
+            <button
+              type="button"
+              disabled={importing}
+              onClick={() => fileRef.current?.click()}
+              className="ml-auto rounded border border-tavern-border px-1.5 py-0.5 text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text disabled:opacity-50"
+            >
+              {importing ? "导入中…" : "＋ 导入"}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".png,.json"
+              multiple
+              hidden
+              onChange={(e) => e.target.files?.length && void importCards(e.target.files)}
+            />
           </h3>
           {characters.length === 0 && (
             <p className="px-2 py-1 text-xs leading-5 text-tavern-dim">
-              把角色卡 PNG 放入数据目录的 characters/ 后刷新即可
+              点「＋导入」上传角色卡 PNG / JSON，或放入数据目录的 characters/
             </p>
           )}
           <div className="flex flex-wrap gap-1.5 p-1">
@@ -82,7 +141,7 @@ export function Sidebar({
               <li key={chat.id} className="group relative">
                 <button
                   type="button"
-                  onClick={() => onOpenChat(chat.id)}
+                  onClick={() => { onOpenChat(chat.id); onClose(); }}
                   className={`w-full rounded-md px-2 py-1.5 text-left ${
                     chat.id === activeChatId ? "bg-tavern-raised" : "hover:bg-tavern-raised/60"
                   }`}
@@ -116,6 +175,7 @@ export function Sidebar({
           </ul>
         </section>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

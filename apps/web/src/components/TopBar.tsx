@@ -7,9 +7,25 @@ interface TopBarProps {
   onOpenSettings: () => void;
   panelOpen: boolean;
   onTogglePanel: () => void;
+  theme: string;
+  onCycleTheme: () => void;
+  onToggleNav: () => void;
 }
 
-export function TopBar({ connection, wsConnected, onModelChange, onOpenSettings, panelOpen, onTogglePanel }: TopBarProps) {
+const THEME_LABELS: Record<string, string> = { night: "夜琥珀", grove: "林间绿", light: "羊皮纸" };
+const THEME_ORDER = ["night", "grove", "light"];
+
+export function TopBar({
+  connection,
+  wsConnected,
+  onModelChange,
+  onOpenSettings,
+  panelOpen,
+  onTogglePanel,
+  theme,
+  onCycleTheme,
+  onToggleNav,
+}: TopBarProps) {
   const models =
     connection?.providers.flatMap((p) =>
       p.models.map((m) => ({ providerId: p.id, providerName: p.name, modelId: m.id, modelName: m.name, reasoning: m.reasoning })),
@@ -21,6 +37,14 @@ export function TopBar({ connection, wsConnected, onModelChange, onOpenSettings,
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-4 border-b border-tavern-border bg-tavern-panel px-4">
+      <button
+        type="button"
+        aria-label="菜单"
+        onClick={onToggleNav}
+        className="rounded-md border border-tavern-border px-2 py-1 text-sm text-tavern-text md:hidden"
+      >
+        ☰
+      </button>
       <div className="flex items-center gap-2">
         <span className="text-lg">🍺</span>
         <span className="font-semibold tracking-wide text-tavern-accent">PiTavern</span>
@@ -50,6 +74,14 @@ export function TopBar({ connection, wsConnected, onModelChange, onOpenSettings,
             ))}
           </select>
         )}
+        <button
+          type="button"
+          onClick={onCycleTheme}
+          title={`主题：${THEME_LABELS[theme] ?? theme}（点击切换）`}
+          className="rounded-md border border-tavern-border bg-tavern-raised px-2.5 py-1 text-sm text-tavern-text hover:border-tavern-accent-dim"
+        >
+          🎨
+        </button>
         <button
           type="button"
           onClick={onTogglePanel}
