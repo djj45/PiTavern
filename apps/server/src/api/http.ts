@@ -14,6 +14,8 @@ import type { TavernConfig } from "../config.ts";
 import { saveConfig, seedDataDirs } from "../config.ts";
 import { listPresets, presetsDir } from "../context/preset.ts";
 import { normalizeWorldFile } from "../context/worldinfo.ts";
+import { normalizeInstruct } from "../context/instruct.ts";
+import { embedTexts } from "../context/vectors.ts";
 import { parseCardFromPng } from "../stdata/png.ts";
 import { providerDtoList, buildModels, resolveModel } from "../providers/models.ts";
 import type { Models } from "@earendil-works/pi-ai";
@@ -29,6 +31,13 @@ export interface HttpDeps {
   sessions: SessionManager;
   webDistDir: string | null;
   stDataDir: string;
+}
+
+function boundedNumber(value: unknown, label: string, min: number, max: number, integer = false): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+    throw new Error(`${label} 必须是 ${min}～${max} 的${integer ? "整数" : "数值"}`);
+  }
+  return value;
 }
 
 function characterDto(card: import("../stdata/types.ts").CharacterCard): CharacterDto {
@@ -65,6 +74,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       activePreset: config.activePreset,
       activeWorlds: config.activeWorlds,
       worldInfo: config.worldInfo,
+      vectors: config.vectors,
       outputProtocol: config.outputProtocol,
       protocolStrict: config.protocolStrict,
       compression: config.compression,
@@ -94,70 +104,103 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     res.json(list);
   });
 
-  /** 保存连接设置。apiKey 为空字符串表示不变，undefined 表示清除。 */
+  /** 保存连接设置。apiKey 为空字符串或缺省时保持原密钥。 */
   app.put("/api/connection", (req, res) => {
-    type ProviderInput = ProviderDto & { apiKey?: string };
-    const body = req.body as Partial<Omit<ConnectionDto, "providers">> & { providers?: ProviderInput[] };
-    // providers 缺省表示只改默认模型/persona 等，不覆盖已存连接（apiKey 空串=不变，undefined=清除）
-    if (Array.isArray(body.providers)) config.providers = body.providers.map((p) => {
-      const old = config.providers.find((o) => o.id === p.id);
-      const apiKey = p.apiKey === "" || p.apiKey === undefined ? old?.apiKey : p.apiKey;
-      return {
-        id: p.id,
-        name: p.name,
-        baseUrl: p.baseUrl.replace(/\/+$/, ""),
-        apiKey,
-        models: p.models.map((m) => ({
-          id: m.id,
-          name: m.name || m.id,
-          reasoning: m.reasoning ?? false,
-          contextWindow: m.contextWindow,
-          maxTokens: m.maxTokens,
-        })),
-      };
-    });
-    if (typeof body.defaultProvider === "string") config.defaultProvider = body.defaultProvider;
-    if (typeof body.defaultModel === "string") config.defaultModel = body.defaultModel;
-    if (body.persona?.name) config.persona.name = body.persona.name;
-    if (typeof body.persona?.description === "string") config.persona.description = body.persona.description;
-    if (body.contextMode === "simple" || body.contextMode === "bridge" || body.contextMode === "takeover") {
-      config.contextMode = body.contextMode;
+    try {
+      const next = structuredClone(config);
+      type ProviderInput = ProviderDto & { apiKey?: string };
+      const body = req.body as Partial<Omit<ConnectionDto, "providers">> & { providers?: ProviderInput[] };
+      // providers 缺省表示只改默认模型/persona 等，不覆盖已存连接（apiKey 空串或缺省=不变）
+      if (Array.isArray(body.providers)) next.providers = body.providers.map((p) => {
+        const old = next.providers.find((o) => o.id === p.id);
+        if (p.apiType !== undefined && p.apiType !== "chat" && p.apiType !== "text") throw new Error("不支持的模型接口类型");
+        const apiKey = p.apiKey === "" || p.apiKey === undefined ? old?.apiKey : p.apiKey;
+        return {
+          id: p.id,
+          name: p.name,
+          baseUrl: p.baseUrl.replace(/\/+$/, ""),
+          apiKey,
+          apiType: p.apiType === undefined ? old?.apiType ?? "chat" : p.apiType,
+          instruct: p.instruct === undefined ? old?.instruct : normalizeInstruct(p.instruct),
+          models: p.models.map((m) => ({
+            id: m.id,
+            name: m.name || m.id,
+            reasoning: m.reasoning ?? false,
+            contextWindow: m.contextWindow,
+            maxTokens: m.maxTokens,
+          })),
+        };
+      });
+      if (typeof body.defaultProvider === "string") next.defaultProvider = body.defaultProvider;
+      if (typeof body.defaultModel === "string") next.defaultModel = body.defaultModel;
+      if (body.persona?.name) next.persona.name = body.persona.name;
+      if (typeof body.persona?.description === "string") next.persona.description = body.persona.description;
+      if (body.contextMode === "simple" || body.contextMode === "bridge" || body.contextMode === "takeover") {
+        next.contextMode = body.contextMode;
+      }
+      if (typeof body.activePreset === "string") next.activePreset = body.activePreset.replace(/\.json$/, "");
+      if (Array.isArray(body.activeWorlds)) {
+        next.activeWorlds = body.activeWorlds.filter((w): w is string => typeof w === "string").map((w) => w.replace(/\.json$/, ""));
+      }
+      if (body.worldInfo && typeof body.worldInfo === "object") {
+        const wi = body.worldInfo as Partial<ConnectionDto["worldInfo"]>;
+        if (typeof wi.scanDepth === "number") next.worldInfo.scanDepth = Math.max(1, Math.min(100, wi.scanDepth));
+        if (typeof wi.recursionSteps === "number") next.worldInfo.recursionSteps = Math.max(0, Math.min(10, wi.recursionSteps));
+        if (typeof wi.caseSensitive === "boolean") next.worldInfo.caseSensitive = wi.caseSensitive;
+        if (typeof wi.matchWholeWords === "boolean") next.worldInfo.matchWholeWords = wi.matchWholeWords;
+        for (const key of ["minActivations", "minActivationsDepthMax", "budgetTokens"] as const) {
+          if (wi[key] !== undefined) next.worldInfo[key] = boundedNumber(wi[key], key, 0, key === "budgetTokens" ? 1000000 : 1000, true);
+        }
+      }
+      if (body.outputProtocol === "native" || body.outputProtocol === "game_tool") next.outputProtocol = body.outputProtocol;
+      if (typeof body.protocolStrict === "boolean") next.protocolStrict = body.protocolStrict;
+      if (body.compression && typeof body.compression === "object") {
+        const c = body.compression as Partial<ConnectionDto["compression"]>;
+        if (typeof c.enabled === "boolean") next.compression.enabled = c.enabled;
+        if (typeof c.keepFullTurns === "number") next.compression.keepFullTurns = Math.max(1, Math.min(100, c.keepFullTurns));
+      }
+      if (body.takeover && typeof body.takeover === "object") {
+        const t = body.takeover as Partial<ConnectionDto["takeover"]>;
+        if (typeof t.recentTurns === "number") next.takeover.recentTurns = Math.max(1, Math.min(50, t.recentTurns));
+        if (typeof t.stateProjection === "boolean") next.takeover.stateProjection = t.stateProjection;
+      }
+      if (body.vectors && typeof body.vectors === "object") {
+        const v = body.vectors;
+        if (typeof v.enabled === "boolean") next.vectors.enabled = v.enabled;
+        if (typeof v.providerId === "string") next.vectors.providerId = v.providerId;
+        if (typeof v.model === "string") next.vectors.model = v.model.trim();
+        for (const key of ["queryMessages", "maxEntries"] as const) {
+          if (v[key] !== undefined) next.vectors[key] = boundedNumber(v[key], key, 1, 100, true);
+        }
+        if (v.scoreThreshold !== undefined) next.vectors.scoreThreshold = boundedNumber(v.scoreThreshold, "相似度阈值", -1, 1);
+      }
+      if (next.vectors.enabled && (!next.vectors.model || !next.providers.some((p) => p.id === next.vectors.providerId))) {
+        throw new Error("启用向量检索前，请选择有效连接并填写 embedding 模型");
+      }
+      const activeProvider = next.providers.find((p) => p.id === next.defaultProvider);
+      if (activeProvider?.apiType === "text" && (next.contextMode === "takeover" || next.outputProtocol === "game_tool")) {
+        throw new Error("文本补全接口仅支持简洁/ST 桥接模式与原生文本输出；Agent 接管和 game_tool 需要聊天补全接口");
+      }
+      const updatedModels = buildModels(next);
+      if (typeof body.stDataDir === "string" && body.stDataDir.trim() && body.stDataDir.trim() !== next.stDataDir) {
+        next.stDataDir = body.stDataDir.trim();
+        seedDataDirs(next.stDataDir);
+        saveConfig(next);
+        Object.assign(config, next);
+        modelsRef.current = updatedModels;
+        sessions.invalidateAll();
+        // CharacterStore/ChatStore 持有旧目录的绝对路径，需要重启才生效
+        res.json({ ok: true, restartRequired: true });
+        return;
+      }
+      saveConfig(next);
+      Object.assign(config, next);
+      modelsRef.current = updatedModels;
+      sessions.invalidateAll();
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
-    if (typeof body.activePreset === "string") config.activePreset = body.activePreset.replace(/\.json$/, "");
-    if (Array.isArray(body.activeWorlds)) {
-      config.activeWorlds = body.activeWorlds.filter((w): w is string => typeof w === "string").map((w) => w.replace(/\.json$/, ""));
-    }
-    if (body.worldInfo && typeof body.worldInfo === "object") {
-      const wi = body.worldInfo as Partial<ConnectionDto["worldInfo"]>;
-      if (typeof wi.scanDepth === "number") config.worldInfo.scanDepth = Math.max(1, Math.min(100, wi.scanDepth));
-      if (typeof wi.recursionSteps === "number") config.worldInfo.recursionSteps = Math.max(0, Math.min(10, wi.recursionSteps));
-      if (typeof wi.caseSensitive === "boolean") config.worldInfo.caseSensitive = wi.caseSensitive;
-      if (typeof wi.matchWholeWords === "boolean") config.worldInfo.matchWholeWords = wi.matchWholeWords;
-    }
-    if (body.outputProtocol === "native" || body.outputProtocol === "game_tool") config.outputProtocol = body.outputProtocol;
-    if (typeof body.protocolStrict === "boolean") config.protocolStrict = body.protocolStrict;
-    if (body.compression && typeof body.compression === "object") {
-      const c = body.compression as Partial<ConnectionDto["compression"]>;
-      if (typeof c.enabled === "boolean") config.compression.enabled = c.enabled;
-      if (typeof c.keepFullTurns === "number") config.compression.keepFullTurns = Math.max(1, Math.min(100, c.keepFullTurns));
-    }
-    if (body.takeover && typeof body.takeover === "object") {
-      const t = body.takeover as Partial<ConnectionDto["takeover"]>;
-      if (typeof t.recentTurns === "number") config.takeover.recentTurns = Math.max(1, Math.min(50, t.recentTurns));
-      if (typeof t.stateProjection === "boolean") config.takeover.stateProjection = t.stateProjection;
-    }
-    if (typeof body.stDataDir === "string" && body.stDataDir.trim() && body.stDataDir.trim() !== config.stDataDir) {
-      config.stDataDir = body.stDataDir.trim();
-      seedDataDirs(config.stDataDir);
-      saveConfig(config);
-      // CharacterStore/ChatStore 持有旧目录的绝对路径，需要重启才生效
-      res.json({ ok: true, restartRequired: true });
-      return;
-    }
-    saveConfig(config);
-    modelsRef.current = buildModels(config);
-    sessions.invalidateAll();
-    res.json({ ok: true });
   });
 
   /** 探活：用当前默认模型发 1 token 请求 */
@@ -167,15 +210,25 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       const stream = modelsRef.current.streamSimple(model, {
         systemPrompt: "You are a connectivity check. Reply with exactly: ok",
         messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
-      });
+      }, { maxTokens: 1, timeoutMs: 15_000 });
       let sawText = false;
       for await (const event of stream) {
         if (event.type === "text_delta") sawText = true;
-        if (event.type === "done" || event.type === "error") break;
+        if (event.type === "error") throw new Error(event.error.errorMessage ?? "模型返回错误");
+        if (event.type === "done") break;
       }
       res.json({ ok: sawText, provider: model.provider, model: model.id });
     } catch (error) {
       res.status(400).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/vectors/test", async (_req, res) => {
+    try {
+      const [vector] = await embedTexts(structuredClone(config), ["连通性测试"]);
+      res.json({ ok: true, dimensions: vector.length });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 

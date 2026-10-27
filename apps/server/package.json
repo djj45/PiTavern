@@ -13,7 +13,8 @@
     "verify:takeover": "tsx scripts/takeover-verify.ts",
     "verify:m6": "tsx scripts/m6-verify.ts",
     "e2e": "node scripts/e2e-smoke.mjs",
-    "verify:regression": "tsx scripts/regression-verify.ts"
+    "verify:regression": "tsx scripts/regression-verify.ts",
+    "verify:compat": "tsx scripts/compatibility-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

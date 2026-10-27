@@ -31,6 +31,7 @@ npm run verify:m4    # 输出协议还原 + 流式提取 + 历史压缩验证
 npm run verify:takeover # 接管模式组装 + 状态投影验证（合成数据，无需本地角色卡）
 npm run verify:m6    # 世界书计时效果（sticky/cooldown/delay）验证
 npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话状态回归
+npm run verify:compat # 变量持久化/向量索引/最少激活数/instruct/文本补全（本地模拟接口）
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。
@@ -91,8 +92,21 @@ npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话�
 | 提示词正则（promptOnly、placement、minDepth/maxDepth） | ✅ |
 | 采样参数透传（temperature/top_p/top_k/max_tokens…） | ✅（中转默认用 max_tokens 字段） |
 | system 消息位置 | ⚠️ pi 运行时把所有 system 按序合并为开头一条（内容无损，历史后指令的"尾部位置"效果不保留） |
-| 向量条目、min activations | ❌ 后置 |
-| instruct 模板、text-completion 系 API、{{setvar}} 写变量 | ❌ 暂不支持 |
+| 向量条目 | ✅ 桥接模式：OpenAI 兼容 embeddings、内容索引缓存、相似度阈值与召回上限 |
+| min activations | ✅ 扩大历史扫描范围、最大深度、估算 token 预算；概率失败不会反复重抽 |
+| instruct 模板 | ✅ 单人对话序列、story 包装、首末序列、名字宏及停止串；内置 ChatML/Alpaca，可导入 ST instruct JSON |
+| text-completion 系 API | ✅ OpenAI 兼容 `/completions`（SSE 或 JSON）；其他原生协议尚未接入 |
+| `{{setvar}}` 写变量 | ✅ 本轮顺序求值、嵌套宏、空字符串赋值；保存到聊天 `chat_metadata.variables` |
+
+### 兼容功能配置
+
+- **变量**：预设、角色描述、世界书和历史文本组装时可用 `{{setvar::金币::100}}` 写入，随后用 `{{getvar::金币}}` 读取。变量按聊天隔离，每轮组装执行宏，原始聊天文本保持不变；扫描预览、预算估算和工具检索使用副本，不额外写入。变量在模型请求前保存，因此生成失败也会保留本次组装的写入。`setglobalvar`、`addvar/incvar` 和完整 STscript 解释器不在此次范围内。
+- **最少激活数**：设置 → 世界书检索，填写目标条目数及最大扫描深度。目标为 0 时关闭扩展扫描；最大深度为 0 时允许扫描到历史末尾。条目独立扫描深度、计时效果、概率和预算仍生效，因此不能保证一定达到目标。预算采用保守字符估算（约 1.5 字符/token），不是模型 tokenizer 的精确计数。
+- **向量世界书**：在世界书检索中启用，选择已配置的连接并填写 embedding 模型 ID。所选服务须提供 `/embeddings`；只有 ST 条目中的 `vectorized: true`（卡内书为 `extensions.vectorized`）参与语义召回，也保留关键词匹配。候选条目正文和最近对话会发送到所选服务。本地索引保存在 `<stDataDir>/.pitavern/vectors/`，按地址、模型、维度和内容区分；修改内容、切换模型或删除条目后不会继续使用失效候选。向量检索目前用于桥接模式，接管模式保留原来的工具检索方式。
+- **文本补全与 instruct**：在连接上选择「文本补全（OpenAI 兼容）」，baseUrl 填到 `/v1` 等接口前缀，模型 ID 按服务实际配置。选择 ChatML/Alpaca，或导入 ST 导出的 instruct JSON；此文件不同于 OpenAI Settings 预设和 context/story-string 的 Handlebars 模板。支持单人普通生成，不覆盖群聊、用户代写和 quiet 等 ST 特殊生成模式。模板须匹配模型，不会自动探测。
+- **文本补全能力限制**：可使用简洁或 ST 桥接模式，输出协议须为原生文本，运行时不发送工具声明；Agent 接管与 `game_tool` 不可用。切换接口时界面会切换到兼容选项，服务端也会拒绝不兼容的配置。原有聊天补全接口及工具循环保持可用。
+
+`npm run verify:compat` 使用独立合成数据和本地模拟服务，验证实际请求格式、中文流式输出、停止、变量落库、索引更新与设置保存；不调用真实供应商。每次测试的请求记录保留在 `data/test-runs/compatibility-*/`。不同供应商的模型和采样参数支持仍需使用自己的服务确认。
 
 ## 架构
 

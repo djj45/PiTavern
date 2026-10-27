@@ -21,6 +21,10 @@ export interface BridgeOptions {
   recursionSteps: number;
   caseSensitive: boolean;
   matchWholeWords: boolean;
+  minActivations?: number;
+  minActivationsDepthMax?: number;
+  budgetTokens?: number;
+  vectorMatches?: ReadonlySet<string>;
   /** 兼容旧调用方；预算统一由 Agent 压缩层处理。 */
   maxHistoryChars?: number;
   /** 计时效果状态（sticky/cooldown；可变对象，扫描内更新，调用方持久化） */
@@ -40,6 +44,7 @@ export interface BridgeInput {
   /** 预设携带的 regex_scripts */
   regexScripts: RegexScript[];
   options: BridgeOptions;
+  variables?: Record<string, unknown>;
 }
 
 export interface BridgeSampling {
@@ -124,16 +129,20 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
     char: card.name,
     user: persona.name,
     personaDescription: persona.description,
-    variables: {},
+    variables: input.variables ?? {},
     lastUserMessage: [...chatLines].reverse().find((l) => l.is_user)?.mes,
   };
 
   // 世界书：内容先过宏与 WORLD_INFO 正则再入桶（扫描缓冲同样用宏替换后的历史）
-  const wi: WiScanResult = scanWorldInfo(worldEntries, historyPieces(chatLines, [], env).map((p) => p.text), {
+  // 扫描需要看到 setvar 后的 getvar 文本，但预览不得修改本轮实际变量。
+  const previewEnv = { ...env, variables: structuredClone(env.variables ?? {}) };
+  const wi: WiScanResult = scanWorldInfo(worldEntries, historyPieces(chatLines, [], previewEnv).map((p) => p.text), {
+    ...options,
     scanDepth: options.scanDepth,
     recursionSteps: options.recursionSteps,
     caseSensitive: options.caseSensitive,
     matchWholeWords: options.matchWholeWords,
+    estimateContent: (content) => substituteMacros(content, { ...previewEnv, variables: structuredClone(previewEnv.variables) }),
     transformContent: (content) => {
       const substituted = substituteMacros(content, env);
       return applyRegex(substituted, regexScripts, { placement: RegexPlacement.WORLD_INFO, depth: null });
@@ -169,22 +178,22 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
         break;
       case "charPersonality":
         text = card.personality
-          ? substituteMacros(personalityFormat.replace(/\{\{personality\}\}/gi, card.personality), env) || null
+          ? personalityFormat.replace(/\{\{personality\}\}/gi, () => card.personality) || null
           : null;
         break;
       case "scenario":
-        text = card.scenario ? substituteMacros(scenarioFormat.replace(/\{\{scenario\}\}/gi, card.scenario), env) || null : null;
+        text = card.scenario ? scenarioFormat.replace(/\{\{scenario\}\}/gi, () => card.scenario) || null : null;
         break;
       case "personaDescription":
         text = persona.description || null;
         break;
       case "dialogueExamples":
-        text = card.mesExample ? substituteMacros(card.mesExample, env) || null : null;
+        text = card.mesExample || null;
         break;
       default:
         text = null;
     }
-    if (text) out.push({ role: "system", text });
+    if (text) out.push({ role: "system", text: marker === "worldInfoBefore" || marker === "worldInfoAfter" ? text : substituteMacros(text, env) });
     return text;
   };
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConnectionDto, PresetSummaryDto, ProviderDto, WorldSummaryDto } from "@pitavern/shared";
+import { INSTRUCT_TEMPLATES } from "@pitavern/shared";
 import { api } from "../api.ts";
 
 interface SettingsDialogProps {
@@ -44,6 +45,19 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
   const [keepFullTurns, setKeepFullTurns] = useState(connection?.compression?.keepFullTurns ?? 6);
   const [recentTurns, setRecentTurns] = useState(connection?.takeover?.recentTurns ?? 3);
   const [stateProjection, setStateProjection] = useState(connection?.takeover?.stateProjection ?? true);
+  const [minActivations, setMinActivations] = useState(connection?.worldInfo?.minActivations ?? 0);
+  const [minActivationsDepthMax, setMinActivationsDepthMax] = useState(connection?.worldInfo?.minActivationsDepthMax ?? 0);
+  const [budgetTokens, setBudgetTokens] = useState(connection?.worldInfo?.budgetTokens ?? 0);
+  const [vectors, setVectors] = useState(connection?.vectors ?? { enabled: false, providerId: "", model: "", queryMessages: 2, maxEntries: 5, scoreThreshold: 0.3 });
+  const [vectorTest, setVectorTest] = useState<TestState>({ running: false, result: null });
+  const textCompletion = providers.find((p) => p.id === defaultProvider)?.apiType === "text";
+
+  useEffect(() => {
+    if (textCompletion) {
+      setContextMode((mode) => mode === "takeover" ? "simple" : mode);
+      setOutputProtocol("native");
+    }
+  }, [textCompletion]);
 
   useEffect(() => {
     api.presets().then(setPresets).catch(() => setPresets([]));
@@ -97,6 +111,8 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         name: p.name,
         baseUrl: p.baseUrl,
         hasApiKey: p.hasApiKey,
+        apiType: p.apiType ?? "chat",
+        ...(p.instruct ? { instruct: p.instruct } : {}),
         models: p.models,
         // 空串 = 服务端保持原 key 不变；填了新值 = 更新
         apiKey: p.apiKeyInput,
@@ -111,9 +127,13 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
       worldInfo: {
         scanDepth,
         recursionSteps,
+        minActivations,
+        minActivationsDepthMax,
+        budgetTokens,
         caseSensitive: connection?.worldInfo?.caseSensitive ?? false,
         matchWholeWords: connection?.worldInfo?.matchWholeWords ?? true,
       },
+      vectors,
       outputProtocol,
       protocolStrict,
       compression: { enabled: compressionEnabled, keepFullTurns },
@@ -192,6 +212,44 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
                     className="rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
                   />
                 </div>
+                <label className="mb-2 flex items-center gap-2 text-xs text-tavern-dim">
+                  接口类型
+                  <select aria-label={`${p.name}接口类型`} value={p.apiType ?? "chat"}
+                    onChange={(e) => updateProvider(p.id, { apiType: e.target.value as "chat" | "text" })}
+                    className="rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-tavern-text">
+                    <option value="chat">聊天补全（支持工具）</option>
+                    <option value="text">文本补全（OpenAI 兼容）</option>
+                  </select>
+                </label>
+                {p.apiType === "text" && (
+                  <div className="mb-3 rounded border border-tavern-border p-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label>Instruct 模板
+                        <select aria-label={`${p.name}Instruct 模板`} value={Object.entries(INSTRUCT_TEMPLATES).find(([, value]) => JSON.stringify(value) === JSON.stringify(p.instruct ?? INSTRUCT_TEMPLATES.ChatML))?.[0] ?? "custom"}
+                          onChange={(e) => { if (INSTRUCT_TEMPLATES[e.target.value]) updateProvider(p.id, { instruct: INSTRUCT_TEMPLATES[e.target.value] }); }}
+                          className="ml-2 rounded border border-tavern-border bg-tavern-raised px-2 py-1">
+                          {Object.keys(INSTRUCT_TEMPLATES).map((name) => <option key={name}>{name}</option>)}
+                          <option value="custom" disabled>{p.instruct?.name ?? "自定义"}</option>
+                        </select>
+                      </label>
+                      <label className="cursor-pointer text-tavern-accent">导入 ST instruct JSON
+                        <input type="file" accept=".json" className="sr-only" onChange={async (e) => {
+                          const file = e.target.files?.[0]; e.target.value = "";
+                          if (!file) return;
+                          try {
+                            const value = JSON.parse(await file.text());
+                            if (typeof value?.input_sequence !== "string" || typeof value?.output_sequence !== "string") throw new Error("请选择 instruct 预设，需包含 input_sequence 和 output_sequence");
+                            updateProvider(p.id, { instruct: { ...value, name: value.name || file.name.replace(/\.json$/i, "") } });
+                            onNotice?.("模板已载入，保存后生效");
+                          } catch (error) { onError((error as Error).message); }
+                        }} />
+                      </label>
+                    </div>
+                    <details className="mt-2 text-tavern-dim"><summary>查看模板</summary>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(p.instruct ?? INSTRUCT_TEMPLATES.ChatML, null, 2)}</pre>
+                    </details>
+                  </div>
+                )}
                 <input
                   type="password"
                   value={p.apiKeyInput}
@@ -265,6 +323,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
             <button
               type="button"
               onClick={() => setContextMode("takeover")}
+              disabled={textCompletion}
               className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
                 contextMode === "takeover" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
               }`}
@@ -379,6 +438,44 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         </section>
 
         {/* 输出协议与压缩 */}
+        <section className="mb-5 rounded-lg border border-tavern-border bg-tavern-bg p-3">
+          <h3 className="mb-2 text-sm font-medium">世界书检索（ST 桥接模式）</h3>
+          <div className="mb-3 flex flex-wrap gap-3 text-xs text-tavern-dim">
+            {[
+              { label: "最少激活数（0 关闭）", value: minActivations, set: setMinActivations, max: 1000 },
+              { label: "最大扫描深度（0 到历史末尾）", value: minActivationsDepthMax, set: setMinActivationsDepthMax, max: 1000 },
+              { label: "估算 token 预算（0 不单独限制）", value: budgetTokens, set: setBudgetTokens, max: 1000000 },
+            ].map((field) => <label key={field.label} className="flex items-center gap-2">{field.label}
+              <input aria-label={field.label} type="number" min={0} max={field.max} value={field.value} onChange={(e) => field.set(Number(e.target.value))}
+                className="w-20 rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-tavern-text" />
+            </label>)}
+          </div>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={vectors.enabled} onChange={(e) => setVectors({ ...vectors, enabled: e.target.checked })} />启用向量世界书</label>
+          <p className="my-2 text-xs text-tavern-dim">检索标记为 vectorized 的条目；会将候选条目和最近对话发送给所选 embedding 服务。首次使用建立本地索引，修改条目或模型后自动更新。</p>
+          {vectors.enabled && <div className="grid gap-2 sm:grid-cols-2">
+            <label className="text-xs">向量连接<select aria-label="向量连接" value={vectors.providerId} onChange={(e) => setVectors({ ...vectors, providerId: e.target.value })}
+              className="mt-1 w-full rounded border border-tavern-border bg-tavern-raised px-2 py-1.5">
+              <option value="">请选择连接</option>{providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select></label>
+            <label className="text-xs">Embedding 模型<input aria-label="Embedding 模型" value={vectors.model} onChange={(e) => setVectors({ ...vectors, model: e.target.value })}
+              placeholder="填写服务支持的向量模型 ID" className="mt-1 w-full rounded border border-tavern-border bg-tavern-raised px-2 py-1.5" /></label>
+            {([
+              ["queryMessages", "查询使用最近消息数", 1, 100, 1], ["maxEntries", "最多召回条目", 1, 100, 1], ["scoreThreshold", "相似度阈值", -1, 1, 0.05],
+            ] as const).map(([key, label, min, max, step]) => <label key={key} className="text-xs">{label}
+              <input aria-label={label} type="number" min={min} max={max} step={step} value={vectors[key]} onChange={(e) => setVectors({ ...vectors, [key]: Number(e.target.value) })}
+                className="ml-2 w-20 rounded border border-tavern-border bg-tavern-raised px-2 py-1" />
+            </label>)}
+            <button type="button" disabled={saving || test.running || vectorTest.running} className="rounded border border-tavern-border px-2 py-1 text-xs disabled:opacity-40" onClick={async () => {
+              setVectorTest({ running: true, result: null });
+              try {
+                await persist(); const result = await api.testVectors();
+                setVectorTest({ running: false, result: `✓ 连接成功（${result.dimensions} 维）` });
+              } catch (error) { setVectorTest({ running: false, result: `✗ ${(error as Error).message}` }); }
+            }}>{vectorTest.running ? "测试中…" : "保存并测试向量连接"}</button>
+            {vectorTest.result && <p className="text-xs sm:col-span-2">{vectorTest.result}</p>}
+          </div>}
+        </section>
+        {textCompletion && <p className="mb-4 rounded border border-tavern-border p-3 text-xs text-tavern-dim">当前使用文本补全：仅支持简洁/ST 桥接模式与原生文本输出，工具调用已停用。Instruct 模板应与模型匹配。</p>}
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-medium">输出协议与历史压缩</h3>
           <div className="mb-2 flex flex-col gap-2 sm:flex-row">
@@ -395,6 +492,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
             <button
               type="button"
               onClick={() => setOutputProtocol("game_tool")}
+              disabled={textCompletion}
               className={`flex-1 rounded-md border px-3 py-2 text-left text-sm ${
                 outputProtocol === "game_tool" ? "border-tavern-accent bg-tavern-accent/10" : "border-tavern-border bg-tavern-bg"
               }`}
@@ -463,7 +561,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
           <button
             type="button"
             onClick={runTest}
-            disabled={saving || test.running || !defaultProvider}
+            disabled={saving || test.running || vectorTest.running || !defaultProvider}
             className="rounded-md border border-tavern-border px-3 py-1.5 text-sm text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40"
           >
             {test.running ? "测试中…" : "保存并测试连通"}
@@ -473,7 +571,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
             <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-tavern-dim hover:text-tavern-text">
               取消
             </button>
-            <button type="button" onClick={save} disabled={saving || test.running} className="rounded-md bg-tavern-accent px-4 py-1.5 text-sm font-medium text-tavern-bg">
+            <button type="button" onClick={save} disabled={saving || test.running || vectorTest.running} className="rounded-md bg-tavern-accent px-4 py-1.5 text-sm font-medium text-tavern-bg">
               {saving ? "保存中…" : "保存"}
             </button>
           </div>

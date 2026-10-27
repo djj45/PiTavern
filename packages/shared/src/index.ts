@@ -7,6 +7,66 @@
 
 export const PITAVERN_VERSION = "0.1.0";
 
+/** SillyTavern instruct 预设的单人对话字段。 */
+export interface InstructTemplate {
+  name: string;
+  input_sequence: string;
+  output_sequence: string;
+  system_sequence: string;
+  input_suffix: string;
+  output_suffix: string;
+  system_suffix: string;
+  story_string_prefix?: string;
+  story_string_suffix?: string;
+  user_alignment_message?: string;
+  first_input_sequence?: string;
+  last_input_sequence?: string;
+  first_output_sequence?: string;
+  last_output_sequence?: string;
+  last_system_sequence?: string;
+  stop_sequence: string;
+  wrap: boolean;
+  macro: boolean;
+  names_behavior: "none" | "always" | "force";
+  system_same_as_user: boolean;
+  sequences_as_stop_strings: boolean;
+}
+
+export const INSTRUCT_TEMPLATES: Record<string, InstructTemplate> = {
+  ChatML: {
+    name: "ChatML", input_sequence: "<|im_start|>user\n", output_sequence: "<|im_start|>assistant\n",
+    system_sequence: "<|im_start|>system\n", input_suffix: "<|im_end|>\n", output_suffix: "<|im_end|>\n",
+    system_suffix: "<|im_end|>\n", stop_sequence: "<|im_end|>", wrap: false, macro: true,
+    names_behavior: "none", system_same_as_user: false, sequences_as_stop_strings: true,
+  },
+  Alpaca: {
+    name: "Alpaca", input_sequence: "### Instruction:", output_sequence: "### Response:",
+    system_sequence: "", input_suffix: "\n\n", output_suffix: "\n\n", system_suffix: "\n\n",
+    stop_sequence: "", wrap: true, macro: true, names_behavior: "none", system_same_as_user: false,
+    sequences_as_stop_strings: true,
+  },
+};
+
+export interface VectorSettings {
+  enabled: boolean;
+  providerId: string;
+  model: string;
+  queryMessages: number;
+  maxEntries: number;
+  scoreThreshold: number;
+}
+
+export interface WorldInfoSettings {
+  scanDepth: number;
+  recursionSteps: number;
+  caseSensitive: boolean;
+  matchWholeWords: boolean;
+  minActivations?: number;
+  minActivationsDepthMax?: number;
+  /** 0 不单独限制；使用保守字符估算，非模型精确 token 数。 */
+  budgetTokens?: number;
+}
+
 // ---------------------------------------------------------------- DTO
 
 export interface ProviderModelDto {
@@ -22,6 +82,8 @@ export interface ProviderDto {
   name: string;
   baseUrl: string;
   hasApiKey: boolean;
+  apiType?: "chat" | "text";
+  instruct?: InstructTemplate;
   models: ProviderModelDto[];
 }
 
@@ -36,7 +98,8 @@ export interface ConnectionDto {
   contextMode: "simple" | "bridge" | "takeover";
   activePreset: string;
   activeWorlds: string[];
-  worldInfo: { scanDepth: number; recursionSteps: number; caseSensitive: boolean; matchWholeWords: boolean };
+  worldInfo: WorldInfoSettings;
+  vectors: VectorSettings;
   /** native=纯文本流式；game_tool=强制工具调用防截断 */
   outputProtocol: "native" | "game_tool";
   protocolStrict: boolean;

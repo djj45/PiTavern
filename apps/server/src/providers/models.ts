@@ -4,18 +4,22 @@ import {
   type ApiKeyAuth,
   type Model,
   type Models,
+  type Api,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { ProviderConfig, TavernConfig } from "../config.ts";
+import { INSTRUCT_TEMPLATES } from "@pitavern/shared";
+import { normalizeInstruct } from "../context/instruct.ts";
+import { textCompletionsApi } from "./text-completions.ts";
 
 /** 从 apiKey 固定解析的 auth（密钥来自 config.json，不进交互登录流程） */
-function staticApiKeyAuth(providerName: string, apiKey: string | undefined): ApiKeyAuth {
+function staticApiKeyAuth(providerName: string, apiKey: string | undefined, allowAnonymous = false): ApiKeyAuth {
   return {
     name: `${providerName} API Key`,
     login: async () => {
       throw new Error(`请在 PiTavern 设置中填写 ${providerName} 的 API Key`);
     },
-    resolve: async () => (apiKey ? { auth: { apiKey } } : undefined),
+    resolve: async () => (apiKey ? { auth: { apiKey } } : allowAnonymous ? { auth: {} } : undefined),
   };
 }
 
@@ -28,15 +32,15 @@ export function buildModels(config: TavernConfig): Models {
       id: p.id,
       name: p.name || p.id,
       baseUrl: p.baseUrl,
-      auth: { apiKey: staticApiKeyAuth(p.name || p.id, p.apiKey) },
+      auth: { apiKey: staticApiKeyAuth(p.name || p.id, p.apiKey, p.apiType === "text") },
       models: p.models.map(
-        (m): Model<"openai-completions"> => ({
+        (m): Model<Api> => ({
           id: m.id,
           name: m.name || m.id,
-          api: "openai-completions",
+          api: p.apiType === "text" ? "openai-text-completions" : "openai-completions",
           provider: p.id,
           baseUrl: p.baseUrl,
-          reasoning: m.reasoning ?? false,
+          reasoning: p.apiType !== "text" && (m.reasoning ?? false),
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: m.contextWindow ?? 1_000_000,
@@ -45,14 +49,16 @@ export function buildModels(config: TavernConfig): Models {
           compat: { maxTokensField: "max_tokens" },
         }),
       ),
-      api: openAICompletionsApi(),
+      api: p.apiType === "text"
+        ? textCompletionsApi(normalizeInstruct(p.instruct ?? INSTRUCT_TEMPLATES.ChatML), config.persona.name)
+        : openAICompletionsApi(),
     });
     models.setProvider(provider);
   }
   return models;
 }
 
-export function resolveModel(models: Models, config: TavernConfig): Model<"openai-completions"> {
+export function resolveModel(models: Models, config: TavernConfig): Model<Api> {
   const model = models.getModel(config.defaultProvider, config.defaultModel);
   if (!model) {
     const available = models
@@ -65,7 +71,7 @@ export function resolveModel(models: Models, config: TavernConfig): Model<"opena
         : "尚未配置任何模型连接，请先在设置里添加中转/供应商",
     );
   }
-  return model as Model<"openai-completions">;
+  return model;
 }
 
 export function providerDtoList(config: TavernConfig) {
@@ -74,6 +80,8 @@ export function providerDtoList(config: TavernConfig) {
     name: p.name,
     baseUrl: p.baseUrl,
     hasApiKey: Boolean(p.apiKey),
+    apiType: p.apiType ?? "chat",
+    ...(p.apiType === "text" ? { instruct: p.instruct ?? INSTRUCT_TEMPLATES.ChatML } : {}),
     models: p.models.map((m) => ({
       id: m.id,
       name: m.name,

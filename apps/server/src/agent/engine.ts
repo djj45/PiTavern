@@ -1,6 +1,6 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import type { Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
+import type { Api, Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
 import type { BridgeSampling } from "../context/bridge.ts";
 import type { CompressionConfig } from "../context/compression.ts";
 import { compressHistory, contextChars, inputBudgetChars } from "../context/compression.ts";
@@ -65,7 +65,8 @@ export function historyToAgentMessages(lines: StChatLine[]): Message[] {
 
 export interface TavernAgentOptions {
   models: Models;
-  model: Model<"openai-completions">;
+  model: Model<Api>;
+  templateNames?: { char: string; user: string };
   chatId: string;
   thinkingLevel: "off" | "low" | "medium" | "high";
   /** simple 模式：系统提示词 + 历史（不含本轮用户消息，配合 prompt()） */
@@ -103,12 +104,14 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
       ...streamOptions,
       ...(sampling?.temperature !== undefined ? { temperature: sampling.temperature } : {}),
       ...(sampling?.maxTokens !== undefined ? { maxTokens: sampling.maxTokens } : {}),
-      ...(sampling?.samplingParams || strictToolChoice
+      ...(sampling?.samplingParams || strictToolChoice || options.templateNames
         ? {
             samplingParams: {
               ...(streamOptions?.samplingParams ?? {}),
               ...sampling?.samplingParams,
               ...strictToolChoice,
+              ...(model.api === "openai-text-completions" && options.templateNames
+                ? { pitavern_char: options.templateNames.char, pitavern_user: options.templateNames.user } : {}),
             },
           }
         : {}),

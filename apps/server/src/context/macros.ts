@@ -9,10 +9,11 @@ export interface MacroEnv {
   personaDescription?: string;
   /** {{getvar}} 的变量源 */
   variables?: Record<string, unknown>;
+  /** 扫描、检索预览只展开，不执行写入。 */
+  readOnly?: boolean;
   lastUserMessage?: string;
 }
 
-const MACRO_RE = /\{\{([\w_]+)((?:::|:)[^}]*)?\}\}/gi;
 /** {{// 注释}} 整块删除；{{trim}} 连同周围空白删除（ST 语义） */
 const COMMENT_RE = /\{\{\/\/[\s\S]*?\}\}/g;
 const TRIM_RE = /[ \t]*\{\{trim\}\}[ \t]*\n?/gi;
@@ -27,7 +28,7 @@ function hashString(str: string): number {
 
 function splitArgs(raw: string | undefined, separator: "::" | ":"): string[] {
   if (!raw) return [];
-  return raw.split(separator).map((s) => s.trim()).filter((s) => s.length > 0);
+  return raw.slice(separator.length).split(separator).map((s) => s.trim());
 }
 
 function varToString(value: unknown): string {
@@ -50,8 +51,11 @@ function rollDice(spec: string): string {
 
 export function substituteMacros(text: string, env: MacroEnv): string {
   if (!text.includes("{{")) return text;
-  let result = text.replace(COMMENT_RE, "").replace(TRIM_RE, "");
-  result = result.replace(MACRO_RE, (whole, nameRaw: string, argsRaw?: string) => {
+  const source = text.replace(COMMENT_RE, "").replace(TRIM_RE, "");
+  const evaluate = (whole: string, body: string): string => {
+    const parsed = /^([\w_]+)((?:::|:)[\s\S]*)?$/.exec(body);
+    if (!parsed) return whole;
+    const [, nameRaw, argsRaw] = parsed;
     const name = nameRaw.toLowerCase();
     // {{name::a::b}} 与 {{name:a,b}} 两种参数风格，取匹配到的一种
     const args = argsRaw?.startsWith("::")
@@ -79,16 +83,24 @@ export function substituteMacros(text: string, env: MacroEnv): string {
         return rollDice(args[0] ?? "");
       case "getvar": {
         const key = args[0] ?? "";
-        return varToString(env.variables?.[key]);
+        return varToString(env.variables && Object.hasOwn(env.variables, key) ? env.variables[key] : undefined);
       }
       case "getvardefault": {
         const key = args[0] ?? "";
-        const value = env.variables?.[key];
+        const value = env.variables && Object.hasOwn(env.variables, key) ? env.variables[key] : undefined;
         return value === undefined ? (args[1] ?? "") : varToString(value);
       }
-      case "setvar":
-        // 提示词层的 setvar 只做无输出替换（真正写变量属 M3 工具层）
+      case "setvar": {
+        const separator = argsRaw?.startsWith("::") ? "::" : ":";
+        const raw = argsRaw?.slice(separator.length) ?? "";
+        const index = raw.indexOf(separator);
+        const key = (index < 0 ? raw : raw.slice(0, index)).trim();
+        if (index >= 0 && key && !env.readOnly) {
+          env.variables ??= {};
+          Object.defineProperty(env.variables, key, { value: raw.slice(index + separator.length), writable: true, enumerable: true, configurable: true });
+        }
         return "";
+      }
       case "time":
         return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
       case "date":
@@ -108,6 +120,31 @@ export function substituteMacros(text: string, env: MacroEnv): string {
       default:
         return whole;
     }
-  });
-  return result;
+  };
+  // 平衡括号解析允许 setvar 的值包含 getvar 等嵌套宏；结果不再次求值。
+  const expand = (input: string, depth = 0): string => {
+    if (depth > 32) throw new Error("宏嵌套超过 32 层");
+    let result = "";
+    let cursor = 0;
+    while (cursor < input.length) {
+      const start = input.indexOf("{{", cursor);
+      if (start < 0) return result + input.slice(cursor);
+      result += input.slice(cursor, start);
+      let level = 1;
+      let end = start + 2;
+      for (; end < input.length - 1; end++) {
+        if (input.startsWith("{{", end)) { level++; end++; }
+        else if (input.startsWith("}}", end)) {
+          if (--level === 0) break;
+          end++;
+        }
+      }
+      if (level !== 0) return result + input.slice(start);
+      const whole = input.slice(start, end + 2);
+      result += evaluate(whole, expand(input.slice(start + 2, end), depth + 1));
+      cursor = end + 2;
+    }
+    return result;
+  };
+  return expand(source);
 }

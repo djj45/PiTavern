@@ -29,6 +29,7 @@ export const api = {
     fetch("/api/connection/test", { method: "POST" }).then((r) =>
       json<{ ok: boolean; provider?: string; model?: string; error?: string }>(r),
     ),
+  testVectors: () => fetch("/api/vectors/test", { method: "POST" }).then((r) => json<{ ok: boolean; dimensions: number }>(r)),
   characters: () => fetch("/api/characters").then((r) => json<CharacterDto[]>(r)),
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
   worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),

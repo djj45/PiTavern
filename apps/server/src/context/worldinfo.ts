@@ -3,7 +3,7 @@
  * 实现：常驻条目、主键匹配（正则/全词/子串 + 大小写选项）、二级键逻辑、
  * 递归扫描（excludeRecursion/preventRecursion/delayUntilRecursion）、概率门、
  * position 分桶（before/after/atDepth）。
- * 未实现（M4+）：sticky/cooldown/delay 计时效果、min activations、token 预算、向量条目。
+ * 还支持计时效果、最少激活数扩展扫描、估算预算与向量检索候选。
  */
 
 /** worlds/*.json 与卡内 character_book 归一化后的统一条目 */
@@ -13,6 +13,7 @@ export interface WiEntry {
   keysecondary: string[];
   content: string;
   constant: boolean;
+  vectorized?: boolean;
   disabled: boolean;
   selective: boolean;
   /** 0=AND_ANY 1=NOT_ALL 2=NOT_ANY 3=AND_ALL */
@@ -48,6 +49,12 @@ export interface WiScanOptions {
   recursionSteps: number;
   caseSensitive: boolean;
   matchWholeWords: boolean;
+  minActivations?: number;
+  minActivationsDepthMax?: number;
+  budgetTokens?: number;
+  /** 由异步向量检索层提供；扫描器统一应用计时效果、概率与预算。 */
+  vectorMatches?: ReadonlySet<string>;
+  estimateContent?: (content: string) => string;
   /** 内容经此函数转出（提示词层正则 WORLD_INFO placement 的挂点） */
   transformContent?: (content: string, entry: WiEntry) => string;
   /** 当前消息总数（计时效果的时间轴；缺省用 recentMessages.length） */
@@ -99,6 +106,7 @@ export function normalizeCardBook(book: unknown, worldName: string): WiEntry[] {
         keysecondary: e.secondary_keys,
         content: e.content,
         constant: e.constant,
+        vectorized: ext.vectorized ?? e.vectorized,
         disable: e.enabled === false,
         selective: e.selective,
         selectiveLogic: ext.selectiveLogic ?? e.selective_logic,
@@ -133,6 +141,7 @@ function normalizeEntry(uid: string, raw: Record<string, unknown>, world: string
       : [],
     content: typeof raw.content === "string" ? raw.content : "",
     constant: raw.constant === true,
+    vectorized: raw.vectorized === true,
     disabled: raw.disable === true || raw.disabled === true,
     selective: raw.selective !== false,
     selectiveLogic: typeof raw.selectiveLogic === "number" ? raw.selectiveLogic : 0,
@@ -301,9 +310,9 @@ function recordTimedEffects(activated: Set<WiEntry>, state: TimedEffectsState, m
  * 返回按 order 升序分桶后的结果。
  */
 export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts: WiScanOptions): WiScanResult {
-  const enabled = entries.filter((e) => !e.disabled && e.content.trim().length > 0 && (e.key.length > 0 || e.constant));
+  const enabled = entries.filter((e) => !e.disabled && e.content.trim().length > 0 && (e.key.length > 0 || e.constant || e.vectorized));
   const activated = new Set<WiEntry>();
-  const activatedContents: string[] = [];
+  const rejected = new Set<WiEntry>();
 
   // 计时效果（可选）：sticky 保活 / cooldown 压制 / delay 压制
   const timed = opts.timed;
@@ -311,62 +320,81 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
   const flags = timed ? timedFlagsFor(enabled, timed, messageCount) : null;
 
   // 深度缓冲：scanDepth 条消息 + 递归内容（对照 WorldInfoBuffer.get）
-  const chatBuffer = recentMessages.slice(-Math.max(1, opts.scanDepth)).join("\n");
-  let recurseBuffer = "";
-
+  const initialDepth = Math.max(1, opts.scanDepth);
+  const depthLimit = Math.max(initialDepth, opts.minActivationsDepthMax && opts.minActivationsDepthMax > 0
+    ? Math.min(recentMessages.length, opts.minActivationsDepthMax) : recentMessages.length);
+  const minActivations = Math.max(0, opts.minActivations ?? 0);
+  const budget = opts.budgetTokens && opts.budgetTokens > 0 ? opts.budgetTokens : Infinity;
+  let spent = 0;
+  let budgetExceeded = false;
+  const candidates = [...enabled].sort((a, b) =>
+    Number(flags?.get(b)?.isSticky ?? false) - Number(flags?.get(a)?.isSticky ?? false) ||
+    Number(b.constant) - Number(a.constant) || a.order - b.order);
+  const activate = (entry: WiEntry, guaranteed: boolean): boolean => {
+    if (!guaranteed && entry.probability < 100 && Math.random() * 100 >= entry.probability) {
+      rejected.add(entry);
+      return false;
+    }
+    const content = opts.estimateContent?.(entry.content) ?? entry.content;
+    const tokens = Math.ceil(content.length / 1.5);
+    if (spent + tokens > budget) {
+      budgetExceeded = true;
+      rejected.add(entry);
+      return false;
+    }
+    spent += tokens;
+    activated.add(entry);
+    return true;
+  };
   const maxSteps = Math.max(1, opts.recursionSteps + 1); // +1: 首轮正常扫描
-  for (let step = 0; step < maxSteps; step++) {
-    const haystack = step === 0 ? chatBuffer : chatBuffer + "\n" + recurseBuffer;
-    let newActivations = 0;
+  for (let depth = initialDepth; depth <= depthLimit; depth++) {
+    const chatBuffer = recentMessages.slice(-depth).join("\n");
+    let recurseBuffer = [...activated].filter((e) => !e.preventRecursion).map((e) => e.content).join("\n");
+    for (let step = 0; step < maxSteps; step++) {
+      const haystack = step === 0 ? chatBuffer : chatBuffer + "\n" + recurseBuffer;
+      let newActivations = 0;
 
-    for (const entry of enabled) {
-      if (activated.has(entry)) continue;
+      for (const entry of candidates) {
+        if (activated.has(entry) || rejected.has(entry)) continue;
 
-      const flag = flags?.get(entry);
-      const isSticky = flag?.isSticky ?? false;
-      // delay：聊天前 N 条消息内压制
-      if (entry.delay && messageCount < entry.delay && !isSticky) continue;
-      // cooldown：期间关键词命中也不激活（sticky 保活豁免）
-      if (flag?.isCooldown && !isSticky) continue;
+        const flag = flags?.get(entry);
+        const isSticky = flag?.isSticky ?? false;
+        // delay：聊天前 N 条消息内压制
+        if (entry.delay && messageCount < entry.delay && !isSticky) continue;
+        // cooldown：期间关键词命中也不激活（sticky 保活豁免）
+        if (flag?.isCooldown && !isSticky) continue;
 
-      // 递归延迟：第 N 层递归起才可被激活（首轮为 step 0；sticky 豁免）
-      if (step < recursionDelayLevel(entry) && !isSticky) continue;
+        // 递归延迟：第 N 层递归起才可被激活（首轮为 step 0；sticky 豁免）
+        if (step < recursionDelayLevel(entry) && !isSticky) continue;
 
-      if (entry.constant) {
-        activated.add(entry);
-        newActivations++;
-        continue;
+        if (entry.constant) {
+          if (activate(entry, true)) newActivations++;
+          continue;
+        }
+        if (entry.excludeRecursion && step > 0 && !isSticky) continue;
+
+        // sticky 保活：无需关键词（对照 "activated because active sticky"）
+        if (isSticky) {
+          if (activate(entry, true)) newActivations++;
+          continue;
+        }
+
+        const scanText = entry.scanDepth
+          ? recentMessages.slice(-entry.scanDepth).join("\n") + (step > 0 ? "\n" + recurseBuffer : "")
+          : haystack;
+        const primary = (entry.vectorized && opts.vectorMatches?.has(worldEntryKey(entry))) ||
+          entry.key.some((k) => k.trim() && matchKeys(scanText, k.trim(), entry, opts));
+        if (!primary) continue;
+
+        if (entry.keysecondary.length > 0 && !secondaryLogicPasses(entry, scanText, opts)) continue;
+        if (activate(entry, false)) newActivations++;
       }
-      if (entry.excludeRecursion && step > 0 && !isSticky) continue;
 
-      // sticky 保活：无需关键词（对照 "activated because active sticky"）
-      if (isSticky) {
-        activated.add(entry);
-        newActivations++;
-        continue;
-      }
-
-      const scanText = entry.scanDepth
-        ? recentMessages.slice(-entry.scanDepth).join("\n") + (step > 0 ? "\n" + recurseBuffer : "")
-        : haystack;
-      const primary = entry.key.some((k) => k.trim() && matchKeys(scanText, k.trim(), entry, opts));
-      if (!primary) continue;
-
-      if (entry.keysecondary.length > 0 && !secondaryLogicPasses(entry, scanText, opts)) continue;
-      if (entry.probability < 100 && Math.random() * 100 >= entry.probability) continue;
-
-      activated.add(entry);
-      newActivations++;
+      if (newActivations === 0) break;
+      // 新激活内容进入递归缓冲（preventRecursion 的不进）
+      recurseBuffer = [...activated].filter((e) => !e.preventRecursion).map((e) => e.content).join("\n");
     }
-
-    if (newActivations === 0) break;
-    // 新激活内容进入递归缓冲（preventRecursion 的不进）
-    for (const entry of activated) {
-      if (!entry.preventRecursion && !activatedContents.includes(entry.content)) {
-        activatedContents.push(entry.content);
-      }
-    }
-    recurseBuffer = activatedContents.join("\n");
+    if (activated.size >= minActivations || budgetExceeded) break;
   }
 
   if (timed) recordTimedEffects(activated, timed, messageCount);
@@ -397,4 +425,8 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
     }
   }
   return { before, after, atDepth, activated: sorted };
+}
+
+export function worldEntryKey(entry: WiEntry): string {
+  return JSON.stringify([entry.world, entry.uid]);
 }

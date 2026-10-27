@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { InstructTemplate, VectorSettings, WorldInfoSettings } from "@pitavern/shared";
 
 /** 单个中转/供应商下的模型条目（用户在设置里手填，M1 不做目录自动发现） */
 export interface ProviderModelConfig {
@@ -18,10 +19,12 @@ export interface ProviderConfig {
   /** 形如 https://host/v1 */
   baseUrl: string;
   apiKey?: string;
+  apiType?: "chat" | "text";
+  instruct?: InstructTemplate;
   models: ProviderModelConfig[];
 }
 
-export interface WorldInfoConfig {
+export interface WorldInfoConfig extends WorldInfoSettings {
   /** 扫描最近 N 条消息（ST world_info_depth） */
   scanDepth: number;
   /** 递归步数（ST world_info_max_recursion_steps） */
@@ -60,6 +63,7 @@ export interface TavernConfig {
   /** 桥接模式额外启用的全局世界书（worlds/ 下的文件名） */
   activeWorlds: string[];
   worldInfo: WorldInfoConfig;
+  vectors: VectorSettings;
   /** 酒馆工具四件套（worldbook_search/recall/variables/skill） */
   toolsEnabled: boolean;
   /** native=纯文本流式；game_tool=强制工具调用防截断（game_content + tavern_think） */
@@ -91,7 +95,8 @@ export function defaultConfig(): TavernConfig {
     contextMode: "simple",
     activePreset: "",
     activeWorlds: [],
-    worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true },
+    worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true, minActivations: 0, minActivationsDepthMax: 0, budgetTokens: 0 },
+    vectors: { enabled: false, providerId: "", model: "", queryMessages: 2, maxEntries: 5, scoreThreshold: 0.3 },
     toolsEnabled: true,
     outputProtocol: "native",
     protocolStrict: true,
@@ -109,6 +114,7 @@ export function loadConfig(): TavernConfig {
     ...raw,
     persona: { ...defaults.persona, ...raw.persona },
     worldInfo: { ...defaults.worldInfo, ...raw.worldInfo },
+    vectors: { ...defaults.vectors, ...raw.vectors },
     compression: { ...defaults.compression, ...raw.compression },
     takeover: { ...defaults.takeover, ...raw.takeover },
   };

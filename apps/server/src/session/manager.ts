@@ -26,6 +26,7 @@ import type { CharacterCard } from "../stdata/types.ts";
 import type { CharacterStore } from "../stdata/characters.ts";
 import { chatMessages, type ChatStore } from "../stdata/chats.ts";
 import { createSetStateTool } from "../agent/tools/set-state.ts";
+import { retrieveVectorEntries } from "../context/vectors.ts";
 
 /** 单个聊天的运行时：Agent 引用 + 事件转发 + 召回限次冷却计数 */
 class ChatSession {
@@ -34,6 +35,7 @@ class ChatSession {
   running = false;
   streamingText = "";
   aborted = false;
+  controller: AbortController | null = null;
   enforcement: RecallEnforcement = { turn: 0, usedThisTurn: 0, cooldownUntilTurn: 0 };
 }
 
@@ -72,9 +74,10 @@ export class SessionManager {
 
   abort(chatId: string): boolean {
     const session = this.sessions.get(chatId);
-    if (!session?.running || !session.agent) return false;
+    if (!session?.running) return false;
     session.aborted = true;
-    session.agent.abort();
+    session.controller?.abort();
+    session.agent?.abort();
     return true;
   }
 
@@ -100,6 +103,7 @@ export class SessionManager {
     session.running = true;
     session.aborted = false;
     session.streamingText = "";
+    session.controller = new AbortController();
     try {
       const config = structuredClone(this.config);
       const document = this.chats.readDocument(chatId);
@@ -109,6 +113,11 @@ export class SessionManager {
       session.character = character.name;
       const models = this.models();
       const model = resolveModel(models, config);
+      const textCompletion = model.api === "openai-text-completions";
+      if (textCompletion && config.contextMode === "takeover") throw new Error("文本补全接口不能使用依赖工具召回的 Agent 接管模式，请选择简洁或 ST 桥接模式");
+      if (textCompletion && config.outputProtocol === "game_tool") throw new Error("文本补全接口不支持 game_tool，请将输出协议设为原生文本流式");
+      const variables = structuredClone(document.metadata.variables && typeof document.metadata.variables === "object" && !Array.isArray(document.metadata.variables)
+        ? document.metadata.variables as Record<string, unknown> : {});
       const userLine = this.chats.appendMessage(chatId, {
         name: config.persona.name, is_user: true, is_system: false, mes: text,
       });
@@ -118,21 +127,21 @@ export class SessionManager {
       const macroEnv: MacroEnv = {
         char: character.name, user: config.persona.name,
         personaDescription: config.persona.description,
-        variables: document.metadata.variables as Record<string, unknown> ?? {},
+        variables,
         lastUserMessage: text,
       };
       const toolCtx: ToolContext = {
         chatId,
         lines: [...document.lines, userLine],
         worldEntries: this.collectWorldEntries(character, config),
-        variables: document.metadata.variables ?? {},
+        variables,
         skillsDir: path.join(this.stDataDir, "skills"),
-        substitute: (s) => substituteMacros(s, macroEnv),
+        substitute: (s) => substituteMacros(s, { ...macroEnv, variables: structuredClone(variables) }),
         enforcement: session.enforcement,
         maxRecallsPerTurn: 6,
         recallCooldownTurns: 10,
       };
-      let tools = config.toolsEnabled ? createTavernTools(toolCtx) : [];
+      let tools = config.toolsEnabled && !textCompletion ? createTavernTools(toolCtx) : [];
       const useProtocol = config.outputProtocol === "game_tool";
       if (config.contextMode === "takeover" && config.takeover.stateProjection) {
         // 状态投影：工具写 chat_metadata.projection，下一轮组装回注 system section
@@ -146,31 +155,44 @@ export class SessionManager {
       // 计时效果状态（sticky/cooldown）：从元数据恢复，扫描内更新，组装后回写
       const timedState =
         config.contextMode === "bridge" ? normalizeTimedState(document.metadata.timedWorldInfo) : undefined;
+      const previewEnv = { ...macroEnv, variables: structuredClone(variables) };
+      const vectorMatches = config.contextMode === "bridge" ? await retrieveVectorEntries(
+        config, toolCtx.worldEntries,
+        toolCtx.lines.filter((line) => !line.is_system).map((line) => substituteMacros(line.mes, previewEnv)),
+        this.stDataDir, session.controller.signal,
+      ) : undefined;
+      session.controller.signal.throwIfAborted();
       const agent = config.contextMode === "bridge"
-        ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, timedState)
+        ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, timedState, vectorMatches)
         : config.contextMode === "takeover"
-          ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, document.metadata, character)
+          ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...document.metadata, variables }, character)
           : createTavernAgent({
               models, model, chatId, thinkingLevel: config.thinkingLevel,
-              systemPrompt: buildSystemPrompt(character, config.persona) + this.toolGuidance(tools.length > 0) +
+              templateNames: { char: character.name, user: config.persona.name },
+              systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0) +
                 (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
-              history: historyToAgentMessages(document.lines), tools: allTools,
+              history: historyToAgentMessages(document.lines.map((line) => ({ ...line, mes: substituteMacros(line.mes, macroEnv) }))), tools: allTools,
               outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
               compression: config.compression,
             });
       session.agent = agent;
       this.wireAgent(agent, chatId, useProtocol);
-      if (timedState) this.chats.writeMetadata(chatId, { timedWorldInfo: timedState });
-      if (config.contextMode === "simple") await agent.prompt(text);
+      this.chats.writeMetadata(chatId, { variables, ...(timedState ? { timedWorldInfo: timedState } : {}) });
+      if (config.contextMode === "simple") {
+        const prompt = substituteMacros(text, macroEnv);
+        this.chats.writeMetadata(chatId, { variables });
+        await agent.prompt(prompt);
+      }
       else await agent.continue();
       if (agent.state.errorMessage && !session.aborted) {
         this.emit({ type: "chat.error", chatId, message: agent.state.errorMessage });
       }
     } catch (error) {
-      this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
+      if (!session.aborted) this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
     } finally {
       session.running = false;
       session.agent = null;
+      session.controller = null;
       this.emit({ type: "chat.finished", chatId });
     }
   }
@@ -198,6 +220,7 @@ export class SessionManager {
     useProtocol: boolean,
     config: TavernConfig,
     timedState?: import("../context/worldinfo.ts").TimedEffectsState,
+    vectorMatches?: ReadonlySet<string>,
   ): Agent {
     const presetName = config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
@@ -215,8 +238,10 @@ export class SessionManager {
       chatLines: toolCtx.lines,
       worldEntries: toolCtx.worldEntries,
       regexScripts,
+      variables: toolCtx.variables as Record<string, unknown>,
       options: {
         ...config.worldInfo,
+        vectorMatches,
         ...(timedState ? { timed: timedState, messageCount: toolCtx.lines.length } : {}),
       },
     });
@@ -231,6 +256,7 @@ export class SessionManager {
       model,
       chatId,
       thinkingLevel: config.thinkingLevel,
+      templateNames: { char: character.name, user: config.persona.name },
       messages,
       sampling: assembled.sampling,
       tools,
