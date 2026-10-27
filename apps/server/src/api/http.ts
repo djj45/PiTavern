@@ -185,7 +185,13 @@ export function createHttpApp(deps: HttpDeps): express.Express {
 
   /** 导入角色卡：PNG（tEXt 内嵌卡）或导出 JSON；同名文件覆盖 */
   app.post("/api/import/character", express.raw({ type: "*/*", limit: "24mb" }), (req, res) => {
-    const fileName = path.basename(String(req.headers["x-file-name"] ?? "card.png"));
+    let fileName: string;
+    try {
+      fileName = path.basename(decodeURIComponent(String(req.headers["x-file-name"] ?? "card.png")));
+    } catch {
+      res.status(400).json({ error: "文件名编码无效" });
+      return;
+    }
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) {
       res.status(400).json({ error: "空文件" });

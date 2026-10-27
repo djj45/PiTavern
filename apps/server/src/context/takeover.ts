@@ -1,6 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { CharacterCard, StChatLine } from "../stdata/types.ts";
 import type { WiEntry } from "./worldinfo.ts";
+import { substituteMacros, type MacroEnv } from "./macros.ts";
 import { historyToAgentMessages } from "../agent/engine.ts";
 import { lineTurns } from "../agent/tools/context.ts";
 import { OUTPUT_PROTOCOL_INSTRUCTION } from "../agent/protocol/game-content.ts";
@@ -46,6 +47,14 @@ const PROJECTION_HEADER = "【现场·主要人物状态（每轮结算更新，
  */
 export function assembleTakeoverContext(input: TakeoverInput): TakeoverResult {
   const { card, persona, chatLines, worldEntries, metadata, options } = input;
+  const macroEnv: MacroEnv = {
+    char: card.name,
+    user: persona.name,
+    personaDescription: persona.description,
+    variables: metadata.variables as Record<string, unknown> ?? {},
+    lastUserMessage: chatLines.filter((line) => line.is_user && !line.is_system).at(-1)?.mes,
+  };
+  const substitute = (text: string) => substituteMacros(text, macroEnv);
 
   const sections: Record<string, string> = {};
   if (card.description) sections.card = card.description;
@@ -89,7 +98,7 @@ export function assembleTakeoverContext(input: TakeoverInput): TakeoverResult {
   const system: Message = {
     role: "system",
     content: guidance,
-    sections,
+    sections: Object.fromEntries(Object.entries(sections).map(([name, content]) => [name, substitute(content)])),
     timestamp: Date.now(),
   };
 
@@ -97,10 +106,12 @@ export function assembleTakeoverContext(input: TakeoverInput): TakeoverResult {
   const turns = lineTurns(chatLines);
   const usableIndexes = chatLines
     .map((line, i) => ({ line, turn: turns[i] }))
-    .filter(({ line, turn }) => !line.is_system && line.mes.trim().length > 0 && turn > 0);
-  const lastTurn = usableIndexes.length > 0 ? Math.max(...usableIndexes.map((u) => u.turn)) : 0;
-  const keepFromTurn = Math.max(1, lastTurn - options.recentTurns + 1);
-  const kept = usableIndexes.filter((u) => u.turn >= keepFromTurn).map((u) => u.line);
+    .filter(({ line, turn }) => !line.is_system && line.mes.trim().length > 0 && turn >= 0);
+  const lastTurn = usableIndexes.at(-1)?.turn ?? 0;
+  // 第 0 轮开场白属于首轮的场景；只有首轮离开历史窗口后才丢弃。
+  const keepFromTurn = lastTurn <= options.recentTurns ? 0 : lastTurn - options.recentTurns + 1;
+  const kept = usableIndexes.filter((u) => u.turn >= keepFromTurn)
+    .map(({ line }) => ({ ...line, mes: substitute(line.mes) }));
 
   return {
     messages: [system, ...historyToAgentMessages(kept)],

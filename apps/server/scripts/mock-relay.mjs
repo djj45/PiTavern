@@ -30,7 +30,7 @@ const server = http.createServer((req, res) => {
     const chars = [...REPLY];
 
     // 工具循环模拟：game_tool 协议优先（think+game 双调用），
-    // 否则 worldbook_search；最后一条是 tool 结果 → 收尾输出正文
+    // 接管模式更新投影，否则 worldbook_search；最后一条是 tool 结果 → 收尾输出正文
     const lastMsg = payload.messages?.[payload.messages.length - 1];
     if (Array.isArray(payload.tools) && payload.tools.length > 0 && lastMsg?.role !== "tool") {
       const toolNames = payload.tools.map((t) => t.function?.name);
@@ -41,6 +41,9 @@ const server = http.createServer((req, res) => {
           { index: 1, id: "call_mock_game", type: "function", function: { name: "game_content", arguments: JSON.stringify({ content: "（她抚过剑脊，剑身发出清越的鸣响）这是会认主的家伙。\n<summary>测试员拔出银剑，酒保说明银剑特性。</summary>" }) } },
         ];
         console.log("[mock] → protocol tool_calls tavern_think + game_content");
+      } else if (toolNames.includes("tavern_set_state") && lastMsg?.role === "user") {
+        calls = [{ index: 0, id: "call_mock_state", type: "function", function: { name: "tavern_set_state", arguments: JSON.stringify({ state: "测试员在酒馆大堂，银剑由掌柜保管。" }) } }];
+        console.log("[mock] → tool_call tavern_set_state");
       } else if (toolNames.includes("worldbook_search") && lastMsg?.role === "user") {
         calls = [{ index: 0, id: "call_mock_1", type: "function", function: { name: "worldbook_search", arguments: JSON.stringify({ query: "银剑", read: true }) } }];
         console.log("[mock] → tool_call worldbook_search(银剑)");

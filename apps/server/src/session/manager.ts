@@ -119,6 +119,7 @@ export class SessionManager {
         char: character.name, user: config.persona.name,
         personaDescription: config.persona.description,
         variables: document.metadata.variables as Record<string, unknown> ?? {},
+        lastUserMessage: text,
       };
       const toolCtx: ToolContext = {
         chatId,
@@ -137,6 +138,7 @@ export class SessionManager {
         // 状态投影：工具写 chat_metadata.projection，下一轮组装回注 system section
         toolCtx.setState = (projection: string) => {
           this.chats.writeMetadata(chatId, { projection });
+          this.emit({ type: "chat.projection", chatId, projection });
         };
         tools = [...tools, createSetStateTool(toolCtx)];
       }
@@ -159,8 +161,8 @@ export class SessionManager {
       session.agent = agent;
       this.wireAgent(agent, chatId, useProtocol);
       if (timedState) this.chats.writeMetadata(chatId, { timedWorldInfo: timedState });
-      if (config.contextMode === "bridge") await agent.continue();
-      else await agent.prompt(text);
+      if (config.contextMode === "simple") await agent.prompt(text);
+      else await agent.continue();
       if (agent.state.errorMessage && !session.aborted) {
         this.emit({ type: "chat.error", chatId, message: agent.state.errorMessage });
       }

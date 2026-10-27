@@ -326,9 +326,34 @@ try {
       headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent("异乡客.png") },
       body: card2,
     });
-    assert.ok((await upRes.json()).ok, "角色卡应可导入");
+    const upBody = await upRes.json();
+    assert.ok(upBody.ok, "角色卡应可导入");
+    assert.equal(upBody.file, "异乡客.png", "上传文件名应解码一次后保存");
+    assert.ok(fs.existsSync(path.join(cardsDir, "异乡客.png")));
     const chars = await (await fetch(`${BASE}/api/characters`)).json();
     assert.ok(chars.some((c) => c.name === "异乡客"), "导入的卡应出现在列表");
+
+    // 覆盖已有中文文件，不能另存一份百分号编码的同名角色卡。
+    const overwrite = await fetch(`${BASE}/api/import/character`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent("测试看板娘.png") },
+      body: buildTestCardPng("测试看板娘"),
+    });
+    assert.equal((await overwrite.json()).file, "测试看板娘.png");
+    const jsonName = "中文 100% 卡.json";
+    fs.writeFileSync(path.join(cardsDir, jsonName), JSON.stringify({ name: "中文 JSON 角色", description: "旧设定" }));
+    const jsonImport = await fetch(`${BASE}/api/import/character`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent(jsonName) },
+      body: JSON.stringify({ name: "中文 JSON 角色", description: "更新后的设定" }),
+    });
+    assert.equal((await jsonImport.json()).file, jsonName);
+    const importedCards = await (await fetch(`${BASE}/api/characters`)).json();
+    assert.equal(importedCards.filter((c) => c.name === "测试看板娘").length, 1);
+    const jsonCards = importedCards.filter((c) => c.name === "中文 JSON 角色");
+    assert.equal(jsonCards.length, 1);
+    assert.equal(jsonCards[0].description, "更新后的设定");
+    assert.deepEqual(fs.readdirSync(cardsDir).sort(), ["测试看板娘.png", "异乡客.png", jsonName].sort());
     const badRes = await fetch(`${BASE}/api/import/character`, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent("坏卡.png") },
@@ -505,9 +530,8 @@ try {
   ws7.on("message", (raw) => events7.push(JSON.parse(String(raw))));
   await until(() => ws7.readyState === 1, "ws7 连接");
   ws7.send(JSON.stringify({ type: "chat.send", chatId, text: "接管模式下再讲一段。" }));
-  await until(() => events7.some((e) => e.type === "chat.done") || events7.some((e) => e.type === "chat.error"), "接管轮应完成");
+  await until(() => events7.some((e) => e.type === "chat.finished"), "接管轮应完成");
   assert.ok(events7.some((e) => e.type === "chat.done"), `接管轮: ${JSON.stringify(events7.filter((e) => e.type === "chat.error"))}`);
-  ws7.close();
 
   const takeoverSent = lastRequest();
   const toolNames = (takeoverSent.tools ?? []).map((t) => t.function?.name);
@@ -522,7 +546,21 @@ try {
   const allText = takeoverSent.messages.map((m) => JSON.stringify(m.content)).join("\n");
   assert.ok(!allText.includes("来一杯热的"), "接管模式早期轮不应进上下文（近 3 轮截断）");
   assert.ok(allText.includes("接管模式下再讲一段"), "本轮用户消息应在");
-  console.log("✓ 接管模式（常驻注入/关键词排除/近3轮截断/set_state 挂载）");
+  assert.equal(takeoverSent.messages.filter((m) => m.role === "user" && JSON.stringify(m.content).includes("接管模式下再讲一段。")).length, 1, "本轮用户消息只能发送一次");
+  const projectionEvent = events7.find((e) => e.type === "chat.projection");
+  assert.equal(projectionEvent?.projection, "测试员在酒馆大堂，银剑由掌柜保管。");
+  assert.ok(events7.some((e) => e.type === "chat.tool_end" && e.toolName === "tavern_set_state" && !e.isError));
+  const projectedSnapshot = await (await fetch(`${BASE}/api/chats/${chatId.split("/").map(encodeURIComponent).join("/")}`)).json();
+  assert.equal(projectedSnapshot.projection, projectionEvent.projection, "投影应持久化并进入重连快照");
+
+  events7.length = 0;
+  ws7.send(JSON.stringify({ type: "chat.send", chatId, text: "继续接管，确认上一轮状态。" }));
+  await until(() => events7.some((e) => e.type === "chat.finished"), "投影回注轮应完成");
+  assert.ok(events7.some((e) => e.type === "chat.done"));
+  const projectedRequest = lastRequest();
+  assert.ok(JSON.stringify(projectedRequest.messages.find((m) => m.role === "system").content).includes(projectionEvent.projection), "下一轮 system 必须回注上一轮状态");
+  ws7.close();
+  console.log("✓ 接管模式（常驻注入/关键词排除/近3轮截断/单次用户消息/投影增量事件与落库/下一轮回注）");
 
   console.log("\n=== M1~M6 冒烟全部通过 ===");
 } finally {

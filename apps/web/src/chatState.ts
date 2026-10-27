@@ -48,6 +48,9 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
   if (!previous) return state;
   let chat = previous;
   switch (event.type) {
+    case "chat.projection":
+      chat = { ...chat, projection: event.projection };
+      break;
     case "pending":
       chat = { ...chat, pending: true };
       break;

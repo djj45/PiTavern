@@ -13,6 +13,7 @@ import { CharacterStore } from "../src/stdata/characters.ts";
 import { defaultConfig } from "../src/config.ts";
 import { buildModels } from "../src/providers/models.ts";
 import { chatReducer, type ChatsState } from "../../web/src/chatState.ts";
+import { isToolItem } from "../../web/src/chatItems.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "pitavern-regression-"));
 try {
@@ -116,6 +117,21 @@ try {
   state = chatReducer(state, { type: "chat.error", chatId: "a", message: "配置错误" });
   assert.equal(state.a.pending, false);
   console.log("✓ 前端会话隔离、回合结束、失败解除等待、重连快照及增量衔接");
+
+  state = chatReducer(state, { type: "chat.tool_start", chatId: "a", toolCallId: "state-1", toolName: "tavern_set_state", args: { state: "人在大堂" } });
+  state = chatReducer(state, { type: "chat.projection", chatId: "a", projection: "人在大堂" });
+  state = chatReducer(state, { type: "chat.tool_end", chatId: "a", toolCallId: "state-1", toolName: "tavern_set_state", isError: false, details: { summary: "更新投影" } });
+  const itemsBeforeFinish = state.a.items;
+  const usageBeforeFinish = state.a.usage;
+  state = chatReducer(state, { type: "chat.finished", chatId: "a" });
+  assert.equal(state.a.projection, "人在大堂");
+  assert.deepEqual(state.a.items, itemsBeforeFinish, "投影更新和回合结束不能覆盖聊天正文及已完成的工具卡");
+  assert.equal(state.a.items.filter(isToolItem).length, 1);
+  assert.equal(state.a.usage, usageBeforeFinish);
+  assert.equal(state.b.projection, undefined, "投影应按聊天隔离");
+  state = chatReducer(state, { type: "chat.snapshot", chatId: "a", snapshot: { ...snapshot("a"), projection: "人在大堂" } });
+  assert.equal(state.a.projection, "人在大堂", "重新连接仍可从快照恢复投影");
+  console.log("✓ 投影增量更新、回合结束保留工具卡、后台隔离及重连恢复");
 } finally {
   // 本脚本只产生本地合成夹具，不包含网络请求记录。
   fs.rmSync(root, { recursive: true, force: true });

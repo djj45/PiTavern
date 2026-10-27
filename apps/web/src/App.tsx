@@ -60,10 +60,6 @@ export function App() {
       void refreshChats();
     } else if (event.type === "chat.finished") {
       void refreshChats();
-      // 接管模式：tavern_set_state 可能在本轮更新了投影，重新拉快照
-      if (activeChatIdRef.current === event.chatId) {
-        sendRef.current({ type: "chat.sync", chatId: event.chatId });
-      }
     } else if (event.type === "chat.error") {
       showNotice(`聊天失败: ${event.message}`);
     }

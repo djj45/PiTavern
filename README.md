@@ -13,12 +13,14 @@ npm run e2e          # mock 中转端到端冒烟（含工具循环）
 npm run verify:bridge # 桥接组装器对齐验证（真实猫神预设）
 npm run verify:tools # 工具四件套 + 限次冷却强制验证
 npm run verify:m4    # 输出协议还原 + 流式提取 + 历史压缩验证
-npm run verify:takeover # 接管模式组装 + 状态投影验证
+npm run verify:takeover # 接管模式组装 + 状态投影验证（合成数据，无需本地角色卡）
 npm run verify:m6    # 世界书计时效果（sticky/cooldown/delay）验证
 npm run verify:regression # 空聊天/缓存/完整工具轮压缩/前端会话状态回归
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。
+
+接管模式的状态投影通过增量事件更新，回复结束后保留本次会话的工具活动。角色卡、常驻世界书与历史中的宏在组装时展开；开场白随首轮保留，直到首轮离开历史窗口。全局世界书可直接在各上下文模式下导入和启用。
 
 两种上下文模式统一在 Agent 层压缩完整旧轮次，保留当前工具调用链，并为输出预留预算。预算仍采用保守字符估算；模型的 `contextWindow`、`maxTokens` 应按实际能力配置。压缩后仍超预算时会返回明确错误。
 

@@ -116,6 +116,8 @@ export type ServerEvent =
   /** 本轮生成开始 */
   | { type: "chat.started"; chatId: string; message: ChatMessageDto }
   | { type: "chat.snapshot"; chatId: string; snapshot: ChatSnapshotDto }
+  /** 状态投影已落库；增量更新，不替换聊天正文和工具活动。 */
+  | { type: "chat.projection"; chatId: string; projection: string }
   /** 整个用户回合结束，包括停止、失败和没有正文的情况。 */
   | { type: "chat.finished"; chatId: string }
   /** 正文流式增量 */

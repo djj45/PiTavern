@@ -241,7 +241,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         {/* 对话上下文 */}
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-medium">对话上下文</h3>
-          <div className="mb-2 flex gap-2">
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
               onClick={() => setContextMode("simple")}
@@ -274,7 +274,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
             </button>
           </div>
           {contextMode === "takeover" && (
-            <div className="flex items-center gap-4 rounded-lg border border-tavern-border bg-tavern-bg p-3 text-xs text-tavern-dim">
+            <div className="flex flex-wrap items-center gap-4 rounded-lg border border-tavern-border bg-tavern-bg p-3 text-xs text-tavern-dim">
               <label className="flex items-center gap-1.5">
                 保留全文轮数
                 <input
@@ -307,46 +307,6 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
                   </option>
                 ))}
               </select>
-              <label className="mb-1 flex items-center gap-2 text-xs text-tavern-dim">
-                全局世界书（卡内书与卡片引用世界自动生效）
-                <button
-                  type="button"
-                  onClick={() => worldFileRef.current?.click()}
-                  className="ml-auto rounded border border-tavern-border px-1.5 py-0.5 hover:border-tavern-accent-dim hover:text-tavern-text"
-                >
-                  ＋ 导入
-                </button>
-                <input
-                  ref={worldFileRef}
-                  type="file"
-                  accept=".json"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) void importWorld(file);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-              {worlds.length === 0 ? (
-                <p className="mb-2 text-xs text-tavern-dim">worlds/ 目录暂无世界书文件</p>
-              ) : (
-                <div className="mb-2 flex flex-wrap gap-1.5">
-                  {worlds.map((w) => {
-                    const on = activeWorlds.includes(w.name);
-                    return (
-                      <button
-                        key={w.name}
-                        type="button"
-                        onClick={() => setActiveWorlds((list) => (on ? list.filter((x) => x !== w.name) : [...list, w.name]))}
-                        className={`rounded-full px-2.5 py-0.5 text-xs ${on ? "bg-tavern-accent text-tavern-bg" : "bg-tavern-raised text-tavern-dim hover:text-tavern-text"}`}
-                      >
-                        {w.name}（{w.entryCount}）
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
               <div className="flex items-center gap-4 text-xs text-tavern-dim">
                 <label className="flex items-center gap-1.5">
                   扫描深度
@@ -373,12 +333,55 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
               </div>
             </div>
           )}
+          <div className="mt-3 rounded-lg border border-tavern-border bg-tavern-bg p-3">
+            <label className="mb-1 flex items-center gap-2 text-xs text-tavern-dim">
+              全局世界书（卡内书与卡片引用世界自动生效）
+              <button
+                type="button"
+                aria-label="导入世界书"
+                onClick={() => worldFileRef.current?.click()}
+                className="ml-auto rounded border border-tavern-border px-1.5 py-0.5 hover:border-tavern-accent-dim hover:text-tavern-text"
+              >
+                ＋ 导入
+              </button>
+              <input
+                ref={worldFileRef}
+                type="file"
+                accept=".json"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void importWorld(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            {worlds.length === 0 ? (
+              <p className="mb-2 text-xs text-tavern-dim">worlds/ 目录暂无世界书文件</p>
+            ) : (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {worlds.map((w) => {
+                  const on = activeWorlds.includes(w.name);
+                  return (
+                    <button
+                      key={w.name}
+                      type="button"
+                      onClick={() => setActiveWorlds((list) => (on ? list.filter((x) => x !== w.name) : [...list, w.name]))}
+                      className={`rounded-full px-2.5 py-0.5 text-xs ${on ? "bg-tavern-accent text-tavern-bg" : "bg-tavern-raised text-tavern-dim hover:text-tavern-text"}`}
+                    >
+                      {w.name}（{w.entryCount}）
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </section>
 
         {/* 输出协议与压缩 */}
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-medium">输出协议与历史压缩</h3>
-          <div className="mb-2 flex gap-2">
+          <div className="mb-2 flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
               onClick={() => setOutputProtocol("native")}
@@ -406,7 +409,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
               向中转透传 tool_choice=required（部分中转不兼容时关闭）
             </label>
           )}
-          <div className="flex items-center gap-4 rounded-lg border border-tavern-border bg-tavern-bg p-3 text-xs text-tavern-dim">
+          <div className="flex flex-wrap items-center gap-4 rounded-lg border border-tavern-border bg-tavern-bg p-3 text-xs text-tavern-dim">
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={compressionEnabled} onChange={(e) => setCompressionEnabled(e.target.checked)} />
               历史压缩（超上下文预算时：旧轮摘要折叠为 |用户|/|游戏剧情| 块）
