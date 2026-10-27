@@ -2,6 +2,21 @@
 
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
+## 一键启动
+
+macOS 双击项目根目录的 **`start.command`** 即可，也可以在终端执行 `npm start`。
+
+需先安装 Node.js 22.19 或更高版本（含 npm）。脚本自动安装缺失依赖、构建前端、启动服务并打开浏览器；首次安装依赖需要联网。前后端共用一个地址，无需另外启动 Vite。
+
+默认地址为 `http://127.0.0.1:8787`，已有配置中的端口会自动生效。保持启动窗口打开；按 `Ctrl+C` 或关闭窗口可停止本次服务。端口被占用时会显示提示，可在终端改用其他端口：
+
+```sh
+PORT=9898 ./start.command
+PITAVERN_OPEN_BROWSER=0 ./start.command # 不自动打开浏览器
+```
+
+`PITAVERN_CONFIG` 可指定其他配置文件；相对路径以项目根目录为基准。启动失败时，双击打开的窗口会保留错误信息，按回车后退出。
+
 ## 开发
 
 ```sh
