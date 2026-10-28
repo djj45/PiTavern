@@ -88,6 +88,7 @@ export function providerDtoList(config: TavernConfig) {
       reasoning: m.reasoning ?? false,
       contextWindow: m.contextWindow ?? 1_000_000,
       maxTokens: m.maxTokens ?? 16_384,
+      tokenizer: m.tokenizer ?? "auto",
     })),
   }));
 }

@@ -1,4 +1,10 @@
 import type {
+  AuthorNoteDto,
+  AuthorNoteSnapshotDto,
+  ChatBackupDto,
+  GenerationPageDto,
+  ChatBackupPreviewDto,
+  ChatPageDto,
   ChatSnapshotDto,
   ChatSummaryDto,
   CharacterDto,
@@ -16,6 +22,13 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  authorNote: (chatId: string) => fetch("/api/chat/author-note?" + new URLSearchParams({ chatId }))
+    .then((r) => json<AuthorNoteSnapshotDto>(r)),
+  saveAuthorNote: (chatId: string, note: AuthorNoteDto, revision: string) =>
+    fetch("/api/chat/author-note", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, note, revision }) })
+      .then((r) => json<AuthorNoteSnapshotDto>(r)),
+  activity: (chatId: string, before?: string) => fetch("/api/chat/activity?" + new URLSearchParams({ chatId, ...(before ? { before } : {}) }))
+    .then((r) => json<GenerationPageDto>(r)),
   connection: () => fetch("/api/connection").then((r) => json<ConnectionDto>(r)),
   saveConnection: (patch: Partial<Omit<ConnectionDto, "providers">> & {
     providers?: Array<ConnectionDto["providers"][number] & { apiKey?: string }>;
@@ -51,6 +64,23 @@ export const api = {
     fetch(`/api/chats/${id.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }).then((r) =>
       json<{ ok: boolean }>(r),
     ),
+  editMessage: (chatId: string, messageId: string, text: string, expectedText: string) =>
+    fetch("/api/chat/message", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, messageId, text, expectedText }),
+    }).then((r) => json<{ ok: boolean }>(r)),
+  history: (chatId: string, before: number, revision: string) =>
+    fetch("/api/chat/history?" + new URLSearchParams({ chatId, before: String(before), revision })).then((r) => json<ChatPageDto>(r)),
+  selectReply: (chatId: string, userMessageId: string, selected: number, revision: string) =>
+    fetch("/api/chat/reply", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, userMessageId, selected, revision }) }).then((r) => json<{ ok: boolean }>(r)),
+  backups: (chatId: string, before?: string) => fetch("/api/chat/backups?" + new URLSearchParams({ chatId, ...(before ? { before } : {}) }))
+    .then((r) => json<{ backups: ChatBackupDto[]; before: string | null }>(r)),
+  previewBackup: (chatId: string, backupId: string) => fetch("/api/chat/backup?" + new URLSearchParams({ chatId, backupId }))
+    .then((r) => json<ChatBackupPreviewDto>(r)),
+  restoreBackup: (chatId: string, backupId: string, revision: string) =>
+    fetch("/api/chat/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, backupId, revision }) }).then((r) => json<{ ok: boolean }>(r)),
   importCharacter: (file: File) =>
     fetch("/api/import/character", {
       method: "POST",

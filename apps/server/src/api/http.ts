@@ -14,6 +14,7 @@ import type { TavernConfig } from "../config.ts";
 import { saveConfig, seedDataDirs } from "../config.ts";
 import { listPresets, presetsDir } from "../context/preset.ts";
 import { normalizeWorldFile } from "../context/worldinfo.ts";
+import { validateAuthorNote } from "../context/author-note.ts";
 import { normalizeInstruct } from "../context/instruct.ts";
 import { embedTexts } from "../context/vectors.ts";
 import { parseCardFromPng } from "../stdata/png.ts";
@@ -126,8 +127,10 @@ export function createHttpApp(deps: HttpDeps): express.Express {
             id: m.id,
             name: m.name || m.id,
             reasoning: m.reasoning ?? false,
-            contextWindow: m.contextWindow,
-            maxTokens: m.maxTokens,
+            contextWindow: boundedNumber(m.contextWindow ?? 1_000_000, "上下文长度", 1, 10_000_000, true),
+            maxTokens: boundedNumber(m.maxTokens ?? 16_384, "最大输出", 1, 10_000_000, true),
+            tokenizer: ["auto", "cl100k_base", "o200k_base", "estimate"].includes(m.tokenizer ?? "auto") ? m.tokenizer ?? "auto"
+              : (() => { throw new Error("不支持的 token 计数方式"); })(),
           })),
         };
       });
@@ -144,10 +147,11 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       }
       if (body.worldInfo && typeof body.worldInfo === "object") {
         const wi = body.worldInfo as Partial<ConnectionDto["worldInfo"]>;
-        if (typeof wi.scanDepth === "number") next.worldInfo.scanDepth = Math.max(1, Math.min(100, wi.scanDepth));
+        if (typeof wi.scanDepth === "number") next.worldInfo.scanDepth = boundedNumber(wi.scanDepth, "扫描深度", 0, 1000, true);
         if (typeof wi.recursionSteps === "number") next.worldInfo.recursionSteps = Math.max(0, Math.min(10, wi.recursionSteps));
         if (typeof wi.caseSensitive === "boolean") next.worldInfo.caseSensitive = wi.caseSensitive;
         if (typeof wi.matchWholeWords === "boolean") next.worldInfo.matchWholeWords = wi.matchWholeWords;
+        if (typeof wi.useGroupScoring === "boolean") next.worldInfo.useGroupScoring = wi.useGroupScoring;
         for (const key of ["minActivations", "minActivationsDepthMax", "budgetTokens"] as const) {
           if (wi[key] !== undefined) next.worldInfo[key] = boundedNumber(wi[key], key, 0, key === "budgetTokens" ? 1000000 : 1000, true);
         }
@@ -308,6 +312,83 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     res.sendFile(card.avatarFile);
   });
 
+  app.get("/api/chat/author-note", (req, res) => {
+    try { res.json(sessions.authorNote(String(req.query.chatId ?? ""))); }
+    catch (error) { res.status(404).json({ error: (error as Error).message }); }
+  });
+
+  app.put("/api/chat/author-note", (req, res) => {
+    const { chatId, note, revision } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof revision !== "string") return res.status(400).json({ error: "作者注释参数无效" });
+    let validated;
+    try { validated = validateAuthorNote(note); }
+    catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+    try {
+      sessions.saveAuthorNote(chatId, validated, revision);
+      res.json(sessions.authorNote(chatId));
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+
+  app.patch("/api/chat/message", (req, res) => {
+    const { chatId, messageId, text, expectedText } = req.body ?? {};
+    if ([chatId, messageId, text, expectedText].some((value) => typeof value !== "string") || !text.trim() || text.length > 1_000_000) {
+      res.status(400).json({ error: "消息参数无效" });
+      return;
+    }
+    try {
+      sessions.editMessage(chatId, messageId, text, expectedText);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/chat/activity", (req, res) => {
+    try {
+      const chatId = String(req.query.chatId ?? "");
+      if (!chats.readDocument(chatId)) return res.status(404).json({ error: "聊天不存在" });
+      res.json(sessions.activityPage(chatId, typeof req.query.before === "string" ? req.query.before : undefined));
+    } catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+
+  app.get("/api/chat/history", (req, res) => {
+    const { chatId, revision, before } = req.query;
+    if (typeof chatId !== "string" || typeof revision !== "string" || typeof before !== "string" || !/^\d+$/.test(before)) {
+      res.status(400).json({ error: "历史分页参数无效" }); return;
+    }
+    try { res.json(chats.page(chatId, Number(before), revision)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/chat/reply", (req, res) => {
+    const { chatId, userMessageId, selected, revision } = req.body ?? {};
+    if ([chatId, userMessageId, revision].some((v) => typeof v !== "string") || !Number.isInteger(selected)) {
+      res.status(400).json({ error: "候选回复参数无效" }); return;
+    }
+    try { sessions.selectReply(chatId, userMessageId, selected, revision); res.json({ ok: true }); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.get("/api/chat/backups", (req, res) => {
+    if (typeof req.query.chatId !== "string") { res.status(400).json({ error: "聊天参数无效" }); return; }
+    try { res.json(chats.backups(req.query.chatId, typeof req.query.before === "string" ? req.query.before : undefined)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.get("/api/chat/backup", (req, res) => {
+    const { chatId, backupId } = req.query;
+    if (typeof chatId !== "string" || typeof backupId !== "string") { res.status(400).json({ error: "备份参数无效" }); return; }
+    try { res.json(chats.previewBackup(chatId, backupId)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/chat/backup/restore", (req, res) => {
+    const { chatId, backupId, revision } = req.body ?? {};
+    if ([chatId, backupId, revision].some((v) => typeof v !== "string")) { res.status(400).json({ error: "备份参数无效" }); return; }
+    try { sessions.restoreBackup(chatId, backupId, revision); res.json({ ok: true }); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   app.get("/api/chats", (req, res) => {
     const character = typeof req.query.character === "string" ? req.query.character : undefined;
     const list: ChatSummaryDto[] = chats.listChats(character).map((m) => ({
@@ -340,7 +421,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   /** 聊天导出：?format=md（Markdown，思维链折叠）| jsonl（ST 原始格式）。需在通配路由前注册 */
   app.get("/api/chats/*splat/export", (req, res) => {
     const chatId = (Array.isArray(req.params.splat) ? req.params.splat : [req.params.splat]).join("/");
-    const snapshot = sessions.snapshot(chatId);
+    const snapshot = sessions.snapshot(chatId, true);
     if (!snapshot) {
       res.status(404).json({ error: `聊天不存在: ${chatId}` });
       return;

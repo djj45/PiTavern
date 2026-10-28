@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ServerEvent } from "@pitavern/shared";
 import { api } from "./api.ts";
 import { useTavernSocket } from "./socket.ts";
+import { isToolItem } from "./chatItems.ts";
 import { chatReducer, EMPTY_USAGE } from "./chatState.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { TopBar } from "./components/TopBar.tsx";
@@ -22,6 +23,10 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem("pitavern-theme") ?? "night");
   const activeChat = activeChatId ? chatStates[activeChatId] ?? null : null;
+  const activeChatRef = useRef(activeChat);
+  activeChatRef.current = activeChat;
+  const [loadingHistoryFor, setLoadingHistoryFor] = useState<string | null>(null);
+  const historyRequests = useRef(new Set<string>());
   const activeChatIdRef = useRef<string | null>(null);
   activeChatIdRef.current = activeChatId;
   const sendRef = useRef<(message: ClientMessage) => boolean>(() => false);
@@ -58,7 +63,7 @@ export function App() {
       const chatId = activeChatIdRef.current;
       if (chatId) sendRef.current({ type: "chat.sync", chatId });
       void refreshChats();
-    } else if (event.type === "chat.finished") {
+    } else if (event.type === "chat.finished" || event.type === "chat.snapshot") {
       void refreshChats();
     } else if (event.type === "chat.error") {
       showNotice(`聊天失败: ${event.message}`);
@@ -107,6 +112,58 @@ export function App() {
     return true;
   }, [activeChat, socket.send, showNotice]);
 
+  const editMessage = useCallback(async (messageId: string, text: string, expectedText: string): Promise<boolean> => {
+    const activeChat = activeChatRef.current;
+    if (!activeChat || activeChat.pending || activeChat.streamingText !== null) return false;
+    try {
+      await api.editMessage(activeChat.id, messageId, text, expectedText);
+      showNotice("消息已保存，原存档已备份");
+      return true;
+    } catch (error) { showNotice("修改失败: " + (error as Error).message); return false; }
+  }, [showNotice]);
+
+  const loadOlder = useCallback(async (): Promise<boolean> => {
+    const chat = activeChatRef.current;
+    if (!chat?.page || chat.page.before === null || chat.pending || chat.streamingText !== null || historyRequests.current.has(chat.id)) return false;
+    const { before, revision } = chat.page;
+    historyRequests.current.add(chat.id); setLoadingHistoryFor(chat.id);
+    try {
+      const page = await api.history(chat.id, before, revision);
+      const current = activeChatRef.current;
+      if (current?.id !== chat.id || current.page?.revision !== revision || current.page.before !== before) return false;
+      dispatch({ type: "history.page", chatId: chat.id, page, before });
+      return true;
+    } catch (error) {
+      showNotice("加载历史失败: " + (error as Error).message);
+      sendRef.current({ type: "chat.sync", chatId: chat.id });
+      return false;
+    } finally {
+      historyRequests.current.delete(chat.id);
+      setLoadingHistoryFor((id) => id === chat.id ? null : id);
+    }
+  }, [showNotice]);
+
+  const selectReply = useCallback(async (selected: number): Promise<void> => {
+    const chat = activeChatRef.current;
+    if (!chat?.replyChoices || !chat.page || chat.pending || chat.streamingText !== null) return;
+    try { await api.selectReply(chat.id, chat.replyChoices.userMessageId, selected, chat.page.revision); }
+    catch (error) {
+      showNotice("切换失败: " + (error as Error).message);
+      sendRef.current({ type: "chat.sync", chatId: chat.id });
+    }
+  }, [showNotice]);
+
+  const restored = useCallback(() => showNotice("备份已恢复，恢复前的存档也已备份"), [showNotice]);
+
+  const regenerate = useCallback(() => {
+    if (!activeChat || activeChat.pending || activeChat.streamingText !== null) return;
+    const latest = activeChat.items.filter((item) => !isToolItem(item)).at(-1);
+    if (!latest || isToolItem(latest)) return;
+    if (socket.send({ type: "chat.regenerate", chatId: activeChat.id, messageId: latest.id, expectedText: latest.text })) {
+      dispatch({ type: "pending", chatId: activeChat.id });
+    } else showNotice("服务未连接，请重连后重试");
+  }, [activeChat, socket.send, showNotice]);
+
   const stopGeneration = useCallback(() => {
     if (activeChatId && !socket.send({ type: "chat.abort", chatId: activeChatId })) showNotice("服务未连接，暂时无法停止生成");
   }, [activeChatId, socket.send, showNotice]);
@@ -141,9 +198,13 @@ export function App() {
           onCharactersChanged={refreshCharacters} onNotice={showNotice} mobileOpen={navOpen} onClose={() => setNavOpen(false)} />
         <ChatView chat={activeChat} personaName={connection?.persona.name ?? "你"}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
-          onSend={sendMessage} onStop={stopGeneration} disabled={!connection?.defaultModel} connected={socket.connected} />
+          onSelectReply={selectReply} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored}
+          onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} disabled={!connection?.defaultModel} connected={socket.connected} />
         {panelOpen && (
           <ActivityPanel
+            chatId={activeChat?.id}
+            activity={activeChat?.activity}
+            activityError={activeChat?.activityError}
             items={activeChat?.items ?? []}
             usage={activeChat?.usage ?? EMPTY_USAGE}
             projection={activeChat?.projection}
@@ -155,6 +216,7 @@ export function App() {
       {settingsOpen && <SettingsDialog connection={connection} onClose={() => setSettingsOpen(false)}
         onSaved={(restartRequired) => {
           void refreshConnection();
+          if (activeChatIdRef.current) sendRef.current({ type: "chat.sync", chatId: activeChatIdRef.current });
           showNotice(restartRequired ? "设置已保存，数据目录将在重启服务后生效" : "设置已保存");
         }} onError={showNotice} onNotice={showNotice} />}
     </div>

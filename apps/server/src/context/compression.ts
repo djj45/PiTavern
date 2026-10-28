@@ -15,6 +15,7 @@ export interface CompressionResult {
     originalChars: number;
     compressedChars: number;
     squashedMessages: number;
+    squashedTurns: number;
     overBudget: boolean;
   };
 }
@@ -77,14 +78,16 @@ function squash(messages: AgentMessage[], keepFullTurns: number): Message {
 }
 
 /** 原位替换旧轮次，保留系统消息的位置和当前轮完整的工具调用链。 */
-export function compressHistory(messages: AgentMessage[], config: CompressionConfig, budgetChars: number): CompressionResult {
+export function compressHistory(messages: AgentMessage[], config: CompressionConfig, budget: number,
+  measure: (messages: AgentMessage[]) => number = contextChars): CompressionResult {
   const originalChars = contextChars(messages);
   const userStarts = messages.flatMap((message, index) => message.role === "user" ? [index] : []);
   const keepFullTurns = Math.max(1, Math.floor(config.keepFullTurns));
   const tailStart = userStarts.length > keepFullTurns ? userStarts[userStarts.length - keepFullTurns] : 0;
   const output: AgentMessage[] = [];
   let squashedMessages = 0;
-  if (config.enabled && originalChars > budgetChars && tailStart > 0) {
+  let squashedTurns = 0;
+  if (config.enabled && measure(messages) > budget && tailStart > 0) {
     for (let i = 0; i < tailStart;) {
       if (!isConversation(messages[i])) {
         output.push(messages[i++]);
@@ -96,9 +99,10 @@ export function compressHistory(messages: AgentMessage[], config: CompressionCon
       // 系统消息可能位于工具调用之间：这种块保持原样，不能遗留孤立的结果。
       if (completeToolGroups(block)) {
         const compacted = squash(block, keepFullTurns);
-        if (contextChars([compacted]) < contextChars(block)) {
+        if (measure([compacted]) < measure(block)) {
           output.push(compacted);
           squashedMessages += block.length;
+          squashedTurns += block.filter((message) => message.role === "user").length;
           continue;
         }
       }
@@ -111,8 +115,8 @@ export function compressHistory(messages: AgentMessage[], config: CompressionCon
   return {
     messages: result,
     stats: {
-      triggered: squashedMessages > 0, originalChars, compressedChars, squashedMessages,
-      overBudget: compressedChars > budgetChars,
+      triggered: squashedMessages > 0, originalChars, compressedChars, squashedMessages, squashedTurns,
+      overBudget: measure(result) > budget,
     },
   };
 }

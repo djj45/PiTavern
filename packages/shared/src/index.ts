@@ -61,9 +61,10 @@ export interface WorldInfoSettings {
   recursionSteps: number;
   caseSensitive: boolean;
   matchWholeWords: boolean;
+  useGroupScoring?: boolean;
   minActivations?: number;
   minActivationsDepthMax?: number;
-  /** 0 不单独限制；使用保守字符估算，非模型精确 token 数。 */
+  /** 0 不单独限制；使用模型计数器，未知模型回退估算。 */
   budgetTokens?: number;
 }
 
@@ -75,6 +76,96 @@ export interface ProviderModelDto {
   reasoning: boolean;
   contextWindow: number;
   maxTokens: number;
+  tokenizer?: TokenizerSetting;
+}
+
+export type TokenizerSetting = "auto" | "cl100k_base" | "o200k_base" | "estimate";
+
+export interface GenerationUsageDto {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  costTotal: number;
+  responses: number;
+  responsesWithUsage: number;
+}
+
+export interface ToolActivityDto {
+  key: string;
+  toolCallId: string;
+  toolName: string;
+  args: unknown;
+  status: "running" | "done" | "error";
+  summary?: string;
+  durationMs?: number;
+}
+
+export interface WorldInfoDecisionDto {
+  uid: string;
+  world: string;
+  label: string;
+  status: "included" | "skipped";
+  reason: string;
+  tokens?: number;
+}
+
+export interface ContextAssemblyDto {
+  mode: "simple" | "bridge" | "takeover";
+  historyMessages: number;
+  omittedHistoryMessages: number;
+  promptEntries?: number;
+  absoluteInjections?: number;
+  worldInfo: WorldInfoDecisionDto[];
+  worldInfoTotal: number;
+}
+
+export interface ContextDiagnosticsDto {
+  request: number;
+  tokenizer: string;
+  counting: "tokenizer" | "estimate";
+  contextWindow: number;
+  outputReserved: number;
+  safetyMargin: number;
+  inputBudget: number;
+  beforeTokens: number;
+  afterTokens: number;
+  breakdown: { system: number; conversation: number; tools: number; framing: number };
+  compressedMessages: number;
+  compressedTurns: number;
+  keptMessages: number;
+  overBudget: boolean;
+  assembly: ContextAssemblyDto;
+}
+
+export interface GenerationRecordDto {
+  id: string;
+  version: number;
+  userMessageId: string;
+  kind: "send" | "regenerate" | "retry";
+  provider: string;
+  model: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: "running" | "succeeded" | "failed" | "aborted" | "interrupted";
+  error?: string;
+  usage: GenerationUsageDto;
+  tools: ToolActivityDto[];
+  context?: ContextDiagnosticsDto;
+}
+
+export interface GenerationPageDto {
+  records: GenerationRecordDto[];
+  before: string | null;
+}
+
+export interface ChatActivityDto extends GenerationPageDto {
+  revision: number;
+  turns: number;
+  totalGenerations: number;
+  usage: GenerationUsageDto;
+  toolCounts: Record<string, number>;
 }
 
 export interface ProviderDto {
@@ -155,6 +246,34 @@ export interface ChatMessageDto {
   thinking?: string;
 }
 
+export interface ChatPageDto {
+  messages: ChatMessageDto[];
+  total: number;
+  /** Exclusive message offset for the next older page. */
+  before: number | null;
+  revision: string;
+}
+
+export interface ReplyChoicesDto {
+  userMessageId: string;
+  selected: number;
+  count: number;
+}
+
+export interface ChatBackupDto {
+  id: string;
+  createdAt: string;
+  bytes: number;
+}
+
+export interface ChatBackupPreviewDto {
+  backup: ChatBackupDto;
+  messages: ChatMessageDto[];
+  total: number;
+  /** Current chat revision, checked again when restoring. */
+  revision: string;
+}
+
 export interface ChatSnapshotDto {
   id: string;
   character: string;
@@ -163,12 +282,43 @@ export interface ChatSnapshotDto {
   streamingText: string;
   /** 接管模式的状态投影（chat_metadata.projection） */
   projection?: string;
+  page?: Omit<ChatPageDto, "messages">;
+  replyChoices?: ReplyChoicesDto;
+  activity?: ChatActivityDto;
+  activityError?: string;
+  /** 渲染只读副本；不改变消息正文。 */
+  display?: ChatDisplayDto;
+}
+
+export interface ChatDisplayDto {
+  scripts: import("./regex.ts").RegexScript[];
+  char: string;
+  user: string;
+  personaDescription?: string;
+  variables?: Record<string, unknown>;
+  lastUserMessage?: string;
+}
+
+export interface AuthorNoteDto {
+  text: string;
+  interval: number;
+  depth: number;
+  /** 0=故事之后，1=聊天深度，2=故事之前 */
+  position: 0 | 1 | 2;
+  role: "system" | "user" | "assistant";
+}
+
+export interface AuthorNoteSnapshotDto {
+  note: AuthorNoteDto;
+  revision: string;
+  contextMode: "simple" | "bridge" | "takeover";
 }
 
 // ---------------------------------------------------------------- WS 协议
 
 export type ClientMessage =
   | { type: "chat.send"; chatId: string; text: string }
+  | { type: "chat.regenerate"; chatId: string; messageId: string; expectedText: string }
   | { type: "chat.abort"; chatId: string }
   | { type: "chat.sync"; chatId: string }
   | { type: "ping" };
@@ -178,7 +328,10 @@ export type ServerEvent =
   | { type: "pong" }
   /** 本轮生成开始 */
   | { type: "chat.started"; chatId: string; message: ChatMessageDto }
-  | { type: "chat.snapshot"; chatId: string; snapshot: ChatSnapshotDto }
+  | { type: "chat.regenerating"; chatId: string }
+  /** Absolute persisted activity state; safe to replay after reconnect. */
+  | { type: "chat.activity"; chatId: string; activity: ChatActivityDto }
+  | { type: "chat.snapshot"; chatId: string; snapshot: ChatSnapshotDto; append?: boolean }
   /** 状态投影已落库；增量更新，不替换聊天正文和工具活动。 */
   | { type: "chat.projection"; chatId: string; projection: string }
   /** 整个用户回合结束，包括停止、失败和没有正文的情况。 */

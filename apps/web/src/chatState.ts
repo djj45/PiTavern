@@ -1,4 +1,4 @@
-import type { ServerEvent } from "@pitavern/shared";
+import type { ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, ServerEvent } from "@pitavern/shared";
 import { isToolItem, type ChatItem } from "./chatItems.ts";
 export interface UsageStats {
   input: number;
@@ -19,10 +19,16 @@ export interface ChatState {
   usage: UsageStats;
   /** 接管模式的状态投影 */
   projection?: string;
+  page?: Omit<ChatPageDto, "messages">;
+  replyChoices?: ReplyChoicesDto;
+  activity?: ChatActivityDto;
+  activityError?: string;
+  display?: ChatDisplayDto;
 }
 
 export type ChatsState = Record<string, ChatState>;
-export type ChatAction = ServerEvent | { type: "pending" | "remove"; chatId: string } | { type: "disconnected" };
+export type ChatAction = ServerEvent | { type: "pending" | "remove"; chatId: string } | { type: "disconnected" }
+  | { type: "history.page"; chatId: string; page: ChatPageDto; before: number };
 
 /** 按聊天独立归并事件；后台聊天完成不会改变当前聊天的生成状态。 */
 export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
@@ -38,24 +44,55 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
   }
   if (event.type === "chat.snapshot") {
     const { snapshot } = event;
+    const activity = previous?.activity && snapshot.activity && previous.activity.revision > snapshot.activity.revision
+      ? previous.activity : snapshot.activity ?? (snapshot.activityError ? previous?.activity : undefined);
+    const preserve = previous && (event.append || (snapshot.page && snapshot.page.revision === previous.page?.revision));
+    const byId = new Map(snapshot.messages.map((m) => [m.id, m]));
+    const existingIds = new Set(previous?.items.flatMap((item) => isToolItem(item) ? [] : [item.id]));
+    const merged = preserve ? [
+      ...previous.items.map((item) => isToolItem(item) ? item : byId.get(item.id) ?? item),
+      ...snapshot.messages.filter((message) => !existingIds.has(message.id)),
+    ] : snapshot.messages;
+    const items = activity ? merged.filter((item) => !isToolItem(item)) : merged;
+    const page = snapshot.page && { ...snapshot.page,
+      ...(preserve && previous.page ? { before: previous.page.before } : {}),
+    };
     return { ...state, [event.chatId]: {
-      id: snapshot.id, character: snapshot.character, items: snapshot.messages,
+      id: snapshot.id, character: snapshot.character, items, page, replyChoices: snapshot.replyChoices,
       streamingText: snapshot.running ? snapshot.streamingText : null,
-      pending: false, usage: previous?.usage ?? EMPTY_USAGE,
+      pending: false, activity, activityError: snapshot.activityError, display: snapshot.display,
+      usage: activity ? { ...activity.usage, turns: activity.turns } : previous?.usage ?? EMPTY_USAGE,
       ...(snapshot.projection ? { projection: snapshot.projection } : {}),
     } };
   }
   if (!previous) return state;
   let chat = previous;
   switch (event.type) {
+    case "chat.activity":
+      if (chat.activity && chat.activity.revision > event.activity.revision) return state;
+      chat = { ...chat, activity: event.activity, activityError: undefined, usage: { ...event.activity.usage, turns: event.activity.turns } };
+      break;
+    case "history.page": {
+      if (!chat.page || chat.page.revision !== event.page.revision || chat.page.before !== event.before) return state;
+      const ids = new Set(chat.items.flatMap((item) => isToolItem(item) ? [] : [item.id]));
+      const { messages, ...page } = event.page;
+      chat = { ...chat, items: [...messages.filter((message) => !ids.has(message.id)), ...chat.items], page };
+      break;
+    }
     case "chat.projection":
       chat = { ...chat, projection: event.projection };
       break;
     case "pending":
       chat = { ...chat, pending: true };
       break;
+    case "chat.regenerating":
+      chat = { ...chat, pending: false, streamingText: "" };
+      break;
     case "chat.started":
-      chat = { ...chat, pending: false, streamingText: "", items: [...chat.items, event.message], usage: { ...chat.usage, turns: chat.usage.turns + 1 } };
+      chat = { ...chat, pending: false, streamingText: "", items: [...chat.items, event.message],
+        display: chat.display && { ...chat.display, lastUserMessage: event.message.text },
+        page: chat.page && { ...chat.page, total: chat.page.total + 1 }, replyChoices: undefined,
+        usage: chat.activity ? chat.usage : { ...chat.usage, turns: chat.usage.turns + 1 } };
       break;
     case "chat.delta":
       chat = { ...chat, streamingText: (chat.streamingText ?? "") + event.delta };
@@ -71,16 +108,19 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       chat = { ...chat, pending: false };
       break;
     case "chat.tool_start":
+      if (chat.activity) break;
       chat = { ...chat, items: [...chat.items, {
         kind: "tool", key: event.toolCallId, toolCallId: event.toolCallId,
         toolName: event.toolName, args: event.args, status: "running",
       }] };
       break;
     case "chat.tool_end":
+      if (chat.activity) break;
       chat = { ...chat, items: chat.items.map((item) => isToolItem(item) && item.toolCallId === event.toolCallId
         ? { ...item, status: event.isError ? "error" : "done", summary: event.details?.summary, durationMs: event.durationMs } : item) };
       break;
     case "chat.usage":
+      if (chat.activity) break;
       chat = { ...chat, usage: {
         ...chat.usage, input: chat.usage.input + event.input, output: chat.usage.output + event.output,
         totalTokens: chat.usage.totalTokens + event.totalTokens, costTotal: chat.usage.costTotal + event.costTotal,

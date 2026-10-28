@@ -6,7 +6,7 @@ export interface TavernSocket {
   send: (message: ClientMessage) => boolean;
 }
 
-/** 同一动画帧合并连续正文增量；其他事件先冲刷正文，保持事件顺序。 */
+/** Batch text at most every 50ms; flush before other events to preserve stream order. */
 export function useTavernSocket(onEvent: (event: ServerEvent) => void): TavernSocket {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -16,10 +16,10 @@ export function useTavernSocket(onEvent: (event: ServerEvent) => void): TavernSo
   useEffect(() => {
     let closed = false;
     let retryTimer: ReturnType<typeof setTimeout>;
-    let frame: number | undefined;
+    let frame: ReturnType<typeof setTimeout> | undefined;
     let pending: Extract<ServerEvent, { type: "chat.delta" }> | undefined;
     const flush = () => {
-      if (frame !== undefined) cancelAnimationFrame(frame);
+      if (frame !== undefined) clearTimeout(frame);
       frame = undefined;
       if (pending) {
         const event = pending;
@@ -47,7 +47,7 @@ export function useTavernSocket(onEvent: (event: ServerEvent) => void): TavernSo
         if (event.type === "chat.delta") {
           if (pending && pending.chatId !== event.chatId) flush();
           pending = pending ? { ...pending, delta: pending.delta + event.delta } : event;
-          frame ??= requestAnimationFrame(flush);
+          frame ??= setTimeout(flush, 50);
         } else {
           flush();
           onEventRef.current(event);
@@ -58,7 +58,7 @@ export function useTavernSocket(onEvent: (event: ServerEvent) => void): TavernSo
     return () => {
       closed = true;
       clearTimeout(retryTimer);
-      if (frame !== undefined) cancelAnimationFrame(frame);
+      if (frame !== undefined) clearTimeout(frame);
       wsRef.current?.close();
       wsRef.current = null;
     };

@@ -6,6 +6,8 @@ import type { WiEntry, WiScanResult } from "./worldinfo.ts";
 import { scanWorldInfo } from "./worldinfo.ts";
 import { substituteMacros, type MacroEnv } from "./macros.ts";
 import { applyRegex, RegexPlacement, type RegexScript } from "./regex.ts";
+import type { WorldInfoDecisionDto } from "@pitavern/shared";
+import { readAuthorNote } from "./author-note.ts";
 
 const ZERO_USAGE = {
   input: 0,
@@ -21,9 +23,11 @@ export interface BridgeOptions {
   recursionSteps: number;
   caseSensitive: boolean;
   matchWholeWords: boolean;
+  useGroupScoring?: boolean;
   minActivations?: number;
   minActivationsDepthMax?: number;
   budgetTokens?: number;
+  countTokens?: (content: string) => number;
   vectorMatches?: ReadonlySet<string>;
   /** 兼容旧调用方；预算统一由 Agent 压缩层处理。 */
   maxHistoryChars?: number;
@@ -45,6 +49,8 @@ export interface BridgeInput {
   regexScripts: RegexScript[];
   options: BridgeOptions;
   variables?: Record<string, unknown>;
+  /** ST chat_metadata.note_* author note settings, when present. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface BridgeSampling {
@@ -57,6 +63,7 @@ export interface AssembledContext {
   /** 组装好的完整消息列表（首条应为 system；末条为本轮用户消息） */
   messages: Message[];
   sampling: BridgeSampling;
+  worldInfo: WorldInfoDecisionDto[];
   stats: {
     promptEntries: number;
     systemChars: number;
@@ -78,19 +85,20 @@ function historyPieces(lines: StChatLine[], scripts: RegexScript[], env: MacroEn
   return usable.map((line, index) => {
     const depth = usable.length - 1 - index; // 0=最新
     const placement = line.is_user ? RegexPlacement.USER_INPUT : RegexPlacement.AI_OUTPUT;
-    const text = applyRegex(substituteMacros(line.mes, env), scripts, { placement, depth });
+    const text = applyRegex(substituteMacros(line.mes, env), scripts, { placement, depth, env });
     return { role: (line.is_user ? "user" : "assistant") as Piece["role"], text };
   });
 }
 
 /** 深度注入：depth 0 = 最新消息之后。返回注入后的列表 */
 function injectAtDepth(history: Piece[], injections: { depth: number; role: "system" | "user" | "assistant"; text: string }[]): Piece[] {
-  const result = [...history];
-  // 同 depth 按声明顺序插入；大 depth 先插避免索引漂移
-  const sorted = [...injections].sort((a, b) => b.depth - a.depth);
-  for (const inj of sorted) {
-    const index = Math.max(0, result.length - inj.depth);
-    result.splice(index, 0, { role: inj.role, text: inj.text });
+  const result: Piece[] = [];
+  // All depths refer to the original history, not a list shifted by earlier injections.
+  for (let index = 0; index <= history.length; index++) {
+    for (const inj of injections) {
+      if (Math.max(0, history.length - Math.max(0, inj.depth)) === index) result.push({ role: inj.role, text: inj.text });
+    }
+    if (index < history.length) result.push(history[index]);
   }
   return result;
 }
@@ -142,14 +150,19 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
     recursionSteps: options.recursionSteps,
     caseSensitive: options.caseSensitive,
     matchWholeWords: options.matchWholeWords,
-    estimateContent: (content) => substituteMacros(content, { ...previewEnv, variables: structuredClone(previewEnv.variables) }),
-    transformContent: (content) => {
+    estimateContent: (content, entry) => applyRegex(substituteMacros(content, { ...previewEnv, variables: structuredClone(previewEnv.variables) }),
+      regexScripts, { placement: RegexPlacement.WORLD_INFO, depth: entry.position === 4 ? entry.depth : null, env: previewEnv }),
+    transformContent: (content, entry) => {
       const substituted = substituteMacros(content, env);
-      return applyRegex(substituted, regexScripts, { placement: RegexPlacement.WORLD_INFO, depth: null });
+      return applyRegex(substituted, regexScripts, { placement: RegexPlacement.WORLD_INFO, depth: entry.position === 4 ? entry.depth : null, env });
     },
     ...(options.timed ? { timed: options.timed } : {}),
     ...(options.messageCount !== undefined ? { messageCount: options.messageCount } : {}),
   });
+  // Outlet 内容只在扫描完成后提供。插入已处理的文本，不重复执行其中的写变量宏。
+  const usedOutlets = new Set<string>();
+  env.outlets = new Map([...wi.outlets].map(([name, texts]) => [name, texts.join("\n")]));
+  env.onOutlet = (name) => { usedOutlets.add(name); };
 
   const promptsById = new Map(preset.prompts.map((p) => [p.identifier, p]));
   const order = resolveOrder(preset);
@@ -159,6 +172,21 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
   // 绝对深度注入（预设条目 + 世界书 atDepth）
   const absoluteInjections: { depth: number; role: "system" | "user" | "assistant"; text: string }[] = [];
   for (const inj of wi.atDepth) absoluteInjections.push({ depth: inj.depth, role: inj.role, text: inj.content });
+
+  const authorNote = readAuthorNote(input.metadata ?? {});
+  const noteInterval = authorNote.interval;
+  const userCount = chatLines.filter((line) => line.is_user && !line.is_system).length;
+  const noteEnabled = noteInterval > 0 && (noteInterval === 1 || (userCount > 0 && userCount % noteInterval === 0));
+  const noteText = noteEnabled ? [
+    ...wi.noteBefore,
+    substituteMacros(authorNote.text, env),
+    ...wi.noteAfter,
+  ].filter(Boolean).join("\n") : "";
+  const noteRole = authorNote.role;
+  const notePosition = authorNote.position;
+  if (noteText && notePosition === 1) absoluteInjections.push({
+    depth: authorNote.depth, role: noteRole, text: noteText,
+  });
 
   const head: Piece[] = []; // chatHistory 之前的条目
   const tail: Piece[] = []; // chatHistory 之后的条目
@@ -188,12 +216,12 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
         text = persona.description || null;
         break;
       case "dialogueExamples":
-        text = card.mesExample || null;
+        text = [...wi.examplesBefore, substituteMacros(card.mesExample, env), ...wi.examplesAfter].filter(Boolean).join("\n") || null;
         break;
       default:
         text = null;
     }
-    if (text) out.push({ role: "system", text: marker === "worldInfoBefore" || marker === "worldInfoAfter" ? text : substituteMacros(text, env) });
+    if (text) out.push({ role: "system", text: marker === "worldInfoBefore" || marker === "worldInfoAfter" || marker === "dialogueExamples" ? text : substituteMacros(text, env) });
     return text;
   };
 
@@ -236,7 +264,8 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
 
   // ST 语义：chatHistory 在 order 中出现的位置之前是 head、之后是 tail。
   // 猫神等预设把全部条目放在 chatHistory 之前，尾部条目自然进 tail。
-  const pieces = [...head, ...history, ...tail];
+  const note: Piece[] = noteText && (notePosition === 0 || notePosition === 2) ? [{ role: noteRole, text: noteText }] : [];
+  const pieces = [...(notePosition === 2 ? note : []), ...head, ...(notePosition === 0 ? note : []), ...history, ...tail];
   // 首条必须 system（pi Agent 以 system 消息开头重放提示词）
   if (pieces.length === 0 || pieces[0].role !== "system") {
     pieces.unshift({ role: "system", text: `You are ${card.name}.` });
@@ -252,9 +281,27 @@ export function assembleBridgeContext(input: BridgeInput): AssembledContext {
   }
   if (Object.keys(sp).length > 0) sampling.samplingParams = sp;
 
+  const activeMarkers = new Set(order.filter((item) => item.enabled && promptsById.get(item.identifier)?.marker).map((item) => item.identifier));
+  const worldInfo = wi.decisions.map((decision, index) => {
+    if (decision.status !== "included") return decision;
+    const position = worldEntries[index].position;
+    if (position === 7) return usedOutlets.has(worldEntries[index].outletName!)
+      ? { ...decision, reason: `Outlet ${worldEntries[index].outletName} 已引用` }
+      : { ...decision, status: "skipped" as const, reason: `Outlet ${worldEntries[index].outletName} 未被提示词引用` };
+    const missingMarker = (position === 0 && !activeMarkers.has("worldInfoBefore")) ||
+      (position === 1 && !activeMarkers.has("worldInfoAfter")) ||
+      ((position === 5 || position === 6) && !activeMarkers.has("dialogueExamples"));
+    if (missingMarker) return { ...decision, status: "skipped" as const, reason: "预设未启用对应的插入位置" };
+    if ((position === 2 || position === 3) && (!noteEnabled || ![0, 1, 2].includes(notePosition))) {
+      return { ...decision, status: "skipped" as const, reason: "本轮未插入作者注释" };
+    }
+    return decision;
+  });
+
   return {
     messages: toMessages(pieces),
     sampling,
+    worldInfo,
     stats: {
       promptEntries,
       systemChars: pieces.filter((p) => p.role === "system").reduce((s, p) => s + p.text.length, 0),

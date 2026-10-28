@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { InstructTemplate, VectorSettings, WorldInfoSettings } from "@pitavern/shared";
+import type { InstructTemplate, TokenizerSetting, VectorSettings, WorldInfoSettings } from "@pitavern/shared";
 
 /** 单个中转/供应商下的模型条目（用户在设置里手填，M1 不做目录自动发现） */
 export interface ProviderModelConfig {
@@ -10,6 +10,7 @@ export interface ProviderModelConfig {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  tokenizer?: TokenizerSetting;
 }
 
 /** OpenAI 兼容中转或官方 API 的连接配置 */
@@ -95,7 +96,7 @@ export function defaultConfig(): TavernConfig {
     contextMode: "simple",
     activePreset: "",
     activeWorlds: [],
-    worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true, minActivations: 0, minActivationsDepthMax: 0, budgetTokens: 0 },
+    worldInfo: { scanDepth: 2, recursionSteps: 0, caseSensitive: false, matchWholeWords: true, useGroupScoring: false, minActivations: 0, minActivationsDepthMax: 0, budgetTokens: 0 },
     vectors: { enabled: false, providerId: "", model: "", queryMessages: 2, maxEntries: 5, scoreThreshold: 0.3 },
     toolsEnabled: true,
     outputProtocol: "native",

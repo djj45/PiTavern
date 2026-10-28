@@ -31,6 +31,9 @@ export interface StChatLine {
   send_date: string;
   mes: string;
   extra?: Record<string, unknown>;
+  swipes?: string[];
+  swipe_id?: number;
+  swipe_info?: Array<{ extra?: Record<string, unknown> }>;
 }
 
 /** 卡片规范 JSON 的 data 字段 */

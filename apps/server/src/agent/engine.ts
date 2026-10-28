@@ -3,7 +3,10 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
 import type { BridgeSampling } from "../context/bridge.ts";
 import type { CompressionConfig } from "../context/compression.ts";
-import { compressHistory, contextChars, inputBudgetChars } from "../context/compression.ts";
+import { compressHistory } from "../context/compression.ts";
+import { createTokenCounter, inputBudget, measureContext, type TokenCounter } from "../context/tokens.ts";
+import { INSTRUCT_TEMPLATES, type ContextAssemblyDto, type ContextDiagnosticsDto, type InstructTemplate } from "@pitavern/shared";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { GAME_TOOL_NAME } from "./protocol/game-content.ts";
 import type { CharacterCard, StChatLine } from "../stdata/types.ts";
 
@@ -83,6 +86,10 @@ export interface TavernAgentOptions {
   protocolStrict?: boolean;
   /** M4 历史压缩（transformContext 挂载） */
   compression?: CompressionConfig;
+  tokenCounter?: TokenCounter;
+  instruct?: InstructTemplate;
+  contextAssembly?: ContextAssemblyDto;
+  onContext?: (diagnostics: ContextDiagnosticsDto) => void;
 }
 
 /**
@@ -94,7 +101,17 @@ export interface TavernAgentOptions {
 export function createTavernAgent(options: TavernAgentOptions): Agent {
   const { sampling } = options;
   const maxTokens = sampling?.maxTokens ?? options.model.maxTokens;
-  const budgetChars = inputBudgetChars(options.model.contextWindow || 128_000, maxTokens);
+  const budget = inputBudget(options.model.contextWindow || 128_000, maxTokens);
+  const counter = options.tokenCounter ?? createTokenCounter(options.model.id);
+  const textFormat = options.model.api === "openai-text-completions" ? {
+    template: options.instruct ?? INSTRUCT_TEMPLATES.ChatML,
+    names: options.templateNames ?? { char: "Assistant", user: "User" },
+  } : undefined;
+  const measure = (messages: AgentMessage[]) => measureContext(messages, counter, textFormat);
+  let beforeTokens = 0;
+  let compressedMessages = 0;
+  let compressedTurns = 0;
+  let request = 0;
   const strictToolChoice =
     options.outputProtocol === "game_tool" && options.protocolStrict !== false
       ? ({ tool_choice: "required" } as Record<string, unknown>)
@@ -116,9 +133,17 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
           }
         : {}),
     };
-    const requestChars = contextChars(context.messages) + (context.systemPrompt?.length ?? 0) + JSON.stringify(context.tools ?? []).length;
-    if (options.compression?.enabled && requestChars > budgetChars) {
-      throw new Error("压缩后上下文仍超过预留输出后的预算，请减少保留轮数、精简角色/世界书，或检查模型上下文长度设置");
+    const messages = normalizeContext(context).messages;
+    const measured = measure(messages);
+    const overBudget = measured.total > budget.inputBudget;
+    options.onContext?.({
+      request: ++request, tokenizer: counter.name, counting: counter.kind, ...budget,
+      beforeTokens, afterTokens: measured.total, breakdown: measured.breakdown,
+      compressedMessages, compressedTurns, keptMessages: messages.filter((message) => message.role !== "system").length,
+      overBudget, assembly: options.contextAssembly ?? { mode: "simple", historyMessages: 0, omittedHistoryMessages: 0, worldInfo: [], worldInfoTotal: 0 },
+    });
+    if (overBudget) {
+      throw new Error("上下文超过预留输出后的预算，请在活动面板查看诊断，减少保留轮数、精简角色/世界书，或检查模型上下文长度设置");
     }
     return options.models.streamSimple(model, context, merged);
   };
@@ -153,11 +178,14 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
   return new Agent({
     initialState,
     streamFn,
-    transformContext:
-      compression?.enabled
-        ? async (messages) =>
-            compressHistory(messages, compression, budgetChars).messages
-        : undefined,
+    transformContext: async (messages) => {
+      beforeTokens = measure(messages).total;
+      const result = compressHistory(messages, compression ?? { enabled: false, keepFullTurns: 6 }, budget.inputBudget,
+        (items) => measure(items).total);
+      compressedMessages = result.stats.squashedMessages;
+      compressedTurns = result.stats.squashedTurns;
+      return result.messages;
+    },
     finishTurn: async (turn) => {
       turnCount += 1;
       if (turnCount >= MAX_TURNS) return { action: "end" };

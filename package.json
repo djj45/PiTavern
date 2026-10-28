@@ -20,7 +20,11 @@
     "verify:takeover": "npm run verify:takeover -w apps/server",
     "verify:m6": "npm run verify:m6 -w apps/server",
     "verify:regression": "npm run verify:regression -w apps/server",
-    "verify:compat": "npm run verify:compat -w apps/server"
+    "verify:compat": "npm run verify:compat -w apps/server",
+    "verify:chat-ux": "npm run verify:chat-ux -w apps/server",
+    "verify:rendering": "npm run verify:rendering -w apps/web",
+    "verify:activity": "npm run verify:activity -w apps/server",
+    "verify:world-display": "npm run verify:world-display -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

@@ -48,6 +48,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
   const [minActivations, setMinActivations] = useState(connection?.worldInfo?.minActivations ?? 0);
   const [minActivationsDepthMax, setMinActivationsDepthMax] = useState(connection?.worldInfo?.minActivationsDepthMax ?? 0);
   const [budgetTokens, setBudgetTokens] = useState(connection?.worldInfo?.budgetTokens ?? 0);
+  const [useGroupScoring, setUseGroupScoring] = useState(connection?.worldInfo?.useGroupScoring ?? false);
   const [vectors, setVectors] = useState(connection?.vectors ?? { enabled: false, providerId: "", model: "", queryMessages: 2, maxEntries: 5, scoreThreshold: 0.3 });
   const [vectorTest, setVectorTest] = useState<TestState>({ running: false, result: null });
   const textCompletion = providers.find((p) => p.id === defaultProvider)?.apiType === "text";
@@ -132,6 +133,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         budgetTokens,
         caseSensitive: connection?.worldInfo?.caseSensitive ?? false,
         matchWholeWords: connection?.worldInfo?.matchWholeWords ?? true,
+        useGroupScoring,
       },
       vectors,
       outputProtocol,
@@ -212,6 +214,21 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
                     className="rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
                   />
                 </div>
+                {p.models.filter((model) => p.id === defaultProvider && model.id === defaultModel).map((model) => <div key={model.id} className="mb-3 grid grid-cols-2 gap-2 rounded border border-tavern-border p-2 text-xs">
+                  <label>上下文长度<input type="number" min={1} max={10000000} aria-label="模型上下文长度" value={model.contextWindow}
+                    onChange={(event) => updateProvider(p.id, { models: p.models.map((item) => item.id === model.id ? { ...item, contextWindow: Number(event.target.value) } : item) })}
+                    className="mt-1 w-full rounded border border-tavern-border bg-tavern-raised p-1.5" /></label>
+                  <label>最大输出 tokens<input type="number" min={1} max={10000000} aria-label="模型最大输出" value={model.maxTokens}
+                    onChange={(event) => updateProvider(p.id, { models: p.models.map((item) => item.id === model.id ? { ...item, maxTokens: Number(event.target.value) } : item) })}
+                    className="mt-1 w-full rounded border border-tavern-border bg-tavern-raised p-1.5" /></label>
+                  <label className="col-span-2">Token 计数方式<select aria-label="Token 计数方式" value={model.tokenizer ?? "auto"}
+                    onChange={(event) => updateProvider(p.id, { models: p.models.map((item) => item.id === model.id ? { ...item, tokenizer: event.target.value as NonNullable<typeof model.tokenizer> } : item) })}
+                    className="ml-2 rounded border border-tavern-border bg-tavern-raised p-1.5">
+                    <option value="auto">自动识别，未知模型估算</option><option value="o200k_base">o200k_base</option>
+                    <option value="cl100k_base">cl100k_base</option><option value="estimate">字符估算</option>
+                  </select></label>
+                  <p className="col-span-2 text-tavern-dim">按模型实际能力填写；中转别名可手动选择对应编码器。桥接预设可覆盖最大输出。</p>
+                </div>)}
                 <label className="mb-2 flex items-center gap-2 text-xs text-tavern-dim">
                   接口类型
                   <select aria-label={`${p.name}接口类型`} value={p.apiType ?? "chat"}
@@ -368,13 +385,13 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
               </select>
               <div className="flex items-center gap-4 text-xs text-tavern-dim">
                 <label className="flex items-center gap-1.5">
-                  扫描深度
+                  扫描深度（0 不扫描聊天）
                   <input
                     type="number"
-                    min={1}
-                    max={100}
+                    min={0}
+                    max={1000}
                     value={scanDepth}
-                    onChange={(e) => setScanDepth(Number(e.target.value) || 1)}
+                    onChange={(e) => setScanDepth(Number(e.target.value) || 0)}
                     className="w-16 rounded border border-tavern-border bg-tavern-raised px-1.5 py-0.5 text-tavern-text"
                   />
                 </label>
@@ -440,11 +457,13 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         {/* 输出协议与压缩 */}
         <section className="mb-5 rounded-lg border border-tavern-border bg-tavern-bg p-3">
           <h3 className="mb-2 text-sm font-medium">世界书检索（ST 桥接模式）</h3>
+          <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={useGroupScoring}
+            onChange={(event) => setUseGroupScoring(event.target.checked)} />分组优先选择关键词命中更多的条目（条目设置可覆盖）</label>
           <div className="mb-3 flex flex-wrap gap-3 text-xs text-tavern-dim">
             {[
               { label: "最少激活数（0 关闭）", value: minActivations, set: setMinActivations, max: 1000 },
               { label: "最大扫描深度（0 到历史末尾）", value: minActivationsDepthMax, set: setMinActivationsDepthMax, max: 1000 },
-              { label: "估算 token 预算（0 不单独限制）", value: budgetTokens, set: setBudgetTokens, max: 1000000 },
+              { label: "Token 预算（0 不单独限制）", value: budgetTokens, set: setBudgetTokens, max: 1000000 },
             ].map((field) => <label key={field.label} className="flex items-center gap-2">{field.label}
               <input aria-label={field.label} type="number" min={0} max={field.max} value={field.value} onChange={(e) => field.set(Number(e.target.value))}
                 className="w-20 rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-tavern-text" />

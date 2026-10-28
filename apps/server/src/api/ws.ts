@@ -31,12 +31,20 @@ export function attachWebSocket(server: http.Server, sessions: SessionManager): 
       } catch {
         return;
       }
+      if (!message || typeof message !== "object") return;
+      if ("chatId" in message && typeof message.chatId !== "string") return;
       switch (message.type) {
         case "ping":
           ws.send(JSON.stringify({ type: "pong" }));
           break;
         case "chat.send":
-          void sessions.send(message.chatId, message.text);
+          if (typeof message.text === "string" && message.text.trim() && message.text.length <= 1_000_000) void sessions.send(message.chatId, message.text);
+          else ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: "消息不能为空且不能超过 100 万字符" }));
+          break;
+        case "chat.regenerate":
+          if (typeof message.messageId === "string" && typeof message.expectedText === "string") {
+            void sessions.regenerate(message.chatId, message.messageId, message.expectedText);
+          } else ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: "重生成参数无效" }));
           break;
         case "chat.abort":
           sessions.abort(message.chatId);

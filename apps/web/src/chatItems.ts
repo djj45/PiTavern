@@ -1,14 +1,7 @@
-import type { ChatMessageDto } from "@pitavern/shared";
+import type { ChatMessageDto, ToolActivityDto } from "@pitavern/shared";
 
-export interface ToolItem {
+export interface ToolItem extends ToolActivityDto {
   kind: "tool";
-  key: string;
-  toolCallId: string;
-  toolName: string;
-  args: unknown;
-  status: "running" | "done" | "error";
-  summary?: string;
-  durationMs?: number;
 }
 
 export type ChatItem = ChatMessageDto | ToolItem;

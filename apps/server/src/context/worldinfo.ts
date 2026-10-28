@@ -1,3 +1,5 @@
+import type { WorldInfoDecisionDto } from "@pitavern/shared";
+
 /**
  * ST 世界书扫描引擎（对照 public/scripts/world-info.js 的 M2 子集）。
  * 实现：常驻条目、主键匹配（正则/全词/子串 + 大小写选项）、二级键逻辑、
@@ -19,7 +21,7 @@ export interface WiEntry {
   /** 0=AND_ANY 1=NOT_ALL 2=NOT_ANY 3=AND_ALL */
   selectiveLogic: number;
   order: number;
-  /** 0=before 1=after 2=ANTop 3=ANBottom 4=atDepth 5=EMTop 6=EMBottom */
+  /** 0=before 1=after 2=ANTop 3=ANBottom 4=atDepth 5=EMTop 6=EMBottom 7=outlet */
   position: number;
   depth: number;
   role: "system" | "user" | "assistant";
@@ -38,6 +40,12 @@ export interface WiEntry {
   cooldown?: number;
   /** 计时效果——聊天前 N 条消息内压制 */
   delay?: number;
+  /** 逗号分隔的 inclusion groups。 */
+  group?: string;
+  groupOverride?: boolean;
+  groupWeight?: number;
+  useGroupScoring?: boolean;
+  outletName?: string;
   /** 条目来源（去重/调试用） */
   world: string;
 }
@@ -49,12 +57,14 @@ export interface WiScanOptions {
   recursionSteps: number;
   caseSensitive: boolean;
   matchWholeWords: boolean;
+  useGroupScoring?: boolean;
   minActivations?: number;
   minActivationsDepthMax?: number;
   budgetTokens?: number;
   /** 由异步向量检索层提供；扫描器统一应用计时效果、概率与预算。 */
   vectorMatches?: ReadonlySet<string>;
-  estimateContent?: (content: string) => string;
+  estimateContent?: (content: string, entry: WiEntry) => string;
+  countTokens?: (content: string) => number;
   /** 内容经此函数转出（提示词层正则 WORLD_INFO placement 的挂点） */
   transformContent?: (content: string, entry: WiEntry) => string;
   /** 当前消息总数（计时效果的时间轴；缺省用 recentMessages.length） */
@@ -72,11 +82,17 @@ export interface WiDepthInjection {
 export interface WiScanResult {
   /** position=0 条目，按 order 升序拼接 */
   before: string[];
-  /** position=1/2/3/5/6 条目（AN/EM 类近似并入 after） */
+  /** position=1 条目 */
   after: string[];
+  noteBefore: string[];
+  noteAfter: string[];
+  examplesBefore: string[];
+  examplesAfter: string[];
   /** position=4 的深度注入 */
   atDepth: WiDepthInjection[];
+  outlets: Map<string, string[]>;
   activated: WiEntry[];
+  decisions: WorldInfoDecisionDto[];
 }
 
 /** worlds/*.json 原始格式 { entries: { [uid]: {...} } } */
@@ -115,15 +131,21 @@ export function normalizeCardBook(book: unknown, worldName: string): WiEntry[] {
         depth: ext.depth,
         role: ext.role,
         probability: ext.probability ?? e.probability,
-        caseSensitive: ext.caseSensitive,
-        matchWholeWords: ext.matchWholeWords,
-        scanDepth: ext.scanDepth,
-        excludeRecursion: ext.excludeRecursion,
-        preventRecursion: ext.preventRecursion,
-        delayed: e.delayed ?? ext.delayUntilRecursion,
+        useProbability: ext.useProbability ?? e.useProbability,
+        caseSensitive: ext.case_sensitive ?? ext.caseSensitive,
+        matchWholeWords: ext.match_whole_words ?? ext.matchWholeWords,
+        scanDepth: ext.scan_depth ?? ext.scanDepth,
+        excludeRecursion: ext.exclude_recursion ?? ext.excludeRecursion,
+        preventRecursion: ext.prevent_recursion ?? ext.preventRecursion,
+        delayed: e.delayed ?? ext.delay_until_recursion ?? ext.delayUntilRecursion,
         sticky: (e.sticky ?? ext.sticky) as number | undefined,
         cooldown: (e.cooldown ?? ext.cooldown) as number | undefined,
         delay: (e.delay ?? ext.delay) as number | undefined,
+        group: ext.group ?? e.group,
+        groupOverride: ext.group_override ?? ext.groupOverride,
+        groupWeight: ext.group_weight ?? ext.groupWeight,
+        useGroupScoring: ext.use_group_scoring ?? ext.useGroupScoring,
+        outletName: ext.outlet_name ?? ext.outletName,
         extensions: ext,
       },
       worldName,
@@ -148,9 +170,9 @@ function normalizeEntry(uid: string, raw: Record<string, unknown>, world: string
     order: typeof raw.order === "number" ? raw.order : 100,
     position: typeof raw.position === "number" ? raw.position : 0,
     depth: typeof raw.depth === "number" ? raw.depth : 4,
-    role: raw.role === "user" || raw.role === "assistant" ? raw.role : "system",
-    probability: typeof raw.probability === "number" ? raw.probability : 100,
-    caseSensitive: raw.caseSensitive === true,
+    role: raw.role === 1 || raw.role === "user" ? "user" : raw.role === 2 || raw.role === "assistant" ? "assistant" : "system",
+    probability: raw.useProbability === false ? 100 : typeof raw.probability === "number" ? Math.max(0, Math.min(100, raw.probability)) : 100,
+    caseSensitive: typeof raw.caseSensitive === "boolean" ? raw.caseSensitive : undefined,
     matchWholeWords: typeof raw.matchWholeWords === "boolean" ? raw.matchWholeWords : undefined,
     scanDepth: typeof raw.scanDepth === "number" ? raw.scanDepth : undefined,
     excludeRecursion: raw.excludeRecursion === true,
@@ -159,6 +181,11 @@ function normalizeEntry(uid: string, raw: Record<string, unknown>, world: string
     sticky: typeof raw.sticky === "number" ? raw.sticky : undefined,
     cooldown: typeof raw.cooldown === "number" ? raw.cooldown : undefined,
     delay: typeof raw.delay === "number" ? raw.delay : undefined,
+    group: typeof raw.group === "string" ? raw.group : "",
+    groupOverride: raw.groupOverride === true,
+    groupWeight: typeof raw.groupWeight === "number" && Number.isFinite(raw.groupWeight) ? Math.max(0, raw.groupWeight) : 100,
+    useGroupScoring: typeof raw.useGroupScoring === "boolean" ? raw.useGroupScoring : undefined,
+    outletName: typeof raw.outletName === "string" ? raw.outletName.trim() : "",
   };
 }
 
@@ -305,12 +332,80 @@ function recordTimedEffects(activated: Set<WiEntry>, state: TimedEffectsState, m
 
 // ---------------------------------------------------------------- 扫描
 
+function groupNames(entry: WiEntry): string[] {
+  return [...new Set((entry.group ?? "").split(",").map((name) => name.trim()).filter(Boolean))];
+}
+
+function groupScore(entry: WiEntry, text: string, opts: WiScanOptions): number {
+  if (!entry.key.length) return 0;
+  const primary = entry.key.filter((key) => key.trim() && matchKeys(text, key.trim(), entry, opts)).length;
+  const secondary = entry.keysecondary.filter((key) => key.trim() && matchKeys(text, key.trim(), entry, opts)).length;
+  return primary + (entry.selectiveLogic === 0 || (entry.selectiveLogic === 3 && secondary === entry.keysecondary.length) ? secondary : 0);
+}
+
+/** 先分组，再做概率与预算检查；同一轮已入选的组在递归和扩展扫描中保持占用。 */
+function selectGroups(matches: Map<WiEntry, string>, activated: Set<WiEntry>, flags: Map<WiEntry, TimedFlags> | null,
+  opts: WiScanOptions, skip: (entry: WiEntry, reason: string) => void): Set<WiEntry> {
+  const remaining = new Set(matches.keys());
+  const groups = new Map<string, WiEntry[]>();
+  for (const entry of remaining) for (const name of groupNames(entry)) {
+    groups.set(name, [...(groups.get(name) ?? []), entry]);
+  }
+  const occupied = new Set([...activated].flatMap(groupNames));
+  const remove = (entry: WiEntry, reason: string) => { if (remaining.delete(entry)) skip(entry, reason); };
+  for (const [name, members] of groups) {
+    let eligible = members.filter((entry) => remaining.has(entry));
+    if (!eligible.length) continue;
+    if (occupied.has(name)) {
+      for (const entry of eligible) remove(entry, `分组 ${name} 已有入选条目`);
+      continue;
+    }
+    const sticky = eligible.filter((entry) => flags?.get(entry)?.isSticky);
+    if (sticky.length) {
+      // ST 的计时效果保留组内所有仍有效的 sticky，不重新抽签。
+      for (const entry of eligible) if (!sticky.includes(entry)) remove(entry, `分组 ${name} 的 sticky 条目优先`);
+      continue;
+    }
+    if (opts.useGroupScoring || eligible.some((entry) => entry.useGroupScoring)) {
+      const scores = new Map(eligible.map((entry) => [entry, groupScore(entry, matches.get(entry)!, opts)]));
+      const max = Math.max(...scores.values());
+      for (const entry of eligible) if ((entry.useGroupScoring ?? opts.useGroupScoring) && scores.get(entry)! < max) {
+        remove(entry, `分组 ${name} 的关键词得分较低`);
+      }
+      eligible = eligible.filter((entry) => remaining.has(entry));
+    }
+    if (eligible.length <= 1) continue;
+    const overrides = eligible.filter((entry) => entry.groupOverride).sort((a, b) => b.order - a.order);
+    let winner = overrides[0];
+    if (!winner) {
+      const total = eligible.reduce((sum, entry) => sum + (entry.groupWeight ?? 100), 0);
+      let roll = Math.random() * total;
+      for (const entry of eligible) {
+        roll -= entry.groupWeight ?? 100;
+        if (roll < 0) { winner = entry; break; }
+      }
+    }
+    for (const entry of eligible) if (entry !== winner) remove(entry, winner
+      ? `分组 ${name} ${overrides.length ? "优先级" : "权重"}择一未入选` : `分组 ${name} 没有正权重条目`);
+  }
+  return remaining;
+}
+
 /**
  * 扫描入口。recentMessages 为从旧到新的消息文本（正则后的）。
  * 返回按 order 升序分桶后的结果。
  */
 export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts: WiScanOptions): WiScanResult {
-  const enabled = entries.filter((e) => !e.disabled && e.content.trim().length > 0 && (e.key.length > 0 || e.constant || e.vectorized));
+  const decisions = new Map(entries.map((entry) => [entry, {
+    uid: entry.uid, world: entry.world, label: entry.key.join("、").slice(0, 80) || entry.uid,
+    status: "skipped", reason: entry.disabled ? "已禁用" : !entry.content.trim() ? "内容为空"
+      : !entry.key.length && !entry.constant && !entry.vectorized ? "没有匹配键" : "关键词或向量未命中",
+  } as WorldInfoDecisionDto]));
+  const skip = (entry: WiEntry, reason: string) => { decisions.get(entry)!.reason = reason; };
+  const enabled = entries.filter((e) => {
+    if (e.position === 7 && !e.outletName) { skip(e, "Outlet 名称为空"); return false; }
+    return !e.disabled && e.content.trim().length > 0 && (e.key.length > 0 || e.constant || e.vectorized);
+  });
   const activated = new Set<WiEntry>();
   const rejected = new Set<WiEntry>();
 
@@ -320,7 +415,7 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
   const flags = timed ? timedFlagsFor(enabled, timed, messageCount) : null;
 
   // 深度缓冲：scanDepth 条消息 + 递归内容（对照 WorldInfoBuffer.get）
-  const initialDepth = Math.max(1, opts.scanDepth);
+  const initialDepth = Math.max(0, Math.floor(opts.scanDepth));
   const depthLimit = Math.max(initialDepth, opts.minActivationsDepthMax && opts.minActivationsDepthMax > 0
     ? Math.min(recentMessages.length, opts.minActivationsDepthMax) : recentMessages.length);
   const minActivations = Math.max(0, opts.minActivations ?? 0);
@@ -332,12 +427,15 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
     Number(b.constant) - Number(a.constant) || a.order - b.order);
   const activate = (entry: WiEntry, guaranteed: boolean): boolean => {
     if (!guaranteed && entry.probability < 100 && Math.random() * 100 >= entry.probability) {
+      skip(entry, "概率未通过");
       rejected.add(entry);
       return false;
     }
-    const content = opts.estimateContent?.(entry.content) ?? entry.content;
-    const tokens = Math.ceil(content.length / 1.5);
+    const content = opts.estimateContent?.(entry.content, entry) ?? entry.content;
+    const tokens = opts.countTokens?.(content) ?? Math.ceil(content.length / 1.5);
+    decisions.get(entry)!.tokens = tokens;
     if (spent + tokens > budget) {
+      skip(entry, "超出世界书预算");
       budgetExceeded = true;
       rejected.add(entry);
       return false;
@@ -348,11 +446,12 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
   };
   const maxSteps = Math.max(1, opts.recursionSteps + 1); // +1: 首轮正常扫描
   for (let depth = initialDepth; depth <= depthLimit; depth++) {
-    const chatBuffer = recentMessages.slice(-depth).join("\n");
+    const chatBuffer = depth === 0 ? "" : recentMessages.slice(-depth).join("\n");
     let recurseBuffer = [...activated].filter((e) => !e.preventRecursion).map((e) => e.content).join("\n");
     for (let step = 0; step < maxSteps; step++) {
       const haystack = step === 0 ? chatBuffer : chatBuffer + "\n" + recurseBuffer;
       let newActivations = 0;
+      const matches = new Map<WiEntry, string>();
 
       for (const entry of candidates) {
         if (activated.has(entry) || rejected.has(entry)) continue;
@@ -360,34 +459,40 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
         const flag = flags?.get(entry);
         const isSticky = flag?.isSticky ?? false;
         // delay：聊天前 N 条消息内压制
-        if (entry.delay && messageCount < entry.delay && !isSticky) continue;
+        if (entry.delay && messageCount < entry.delay && !isSticky) { skip(entry, "尚未达到延迟消息数"); continue; }
         // cooldown：期间关键词命中也不激活（sticky 保活豁免）
-        if (flag?.isCooldown && !isSticky) continue;
+        if (flag?.isCooldown && !isSticky) { skip(entry, "冷却中"); continue; }
 
         // 递归延迟：第 N 层递归起才可被激活（首轮为 step 0；sticky 豁免）
-        if (step < recursionDelayLevel(entry) && !isSticky) continue;
+        if (step < recursionDelayLevel(entry) && !isSticky) { skip(entry, "尚未达到递归层级"); continue; }
 
+        const scanText = entry.scanDepth !== undefined
+          ? (entry.scanDepth === 0 ? "" : recentMessages.slice(-entry.scanDepth).join("\n")) + (step > 0 ? "\n" + recurseBuffer : "")
+          : haystack;
         if (entry.constant) {
-          if (activate(entry, true)) newActivations++;
+          matches.set(entry, scanText);
           continue;
         }
-        if (entry.excludeRecursion && step > 0 && !isSticky) continue;
+        if (entry.excludeRecursion && step > 0 && !isSticky) { skip(entry, "不参与递归扫描"); continue; }
 
         // sticky 保活：无需关键词（对照 "activated because active sticky"）
         if (isSticky) {
-          if (activate(entry, true)) newActivations++;
+          matches.set(entry, scanText);
           continue;
         }
 
-        const scanText = entry.scanDepth
-          ? recentMessages.slice(-entry.scanDepth).join("\n") + (step > 0 ? "\n" + recurseBuffer : "")
-          : haystack;
         const primary = (entry.vectorized && opts.vectorMatches?.has(worldEntryKey(entry))) ||
           entry.key.some((k) => k.trim() && matchKeys(scanText, k.trim(), entry, opts));
-        if (!primary) continue;
+        if (!primary) { skip(entry, "关键词或向量未命中"); continue; }
 
-        if (entry.keysecondary.length > 0 && !secondaryLogicPasses(entry, scanText, opts)) continue;
-        if (activate(entry, false)) newActivations++;
+        if (entry.selective && entry.keysecondary.length > 0 && !secondaryLogicPasses(entry, scanText, opts)) {
+          skip(entry, "二级关键词条件未通过"); continue;
+        }
+        matches.set(entry, scanText);
+      }
+
+      for (const entry of selectGroups(matches, activated, flags, opts, skip)) {
+        if (activate(entry, flags?.get(entry)?.isSticky ?? false)) newActivations++;
       }
 
       if (newActivations === 0) break;
@@ -407,10 +512,16 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
   });
   const before: string[] = [];
   const after: string[] = [];
+  const noteBefore: string[] = [], noteAfter: string[] = [], examplesBefore: string[] = [], examplesAfter: string[] = [];
   const atDepth: WiDepthInjection[] = [];
+  const outlets = new Map<string, string[]>();
   for (const entry of sorted) {
     const content = opts.transformContent ? opts.transformContent(entry.content, entry) : entry.content;
-    if (!content) continue;
+    const decision = decisions.get(entry)!;
+    if (!content) { skip(entry, "替换后内容为空"); continue; }
+    decision.status = "included";
+    decision.reason = flags?.get(entry)?.isSticky ? "sticky 保活" : entry.constant ? "常驻条目"
+      : entry.vectorized && opts.vectorMatches?.has(worldEntryKey(entry)) ? "向量命中" : "关键词命中";
     switch (entry.position) {
       case 0:
         before.push(content);
@@ -418,13 +529,20 @@ export function scanWorldInfo(entries: WiEntry[], recentMessages: string[], opts
       case 4:
         atDepth.push({ depth: entry.depth, role: entry.role, content });
         break;
-      default:
-        // 1=after；2/3 AN 顶/底、5/6 EM 顶/底近似并入 after（M2 简化）
-        after.push(content);
+      case 1: after.push(content); break;
+      case 2: noteBefore.push(content); break;
+      case 3: noteAfter.push(content); break;
+      case 5: examplesBefore.push(content); break;
+      case 6: examplesAfter.push(content); break;
+      case 7: {
+        const name = entry.outletName!;
+        outlets.set(name, [content, ...(outlets.get(name) ?? [])]);
         break;
+      }
+      default: decision.status = "skipped"; decision.reason = "尚不支持此注入位置"; break;
     }
   }
-  return { before, after, atDepth, activated: sorted };
+  return { before, after, noteBefore, noteAfter, examplesBefore, examplesAfter, atDepth, outlets, activated: sorted, decisions: [...decisions.values()] };
 }
 
 export function worldEntryKey(entry: WiEntry): string {
