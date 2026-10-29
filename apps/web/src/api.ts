@@ -1,6 +1,10 @@
 import type {
   AuthorNoteDto,
   AuthorNoteSnapshotDto,
+  BranchIndexDto,
+  BranchMetaPatchDto,
+  BranchPathStepDto,
+  BranchSwitchResultDto,
   ChatBackupDto,
   GenerationPageDto,
   ChatBackupPreviewDto,
@@ -133,6 +137,13 @@ export const api = {
   selectReply: (chatId: string, userMessageId: string, selected: number, revision: string) =>
     fetch("/api/chat/reply", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, userMessageId, selected, revision }) }).then((r) => json<{ ok: boolean }>(r)),
+  branchIndex: (chatId: string) => fetch("/api/chat/branch-index?" + new URLSearchParams({ chatId })).then((r) => json<BranchIndexDto>(r)),
+  switchBranchPath: (chatId: string, revision: string, path: BranchPathStepDto[]) =>
+    fetch("/api/chat/branch-switch", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, revision, path }) }).then((r) => json<BranchSwitchResultDto>(r)),
+  updateBranchMeta: (chatId: string, revision: string, nodeId: string, patch: BranchMetaPatchDto) =>
+    fetch("/api/chat/branch-meta", { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, revision, nodeId, patch }) }).then((r) => json<BranchSwitchResultDto>(r)),
   /** 侧栏对话菜单：置顶 / 归档 / 重命名（服务端写入 chat_metadata）。 */
   updateChatMeta: (chatId: string, patch: { pinned?: boolean; archived?: boolean; displayName?: string | null }) =>
     fetch("/api/chat/meta", { method: "PATCH", headers: { "Content-Type": "application/json" },

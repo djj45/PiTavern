@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { AuthorNoteDto, AuthorNoteSnapshotDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -270,6 +270,27 @@ export class SessionManager {
     if (this.sessions.get(chatId)?.autoBranching) throw new Error("正在自动生成候选分支，请稍候或点击停止");
     this.chats.selectReply(chatId, userMessageId, selected, revision);
     this.changed(chatId);
+  }
+
+  branchIndex(chatId: string): BranchIndexDto {
+    return this.chats.branchIndex(chatId);
+  }
+
+  switchBranchPath(chatId: string, steps: BranchPathStepDto[], revision: string): BranchIndexDto {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再切换路线");
+    if (this.sessions.get(chatId)?.autoBranching) throw new Error("正在自动生成候选分支，请稍候或点击停止");
+    const index = this.chats.selectReplyPath(chatId, steps, revision);
+    this.changed(chatId);
+    return index;
+  }
+
+  updateBranchMeta(chatId: string, nodeId: string, patch: BranchMetaPatchDto, revision: string): BranchIndexDto {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再修改路线");
+    const index = this.chats.updateBranchMeta(chatId, nodeId, patch, revision);
+    this.changed(chatId);
+    return index;
   }
 
   restoreBackup(chatId: string, backupId: string, revision: string): void {

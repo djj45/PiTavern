@@ -337,6 +337,71 @@ export interface BranchPointDto {
   candidates: BranchCandidateDto[];
 }
 
+/** 从故事起点到某个分支选择的一条路径步骤。 */
+export interface BranchPathStepDto {
+  userMessageId: string;
+  selected: number;
+}
+
+/** 完整分支目录中的一个候选路线节点。 */
+export interface BranchTreeNodeDto {
+  /** 稳定节点 ID（由完整选择路径决定）。 */
+  id: string;
+  /** 候选自身的持久化 ID；旧存档回退到完整路径 ID。 */
+  branchId: string;
+  parentId?: string;
+  depth: number;
+  /** 该分叉所在用户回合（从 1 开始）。 */
+  turn: number;
+  /** 默认标题，例如“第 8 轮 · 接受邀请”。 */
+  title: string;
+  /** 用户自定义名称。 */
+  name?: string;
+  note?: string;
+  userPreview: string;
+  assistantPreview: string;
+  /** 该路线当前保存的最后一段剧情预览。 */
+  preview: string;
+  pathText: string;
+  path: BranchPathStepDto[];
+  pathIds: string[];
+  pathLabels: string[];
+  /** 直接下级分支选择数量。 */
+  childCount: number;
+  descendantCount: number;
+  /** 该路线保存到的最后用户回合。 */
+  totalTurns: number;
+  /** 从该分叉到下一分叉之间合并显示的回合数。 */
+  linearTurns: number;
+  isActive: boolean;
+  isCurrent: boolean;
+  favorite: boolean;
+  archived?: boolean;
+  visitedAt?: string;
+  children: BranchTreeNodeDto[];
+}
+
+export interface BranchIndexDto {
+  revision: string;
+  nodes: BranchTreeNodeDto[];
+  total: number;
+  truncated: boolean;
+  currentNodeId?: string;
+  activePath: string[];
+}
+
+export interface BranchMetaPatchDto {
+  name?: string | null;
+  note?: string | null;
+  favorite?: boolean;
+  archived?: boolean;
+}
+
+export interface BranchSwitchResultDto {
+  revision: string;
+  index: BranchIndexDto;
+}
+
 export interface GreetingChoicesDto {
   selected: number;
   labels: string[];

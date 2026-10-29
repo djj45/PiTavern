@@ -611,6 +611,48 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
+  app.get("/api/chat/branch-index", (req, res) => {
+    if (typeof req.query.chatId !== "string") { res.status(400).json({ error: "聊天参数无效" }); return; }
+    try { res.json(sessions.branchIndex(req.query.chatId)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/chat/branch-switch", (req, res) => {
+    const { chatId, revision, path } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof revision !== "string" || !Array.isArray(path) || path.length === 0 || path.length > 100
+      || !path.every((step: unknown) => step && typeof step === "object"
+        && typeof (step as { userMessageId?: unknown }).userMessageId === "string"
+        && Number.isInteger((step as { selected?: unknown }).selected))) {
+      res.status(400).json({ error: "分支路线参数无效" }); return;
+    }
+    try {
+      const index = sessions.switchBranchPath(chatId, path, revision);
+      res.json({ revision: index.revision, index });
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.patch("/api/chat/branch-meta", (req, res) => {
+    const { chatId, revision, nodeId, patch } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof revision !== "string" || typeof nodeId !== "string"
+      || !patch || typeof patch !== "object" || Array.isArray(patch)) {
+      res.status(400).json({ error: "分支资料参数无效" }); return;
+    }
+    const values = patch as Record<string, unknown>;
+    if ([values.name, values.note].some((value) => value !== undefined && value !== null && typeof value !== "string")
+      || [values.favorite, values.archived].some((value) => value !== undefined && typeof value !== "boolean")) {
+      res.status(400).json({ error: "分支资料参数无效" }); return;
+    }
+    try {
+      const index = sessions.updateBranchMeta(chatId, nodeId, {
+        ...(values.name !== undefined ? { name: values.name as string | null } : {}),
+        ...(values.note !== undefined ? { note: values.note as string | null } : {}),
+        ...(values.favorite !== undefined ? { favorite: values.favorite as boolean } : {}),
+        ...(values.archived !== undefined ? { archived: values.archived as boolean } : {}),
+      }, revision);
+      res.json({ revision: index.revision, index });
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   app.post("/api/chat/reply", (req, res) => {
     const { chatId, userMessageId, selected, revision } = req.body ?? {};
     if ([chatId, userMessageId, revision].some((v) => typeof v !== "string") || !Number.isInteger(selected)) {

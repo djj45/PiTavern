@@ -189,6 +189,53 @@ try {
   await reloaded.regenerate(chat.id, target.id, target.text);
   assert.equal(fs.readFileSync(chat.file, "utf8"), beforeFailure, "失败时分支状态不变");
   console.log("✓ 重新生成失败时分支和 JSONL 状态不变");
+
+  // 完整目录索引包含非活动路径上的嵌套分支；按祖先路径一次切换并保留元数据。
+  mode = "normal";
+  const indexResponse = await fetch(base + "/api/chat/branch-index?chatId=" + encodeURIComponent(chat.id));
+  assert.equal(indexResponse.status, 200);
+  const fullIndex = await indexResponse.json() as any;
+  const allNodes: any[] = [];
+  const walk = (nodes: any[]) => { for (const node of nodes) { allNodes.push(node); walk(node.children); } };
+  walk(fullIndex.nodes);
+  assert.ok(fullIndex.total > (reloaded.snapshot(chat.id)!.branchChoices?.length ?? 0), "目录必须包含非活动路径");
+  assert.ok(allNodes.every((node) => typeof node.branchId === "string" && node.branchId), "每个目录节点必须带稳定 branchId");
+  const deepLeaf = allNodes.find((node) => node.depth > 0 && node.children.length === 0 && !node.isActive);
+  assert.ok(deepLeaf, "应能发现非活动路径上的深层叶子");
+  assert.ok(deepLeaf.path.length > 1, "深层叶子应带完整祖先路径");
+  const beforeSwitch = fs.readFileSync(chat.file, "utf8");
+  const switchedResponse = await fetch(base + "/api/chat/branch-switch", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId: chat.id, revision: revision(chat.id), path: deepLeaf.path }) });
+  const switchedText = await switchedResponse.text();
+  assert.equal(switchedResponse.status, 200, switchedText);
+  const switched = JSON.parse(switchedText) as any;
+  assert.equal(switched.index.currentNodeId, deepLeaf.id, "跨层切换后必须定位到目标节点");
+  assert.ok(fs.readFileSync(chat.file, "utf8") !== beforeSwitch, "切换必须写入目标活动路径");
+  console.log("✓ 完整目录读取非活动嵌套分支，并支持一次跨层切换");
+
+  const metaResponse = await fetch(base + "/api/chat/branch-meta", { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId: chat.id, revision: revision(chat.id), nodeId: deepLeaf.id, patch: { name: "深层路线", favorite: true } }) });
+  const metaText = await metaResponse.text();
+  assert.equal(metaResponse.status, 200, metaText);
+  const metaIndex = JSON.parse(metaText) as any;
+  const metaNodes: any[] = []; const collect = (nodes: any[]) => { for (const node of nodes) { metaNodes.push(node); collect(node.children); } }; collect(metaIndex.index.nodes);
+  const renamed = metaNodes.find((node) => node.id === deepLeaf.id);
+  assert.equal(renamed.name, "深层路线");
+  assert.equal(renamed.favorite, true);
+  const reloadedIndex = new ChatStore(config.stDataDir).branchIndex(chat.id);
+  const reloadedNodes: any[] = []; const collectReloaded = (nodes: any[]) => { for (const node of nodes) { reloadedNodes.push(node); collectReloaded(node.children); } }; collectReloaded(reloadedIndex.nodes);
+  const reloadedMeta = reloadedNodes.find((node) => node.id === deepLeaf.id);
+  assert.equal(reloadedMeta?.name, "深层路线", "重启/重新读取后名称保留");
+  assert.equal(reloadedMeta?.favorite, true, "重启/重新读取后收藏保留");
+  assert.equal(reloadedMeta?.branchId, deepLeaf.branchId, "branchId 跨读取稳定");
+  console.log("✓ 分支名称与收藏写入 chat_metadata，刷新目录后保留");
+
+  const beforeBadSwitch = fs.readFileSync(chat.file, "utf8");
+  const badResponse = await fetch(base + "/api/chat/branch-switch", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId: chat.id, revision: revision(chat.id), path: [{ userMessageId: "missing-user", selected: 0 }] }) });
+  assert.equal(badResponse.status, 409);
+  assert.equal(fs.readFileSync(chat.file, "utf8"), beforeBadSwitch, "跨层切换失败不得留下中间状态");
+  console.log("✓ 跨层切换失败时原 JSONL 原子保留");
 } finally {
   server.close(); mock.close();
 }

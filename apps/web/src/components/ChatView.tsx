@@ -1,6 +1,6 @@
 import { ScriptDialog } from "./ScriptDialog.tsx";
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import type { ChatAppearanceDto, ChatDisplayDto, ChatMessageDto, DialoguePairDto, ReasoningLevel } from "@pitavern/shared";
+import type { BranchPathStepDto, BranchSwitchResultDto, ChatAppearanceDto, ChatDisplayDto, ChatMessageDto, DialoguePairDto, ReasoningLevel } from "@pitavern/shared";
 import { RegexPlacement } from "@pitavern/shared/regex";
 import { displayMessageIsolated } from "../displayRegex.ts";
 import { isToolItem, TOOL_META, toolArgPreview, type ChatItem, type ToolItem } from "../chatItems.ts";
@@ -93,7 +93,7 @@ interface ChatViewProps {
   onStop: () => void;
   onEdit: (messageId: string, text: string, expectedText: string) => Promise<boolean>;
   onRegenerate: (instruction?: string) => void;
-  onSelectBranch: (userMessageId: string, selected: number) => Promise<boolean>;
+  onSwitchBranchPath: (path: BranchPathStepDto[], revision?: string) => Promise<BranchSwitchResultDto | null>;
   onSelectGreeting: (selected: number) => Promise<void>;
   onLoadOlder: () => Promise<boolean>;
   loadingOlder: boolean;
@@ -238,7 +238,7 @@ const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRo
 });
 
 export function ChatView({ chat, personaName, models, currentModel, onModelChange, thinkingLevel, onThinkingLevelChange, appearance, streamingText, onSend, onStop, onEdit, onRegenerate,
-  onSelectBranch, onSelectGreeting, onLoadOlder, loadingOlder, onRestored, disabled, maintenance = false, connected }: ChatViewProps) {
+  onSwitchBranchPath, onSelectGreeting, onLoadOlder, loadingOlder, onRestored, disabled, maintenance = false, connected }: ChatViewProps) {
   const [responder, setResponder] = useState("");
   useEffect(() => setResponder(""), [chat?.id]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -547,8 +547,8 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
       </div>
       {backupsFor === chat.id && <BackupDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setBackupsFor(null)} onRestored={onRestored} />}
       {noteFor === chat.id && <AuthorNoteDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setNoteFor(null)} />}
-      {branchOpen && <BranchDialog points={chat.branchChoices ?? []} busy={locked} canRegenerate={canRegenerate && !disabled && !isStreaming}
-        onSelect={onSelectBranch} onRegenerate={(instruction) => onRegenerate(instruction.trim() || undefined)} onClose={() => setBranchOpen(false)} />}
+      {branchOpen && <BranchDialog chatId={chat.id} revision={chat.page?.revision ?? ""} busy={locked} canRegenerate={canRegenerate && !disabled && !isStreaming}
+        onSwitchPath={onSwitchBranchPath} onRegenerate={(instruction) => onRegenerate(instruction.trim() || undefined)} onClose={() => setBranchOpen(false)} />}
     </main>
   );
 }

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import type { BranchPathStepDto, ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import { api } from "./api.ts";
 import { useTavernSocket } from "./socket.ts";
 import { isToolItem } from "./chatItems.ts";
@@ -200,18 +200,18 @@ export function App() {
     }
   }, [showNotice]);
 
-  /** 切换任意历史回合的候选分支；服务端会保留/恢复该分支之后的剧情。 */
-  const selectBranch = useCallback(async (userMessageId: string, selected: number): Promise<boolean> => {
+  /** 从完整分支目录直接跨层切换；服务端一次解析祖先路径并原子写入。 */
+  const switchBranchPath = useCallback(async (path: BranchPathStepDto[], expectedRevision?: string) => {
     const chat = activeChatRef.current;
-    if (!chat?.page || chat.pending || chat.streamingText !== null) return false;
+    if (!chat?.page || chat.pending || chat.streamingText !== null) return null;
     try {
-      await api.selectReply(chat.id, userMessageId, selected, chat.page.revision);
-      showNotice("已切换剧情分支");
-      return true;
+      const result = await api.switchBranchPath(chat.id, expectedRevision ?? chat.page.revision, path);
+      showNotice("已切换剧情路线");
+      return result;
     } catch (error) {
-      showNotice("切换分支失败: " + (error as Error).message);
+      showNotice("切换路线失败: " + (error as Error).message);
       sendRef.current({ type: "chat.sync", chatId: chat.id });
-      return false;
+      return null;
     }
   }, [showNotice]);
 
@@ -292,7 +292,7 @@ export function App() {
           thinkingLevel={connection?.thinkingLevel ?? "off"} onThinkingLevelChange={changeThinkingLevel}
           appearance={connection?.appearance}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
-          onSelectBranch={selectBranch} onSelectGreeting={selectGreeting} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored}
+          onSwitchBranchPath={switchBranchPath} onSelectGreeting={selectGreeting} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored}
           onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} disabled={!connection?.defaultModel} maintenance={!!maintenance} connected={socket.connected} />
         {panelOpen && (
           <ActivityPanel

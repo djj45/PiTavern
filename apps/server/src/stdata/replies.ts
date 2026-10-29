@@ -4,6 +4,8 @@ import type { StChatLine } from "./types.ts";
 export const STATE_KEYS = ["variables", "projection", "timedWorldInfo", "_pitavernEnforcement"] as const;
 export type RecallState = { turn: number; usedThisTurn: number; cooldownUntilTurn: number };
 export interface ReplyVersion {
+  /** 持久化的候选 ID；旧存档没有时由完整路径派生稳定 ID。 */
+  branchId?: string;
   messages: StChatLine[];
   state?: Record<string, unknown>;
   enforcement?: RecallState;
@@ -137,6 +139,83 @@ export function lastReplies(lines: StChatLine[], metadata: Record<string, unknow
 } {
   const userIndex = lines.findLastIndex((line) => line.is_user && !line.is_system && line.mes.trim());
   return turnReplies(lines, metadata, userIndex);
+}
+
+
+export interface ParsedChatSource {
+  source: string;
+  raw: string[];
+  records: { line: StChatLine; rawIndex: number }[];
+  header: Record<string, unknown>;
+  hasHeader: boolean;
+}
+
+/** 解析任意 JSONL 源；与 ChatStore.revision 使用相同规则，但不触碰磁盘。 */
+export function parseChatSource(source: string): ParsedChatSource {
+  const raw = source.split("\n");
+  const records: { line: StChatLine; rawIndex: number }[] = [];
+  let header: Record<string, unknown> = {};
+  let hasHeader = false;
+  raw.forEach((text, rawIndex) => {
+    try {
+      const obj = JSON.parse(text);
+      if (obj && typeof obj.mes === "string" && typeof obj.name === "string") records.push({ line: obj, rawIndex });
+      else if (rawIndex === 0 && obj && typeof obj === "object" && !Array.isArray(obj)) { header = obj; hasHeader = true; }
+    } catch { /* Preserve unparseable lines verbatim. */ }
+  });
+  return { source, raw, records, header, hasHeader };
+}
+
+/**
+ * 在内存中切换一个历史回合的候选；返回新的 JSONL 源，不写盘。
+ * 多步跨层切换可以重复调用，最后只原子替换一次文件。
+ */
+export function selectReplySource(source: string, userMessageId: string, selected: number): string {
+  const rev = parseChatSource(source);
+  const metadata = (rev.header.chat_metadata ?? {}) as Record<string, unknown>;
+  const lines = rev.records.map((record) => record.line);
+  const userIndex = rev.records.findIndex(({ line }, index) => line.is_user && !line.is_system && messageIdOf(line, index) === userMessageId);
+  if (userIndex < 0) throw new Error("找不到对应的用户回合，请刷新后重试");
+  const { catalog } = turnReplies(lines, metadata, userIndex);
+  if (!Number.isInteger(selected) || selected < 0 || selected >= catalog.versions.length) throw new Error("候选回复不存在");
+  if (selected === catalog.selected) return source;
+  const userRecord = rev.records[userIndex];
+  const nextUserPosition = rev.records.findIndex((record, index) => index > userIndex && record.line.is_user && !record.line.is_system);
+  const turnEnd = nextUserPosition >= 0 ? nextUserPosition : rev.records.length;
+  const turnEndRaw = nextUserPosition >= 0 ? rev.records[nextUserPosition].rawIndex : rev.raw.length;
+  const replies = rev.records.slice(userIndex + 1, turnEnd).filter(({ line }) => !line.is_user && !line.is_system);
+  const lastReply = replies.at(-1);
+  // 离开当前候选前，把它后面的所有行（后续回合、系统注释、损坏行）原样收好。
+  const continuation = lastReply ? rev.raw.slice(lastReply.rawIndex + 1).filter((line) => line.trim() !== "") : [];
+  const current = catalog.versions[catalog.selected];
+  catalog.versions[catalog.selected] = { ...current, messages: structuredClone(replies.map(({ line }) => line)), state: stateFields(metadata),
+    ...(continuation.length ? { continuation } : { continuation: undefined }) };
+  const fileCatalog = structuredClone(catalog);
+  fileCatalog.selected = selected;
+  // 即将生效的候选不再需要旧 continuation（写入文件后它就是活动路径）；先取出待恢复的原始行。
+  const target = fileCatalog.versions[selected];
+  const continuationRaw = (target.continuation ?? []).filter((line) => line.trim() !== "");
+  target.continuation = undefined;
+  const replyRaws = new Set(replies.map(({ rawIndex }) => rawIndex));
+  const extras: string[] = [];
+  for (let rawIndex = userRecord.rawIndex + 1; rawIndex < turnEndRaw; rawIndex++) {
+    const raw = rev.raw[rawIndex];
+    if (!replyRaws.has(rawIndex) && raw?.trim()) extras.push(raw);
+  }
+  const userLine = structuredClone(userRecord.line);
+  userLine.extra = { ...userLine.extra, _pitavernReplies: fileCatalog };
+  rev.header.chat_metadata = restoreState(metadata, target.state);
+  const prefix = rev.raw.slice(0, userRecord.rawIndex);
+  if (rev.hasHeader) prefix[0] = JSON.stringify(rev.header);
+  else prefix.unshift(JSON.stringify(rev.header));
+  return [
+    ...prefix, JSON.stringify(userLine), ...extras,
+    ...selectedMessages(fileCatalog).map((line) => JSON.stringify(line)), ...continuationRaw,
+  ].join("\n").replace(/\n+$/, "") + "\n";
+}
+
+function messageIdOf(line: StChatLine, index: number): string {
+  return typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + index;
 }
 
 /**

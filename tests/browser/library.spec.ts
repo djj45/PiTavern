@@ -458,10 +458,12 @@ test('创建群聊、全员与指定角色发言、候选切换和重载', async
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/2');
   await page.getByRole('button', { name: '剧情分支' }).click();
   const branchDialog = page.getByRole('dialog', { name: '分支选择' });
-  await expect(branchDialog.getByText('2 个候选', { exact: true })).toBeVisible();
+  await expect(branchDialog.getByText(/共 2 个节点/)).toBeVisible();
+  await branchDialog.getByRole('button', { name: /未继续的候选/ }).click();
   await expect(branchDialog.locator('button[aria-pressed]')).toHaveCount(2);
-  await branchDialog.locator('button[aria-pressed]').first().click();
-  await expect(page.getByText('已切换剧情分支', { exact: true })).toBeVisible();
+  await branchDialog.locator('button[aria-pressed]').nth(1).click();
+  await branchDialog.getByRole('button', { name: '继续这条路线' }).click();
+  await expect(page.getByText('已切换剧情路线', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/2');
   await page.reload(); await page.locator('aside').first().getByRole('button').filter({ hasText: '浏览器群聊' }).click();
   await expect(page.getByLabel('本轮发言角色')).toBeVisible();
@@ -526,11 +528,16 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 3/3', { timeout: 20000 });
   await page.getByRole('button', { name: '剧情分支' }).click();
   const dialog = page.getByRole('dialog', { name: '分支选择', exact: true });
-  await expect(dialog.getByText('3 个候选', { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/共 3 个节点/)).toBeVisible();
+  await dialog.getByRole('button', { name: /未继续的候选/ }).click();
   await expect(dialog.locator('button[aria-pressed]')).toHaveCount(3);
-  await dialog.locator('button[aria-pressed]').first().click();
-  await expect(page.getByText('已切换剧情分支', { exact: true })).toBeVisible();
+  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await page.screenshot({ path: path.join(app.runDir, 'branch-manager.png') });
+  await dialog.getByRole('button', { name: '继续这条路线' }).click();
+  await expect(page.getByText('已切换剧情路线', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/3');
+  await dialog.getByRole('button', { name: '关闭分支选择' }).click();
+  await expect(dialog).toHaveCount(0);
 
   // 关掉自动候选，在第二个候选的后续上继续写一段，再切回更早分支验证后续保留。
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -538,21 +545,46 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
   await expect(settings).toHaveCount(0);
   await page.getByRole('button', { name: '剧情分支' }).click();
+  await dialog.getByRole('button', { name: /未继续的候选/ }).click();
   await dialog.locator('button[aria-pressed]').nth(1).click();
+  await dialog.getByRole('button', { name: '继续这条路线' }).click();
+  await dialog.getByRole('button', { name: '关闭分支选择' }).click();
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/3');
   await page.getByLabel('消息输入').fill('沿着第二条分支继续');
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeVisible();
   await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '剧情分支' }).click();
-  await expect(dialog.getByText('第 1 轮', { exact: false })).toBeVisible();
-  await dialog.locator('button[aria-pressed]').first().click();
+  await expect(dialog.getByText(/第 1 轮/).first()).toBeVisible();
+  await dialog.getByRole('button', { name: /未继续的候选/ }).click();
+  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await dialog.getByRole('button', { name: '继续这条路线' }).click();
+  await dialog.getByRole('button', { name: '关闭分支选择' }).click();
   await expect(page.getByText('沿着第二条分支继续', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/3');
   await page.getByRole('button', { name: '剧情分支' }).click();
+  await dialog.getByRole('button', { name: /未继续的候选/ }).click();
   await dialog.locator('button[aria-pressed]').nth(1).click();
+  await dialog.getByRole('button', { name: '继续这条路线' }).click();
+  await dialog.getByRole('button', { name: '关闭分支选择' }).click();
   await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible({ timeout: 10000 });
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/3');
+
+  // 收藏和重命名持久化，并能通过搜索定位非当前路线。
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  await dialog.getByRole('button', { name: /未继续的候选/ }).click();
+  await dialog.locator('button[aria-pressed]').last().click();
+  await dialog.getByRole('button', { name: '☆ 收藏' }).click();
+  await expect(dialog.getByRole('button', { name: '★ 已收藏' })).toBeVisible();
+  await dialog.getByRole('button', { name: '重命名' }).click();
+  await dialog.getByLabel('路线名称').fill('备用路线');
+  await dialog.getByRole('button', { name: '保存名称' }).click();
+  await expect(dialog.getByText('备用路线', { exact: true }).first()).toBeVisible();
+  await dialog.getByLabel('搜索分支').fill('备用路线');
+  await expect(dialog.getByText('备用路线', { exact: true }).first()).toBeVisible();
+  await dialog.getByRole('tab', { name: '收藏路线' }).click();
+  await expect(dialog.getByText('备用路线', { exact: true }).first()).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭分支选择' }).click();
 
   await page.reload();
   await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
@@ -560,8 +592,15 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: '统计', exact: true }).click();
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  await expect(dialog.getByLabel('搜索分支')).toBeVisible();
+  await dialog.locator('button[aria-pressed]').first().click();
+  await expect(dialog.getByRole('button', { name: '← 返回目录' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
-  await page.screenshot({ path: path.join(app.runDir, 'mobile-branches.png'), fullPage: true });
+  await page.screenshot({ path: path.join(app.runDir, 'mobile-branch-manager.png'), fullPage: true });
+  await dialog.getByRole('button', { name: '← 返回目录' }).click();
+  await dialog.getByRole('button', { name: '关闭分支选择' }).click();
 });
 
 test('官方推理模型显示思考强度选择并持久化', async ({ page, app, request }) => {

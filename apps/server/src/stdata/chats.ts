@@ -5,7 +5,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AuthorNoteDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
 import type { CharacterCard, StChatLine } from "./types.ts";
 import { greetingCatalog } from "./greetings.ts";
-import { lastReplies, restoreState, selectedMessages, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
+import { lastReplies, restoreState, selectedMessages, selectReplySource, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
+import { buildBranchIndex, findBranchNode } from "./branch-index.ts";
 import { validateAuthorNote } from "../context/author-note.ts";
 
 export interface ChatMeta {
@@ -66,6 +67,7 @@ export class ChatStore {
   private readonly summaries = new Map<string, { fingerprint: string; meta: ChatMeta }>();
   // 列表只保留轻量摘要；正文限制为最近访问的 8 个文件。
   private readonly documents = new Map<string, CachedDocument>();
+  private readonly branchIndexes = new Map<string, { revision: string; index: ReturnType<typeof buildBranchIndex> }>();
 
   constructor(private readonly stDataDir: string) {}
 
@@ -344,6 +346,7 @@ export class ChatStore {
     }
     this.documents.delete(file);
     this.summaries.delete(file);
+    this.branchIndexes.delete(file);
   }
 
   /** Read raw lines so unknown ST fields, alternate replies and damaged lines survive edits. */
@@ -487,7 +490,7 @@ export class ChatStore {
         const raw = [...prefix];
         let selected = messages;
         if (keepAlternatives && catalog.versions.length) {
-          catalog.versions.push({ messages: structuredClone(messages), state: stateFields(nextMetadata) });
+          catalog.versions.push({ branchId: randomUUID(), messages: structuredClone(messages), state: stateFields(nextMetadata) });
           catalog.selected = catalog.versions.length - 1;
           const user = structuredClone(lines[userIndex]);
           user.extra = { ...user.extra, _pitavernReplies: catalog };
@@ -538,47 +541,66 @@ export class ChatStore {
   selectReply(chatId: string, userMessageId: string, selected: number, expectedRevision: string): void {
     if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后切换候选回复");
     const rev = this.revision(chatId);
-    const metadata = (rev.header.chat_metadata ?? {}) as Record<string, unknown>;
-    const lines = rev.records.map((record) => record.line);
-    const userIndex = rev.records.findIndex(({ line }, index) => line.is_user && !line.is_system && messageIdOf(line, index) === userMessageId);
-    if (userIndex < 0) throw new Error("找不到对应的用户回合，请刷新后重试");
-    const { catalog } = turnReplies(lines, metadata, userIndex);
-    if (!Number.isInteger(selected) || selected < 0 || selected >= catalog.versions.length) throw new Error("候选回复不存在");
-    if (selected === catalog.selected) return;
-    const userRecord = rev.records[userIndex];
-    const nextUserPosition = rev.records.findIndex((record, index) => index > userIndex && record.line.is_user && !record.line.is_system);
-    const turnEnd = nextUserPosition >= 0 ? nextUserPosition : rev.records.length;
-    const turnEndRaw = nextUserPosition >= 0 ? rev.records[nextUserPosition].rawIndex : rev.raw.length;
-    const replies = rev.records.slice(userIndex + 1, turnEnd).filter(({ line }) => !line.is_user && !line.is_system);
-    const lastReply = replies.at(-1);
-    // 离开当前候选前，把它后面的所有行（后续回合、系统注释、损坏行）原样收好。
-    const continuation = lastReply ? rev.raw.slice(lastReply.rawIndex + 1).filter((line) => line.trim() !== "") : [];
-    const current = catalog.versions[catalog.selected];
-    catalog.versions[catalog.selected] = { ...current, messages: structuredClone(replies.map(({ line }) => line)), state: stateFields(metadata),
-      ...(continuation.length ? { continuation } : { continuation: undefined }) };
-    const fileCatalog = structuredClone(catalog);
-    fileCatalog.selected = selected;
-    // 即将生效的候选不再需要旧 continuation（写入文件后它就是活动路径）；先取出待恢复的原始行。
-    const target = fileCatalog.versions[selected];
-    const continuationRaw = (target.continuation ?? []).filter((line) => line.trim() !== "");
-    target.continuation = undefined;
-    const replyRaws = new Set(replies.map(({ rawIndex }) => rawIndex));
-    const extras: string[] = [];
-    for (let rawIndex = userRecord.rawIndex + 1; rawIndex < turnEndRaw; rawIndex++) {
-      const raw = rev.raw[rawIndex];
-      if (!replyRaws.has(rawIndex) && raw?.trim()) extras.push(raw);
+    this.replaceSource(chatId, rev.source, selectReplySource(rev.source, userMessageId, selected));
+  }
+
+  /** 一次请求里按祖先路径连续切换，最后只写一次 JSONL。 */
+  selectReplyPath(chatId: string, steps: { userMessageId: string; selected: number }[], expectedRevision: string) {
+    if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后切换路线");
+    if (!steps.length || steps.length > 100) throw new Error("路线路径无效");
+    const rev = this.revision(chatId);
+    let source = rev.source;
+    for (const step of steps) source = selectReplySource(source, step.userMessageId, step.selected);
+    this.replaceSource(chatId, rev.source, source);
+    return this.branchIndex(chatId);
+  }
+
+  branchIndex(chatId: string) {
+    const file = this.resolveChatFile(chatId);
+    if (!file) throw new Error("聊天不存在");
+    const revision = this.revisionId(chatId);
+    const cached = this.branchIndexes.get(file);
+    if (cached?.revision === revision) return cached.index;
+    const rev = this.revision(chatId);
+    const index = buildBranchIndex(rev.source, revision);
+    this.branchIndexes.set(file, { revision, index });
+    while (this.branchIndexes.size > 8) this.branchIndexes.delete(this.branchIndexes.keys().next().value!);
+    return index;
+  }
+
+  updateBranchMeta(chatId: string, nodeId: string, patch: { name?: string | null; note?: string | null; favorite?: boolean; archived?: boolean }, expectedRevision: string) {
+    if (this.revisionId(chatId) !== expectedRevision) throw new Error("分支目录已变化，请刷新后重试");
+    const rev = this.revision(chatId);
+    const index = buildBranchIndex(rev.source, expectedRevision);
+    if (!findBranchNode(index.nodes, nodeId)) throw new Error("分支节点不存在，请刷新后重试");
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    const map = metadata._pitavernBranchMeta && typeof metadata._pitavernBranchMeta === "object" && !Array.isArray(metadata._pitavernBranchMeta)
+      ? { ...(metadata._pitavernBranchMeta as Record<string, Record<string, unknown>>) } : {};
+    const current = { ...(map[nodeId] ?? {}) };
+    if (patch.name !== undefined) {
+      if (patch.name && patch.name.trim()) current.name = patch.name.trim().slice(0, 80);
+      else delete current.name;
     }
-    const userLine = structuredClone(userRecord.line);
-    userLine.extra = { ...userLine.extra, _pitavernReplies: fileCatalog };
-    rev.header.chat_metadata = restoreState(metadata, target.state);
-    const prefix = rev.raw.slice(0, userRecord.rawIndex);
-    if (rev.hasHeader) prefix[0] = JSON.stringify(rev.header);
-    else prefix.unshift(JSON.stringify(rev.header));
-    const next = [
-      ...prefix, JSON.stringify(userLine), ...extras,
-      ...selectedMessages(fileCatalog).map((line) => JSON.stringify(line)), ...continuationRaw,
-    ].join("\n").replace(/\n+$/, "") + "\n";
-    this.replaceSource(chatId, rev.source, next);
+    if (patch.note !== undefined) {
+      if (patch.note && patch.note.trim()) current.note = patch.note.trim().slice(0, 300);
+      else delete current.note;
+    }
+    if (patch.favorite !== undefined) {
+      if (patch.favorite) current.favorite = true;
+      else delete current.favorite;
+    }
+    if (patch.archived !== undefined) {
+      if (patch.archived) current.archived = true;
+      else delete current.archived;
+    }
+    if (Object.keys(current).length) map[nodeId] = current;
+    else delete map[nodeId];
+    metadata._pitavernBranchMeta = map;
+    rev.header.chat_metadata = metadata;
+    if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);
+    else rev.raw.unshift(JSON.stringify(rev.header));
+    this.replaceSource(chatId, rev.source, rev.raw.join("\n"));
+    return this.branchIndex(chatId);
   }
 
   deleteChat(chatId: string): boolean {
@@ -587,6 +609,7 @@ export class ChatStore {
     fs.rmSync(file);
     this.documents.delete(file);
     this.summaries.delete(file);
+    this.branchIndexes.delete(file);
     return true;
   }
 }
