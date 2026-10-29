@@ -1,6 +1,6 @@
 # PiTavern（π 酒馆）
 
-当前版本：**0.2.1**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
+当前版本：**0.2.2**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
 
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
