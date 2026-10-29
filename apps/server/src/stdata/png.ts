@@ -53,3 +53,54 @@ export function parseCardFromPng(buffer: Buffer): { spec: string; data: unknown 
   }
   return null;
 }
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Update both card formats, preserving pixels, other chunks and unknown JSON fields. */
+export function rewritePngRegex(buffer: Buffer, scripts: unknown[]): Buffer {
+  if (!parseCardFromPng(buffer)) throw new Error("PNG 没有有效角色卡");
+  const result = [buffer.subarray(0, 8)];
+  let offset = 8;
+  let updated = 0;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const end = offset + length + 12;
+    if (end > buffer.length) throw new Error("PNG 数据不完整");
+    const type = buffer.toString("latin1", offset + 4, offset + 8);
+    let chunk = buffer.subarray(offset, end);
+    if (type === "tEXt") {
+      const data = buffer.subarray(offset + 8, end - 4);
+      const zero = data.indexOf(0);
+      const keyword = data.toString("latin1", 0, Math.max(0, zero));
+      if (keyword === "chara" || keyword === "ccv3") {
+        const raw = JSON.parse(Buffer.from(data.subarray(zero + 1).toString("latin1"), "base64").toString("utf8"));
+        const card = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+        if (!card || typeof card !== "object" || Array.isArray(card)) throw new Error("PNG 卡片结构无效");
+        if (card.extensions != null && (typeof card.extensions !== "object" || Array.isArray(card.extensions))) throw new Error("卡片 extensions 不是对象");
+        card.extensions = { ...card.extensions, regex_scripts: scripts };
+        const payload = Buffer.from(`${keyword}\0${Buffer.from(JSON.stringify(raw)).toString("base64")}`, "latin1");
+        chunk = Buffer.alloc(payload.length + 12);
+        chunk.writeUInt32BE(payload.length, 0);
+        chunk.write("tEXt", 4, "latin1");
+        payload.copy(chunk, 8);
+        chunk.writeUInt32BE(crc32(chunk.subarray(4, chunk.length - 4)), chunk.length - 4);
+        updated++;
+      }
+    }
+    result.push(chunk);
+    offset = end;
+    if (type === "IEND") {
+      if (!updated) throw new Error("PNG 没有可编辑的角色卡");
+      result.push(buffer.subarray(offset));
+      return Buffer.concat(result);
+    }
+  }
+  throw new Error("PNG 缺少结束块");
+}

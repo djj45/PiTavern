@@ -14,6 +14,8 @@ export class CharacterStore {
 
   constructor(private readonly charactersDir: string) {}
 
+  invalidate(): void { this.cache.clear(); }
+
   listCharacters(): CharacterCard[] {
     if (!fs.existsSync(this.charactersDir)) return [];
     const cards: CharacterCard[] = [];

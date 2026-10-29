@@ -11,6 +11,9 @@ import type {
   ConnectionDto,
   PresetSummaryDto,
   WorldSummaryDto,
+  LibraryResourceDto,
+  LibraryDocumentDto,
+  LibraryBackupPreviewDto,
 } from "@pitavern/shared";
 
 async function json<T>(res: Response): Promise<T> {
@@ -22,6 +25,24 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  library: () => fetch("/api/library").then((r) => json<LibraryResourceDto[]>(r)),
+  libraryDocument: (id: string) => fetch("/api/library/document?" + new URLSearchParams({ id })).then((r) => json<LibraryDocumentDto>(r)),
+  saveLibraryDocument: (document: LibraryDocumentDto) => fetch("/api/library/document", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: document.resource.id, revision: document.revision, data: document.data }),
+  }).then((r) => json<LibraryDocumentDto>(r)),
+  createWorld: (name: string) => fetch("/api/library/world", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+    .then((r) => json<LibraryDocumentDto>(r)),
+  previewLibraryBackup: (file: File) => fetch("/api/library-backup/preview", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file })
+    .then((r) => json<LibraryBackupPreviewDto>(r)),
+  discardLibraryBackup: (id: string) => fetch("/api/library-backup/preview?" + new URLSearchParams({ id }), { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
+  restoreLibraryBackup: (id: string) => fetch("/api/library-backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    .then((r) => json<{ stDataDir: string; previousDataDir: string; restartRequired: true }>(r)),
+  exportLibraryBackup: async () => {
+    const response = await fetch("/api/library-backup/export");
+    if (!response.ok) { await json(response); throw new Error("导出失败"); }
+    return response.blob();
+  },
   authorNote: (chatId: string) => fetch("/api/chat/author-note?" + new URLSearchParams({ chatId }))
     .then((r) => json<AuthorNoteSnapshotDto>(r)),
   saveAuthorNote: (chatId: string, note: AuthorNoteDto, revision: string) =>

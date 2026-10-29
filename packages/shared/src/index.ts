@@ -324,7 +324,9 @@ export type ClientMessage =
   | { type: "ping" };
 
 export type ServerEvent =
-  | { type: "hello"; version: string }
+  | { type: "library.changed" }
+  | { type: "maintenance"; message: string; restartRequired: boolean }
+  | { type: "hello"; version: string; maintenance?: string }
   | { type: "pong" }
   /** 本轮生成开始 */
   | { type: "chat.started"; chatId: string; message: ChatMessageDto }
@@ -363,3 +365,19 @@ export type ServerEvent =
       /** 工具回传的 UI 摘要（每个工具保证含 summary 字段） */
       details?: { summary?: string; [key: string]: unknown };
     };
+
+export type LibraryKind = "world" | "global-regex" | "preset-regex" | "character-regex";
+export interface LibraryResourceDto { id: string; kind: LibraryKind; label: string }
+export interface LibraryDocumentDto {
+  resource: LibraryResourceDto;
+  revision: string;
+  /** Whole world file, or a scripts array; unknown fields are round-tripped. */
+  data: Record<string, unknown> | import("./regex.ts").RegexScript[];
+}
+export interface LibraryBackupPreviewDto {
+  id: string;
+  createdAt: string;
+  files: number;
+  bytes: number;
+  counts: Record<string, number>;
+}

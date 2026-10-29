@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ServerEvent } from "@pitavern/shared";
 import { api } from "./api.ts";
 import { useTavernSocket } from "./socket.ts";
@@ -9,6 +9,7 @@ import { TopBar } from "./components/TopBar.tsx";
 import { ChatView } from "./components/ChatView.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
 import { ActivityPanel } from "./components/ActivityPanel.tsx";
+const LibraryDialog = lazy(() => import("./components/LibraryDialog.tsx"));
 
 export function App() {
   const [connection, setConnection] = useState<ConnectionDto | null>(null);
@@ -18,6 +19,8 @@ export function App() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatStates, dispatch] = useReducer(chatReducer, {});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [maintenance, setMaintenance] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [navOpen, setNavOpen] = useState(false);
@@ -59,16 +62,26 @@ export function App() {
 
   const onEvent = useCallback((event: ServerEvent) => {
     dispatch(event);
-    if (event.type === "hello") {
-      const chatId = activeChatIdRef.current;
-      if (chatId) sendRef.current({ type: "chat.sync", chatId });
+    if (event.type === "maintenance") {
+      setMaintenance(event.message);
+      if (!event.message && activeChatIdRef.current) sendRef.current({ type: "chat.sync", chatId: activeChatIdRef.current });
+    } else if (event.type === "library.changed") {
+      void refreshCharacters();
       void refreshChats();
+      if (activeChatIdRef.current) sendRef.current({ type: "chat.sync", chatId: activeChatIdRef.current });
+    } else if (event.type === "hello") {
+      setMaintenance(event.maintenance ?? "");
+      const chatId = activeChatIdRef.current;
+      if (!event.maintenance) {
+        if (chatId) sendRef.current({ type: "chat.sync", chatId });
+        void refreshChats();
+      }
     } else if (event.type === "chat.finished" || event.type === "chat.snapshot") {
       void refreshChats();
     } else if (event.type === "chat.error") {
       showNotice(`聊天失败: ${event.message}`);
     }
-  }, [refreshChats, showNotice]);
+  }, [refreshCharacters, refreshChats, showNotice]);
   const socket = useTavernSocket(onEvent);
   sendRef.current = socket.send;
   useEffect(() => { if (!socket.connected) dispatch({ type: "disconnected" }); }, [socket.connected]);
@@ -190,8 +203,10 @@ export function App() {
   return (
     <div className="flex h-full flex-col">
       <TopBar connection={connection} wsConnected={socket.connected} onModelChange={changeModel}
+        onOpenLibrary={() => setLibraryOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)} panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((v) => !v)}
         theme={theme} onCycleTheme={cycleTheme} onToggleNav={() => setNavOpen((v) => !v)} />
+      {maintenance && <p role="status" className="shrink-0 border-b border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-accent">{maintenance}</p>}
       <div className="flex min-h-0 flex-1">
         <Sidebar characters={characters} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
           chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onDeleteChat={deleteChat}
@@ -199,7 +214,7 @@ export function App() {
         <ChatView chat={activeChat} personaName={connection?.persona.name ?? "你"}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
           onSelectReply={selectReply} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored}
-          onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} disabled={!connection?.defaultModel} connected={socket.connected} />
+          onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} disabled={!connection?.defaultModel} maintenance={!!maintenance} connected={socket.connected} />
         {panelOpen && (
           <ActivityPanel
             chatId={activeChat?.id}
@@ -219,6 +234,9 @@ export function App() {
           if (activeChatIdRef.current) sendRef.current({ type: "chat.sync", chatId: activeChatIdRef.current });
           showNotice(restartRequired ? "设置已保存，数据目录将在重启服务后生效" : "设置已保存");
         }} onError={showNotice} onNotice={showNotice} />}
+      {libraryOpen && <Suspense fallback={<p role="status" className="fixed bottom-4 right-4 rounded bg-tavern-panel p-3">正在打开资料库…</p>}>
+        <LibraryDialog onClose={() => setLibraryOpen(false)} />
+      </Suspense>}
     </div>
   );
 }

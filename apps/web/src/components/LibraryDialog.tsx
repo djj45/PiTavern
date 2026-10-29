@@ -1,0 +1,146 @@
+import { useEffect, useRef, useState } from "react";
+import type { LibraryDocumentDto, LibraryResourceDto } from "@pitavern/shared";
+import type { RegexScript } from "@pitavern/shared/regex";
+import { api } from "../api.ts";
+import { RegexEditor } from "./RegexEditor.tsx";
+import { LibraryBackupPanel } from "./LibraryBackupPanel.tsx";
+import { fieldClass, buttonClass } from "./libraryStyles.ts";
+
+type World = Record<string, unknown> & { entries: Record<string, Record<string, unknown>> };
+
+function WorldEditor({ value, onChange }: { value: World; onChange: (world: World) => void }) {
+  const [selected, setSelected] = useState(() => Object.keys(value.entries)[0] ?? "");
+  const entry = value.entries[selected];
+  const update = (patch: Record<string, unknown>) => onChange({ ...value, entries: { ...value.entries, [selected]: { ...entry, ...patch } } });
+  const number = (key: string, label: string, fallback = 0, nullable = false) => <label key={key}>{label}<input type="number" step={1} aria-label={label} className={fieldClass}
+    value={entry[key] == null ? (nullable ? "" : fallback) : Number(entry[key])} onChange={(e) => update({ [key]: e.target.value === "" && nullable ? null : Number(e.target.value) })} /></label>;
+  const check = (key: string, label: string, fallback = false) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={typeof entry[key] === "boolean" ? entry[key] as boolean : fallback} onChange={(e) => update({ [key]: e.target.checked })} />{label}</label>;
+  const inherit = (key: string, label: string) => <label key={key}>{label}<select className={fieldClass} value={entry[key] == null ? "" : String(entry[key])}
+    onChange={(e) => update({ [key]: e.target.value === "" ? null : e.target.value === "true" })}><option value="">跟随全局</option><option value="true">开启</option><option value="false">关闭</option></select></label>;
+  const add = () => {
+    let uid = 0; while (Object.hasOwn(value.entries, String(uid))) uid++;
+    onChange({ ...value, entries: { ...value.entries, [uid]: { uid, key: [], keysecondary: [], comment: "新条目", content: "", order: 100, position: 0, disable: false } } });
+    setSelected(String(uid));
+  };
+  const remove = () => {
+    const entries = { ...value.entries }; delete entries[selected];
+    onChange({ ...value, entries }); setSelected(Object.keys(entries)[0] ?? "");
+  };
+  return <div className="space-y-4">
+    <p className="text-xs leading-5 text-tavern-dim">编辑外部世界书。启用范围、全局扫描和预算仍在设置中选择；卡内世界书暂不在此编辑。</p>
+    <div className="flex flex-wrap items-end gap-2">
+      <label className="min-w-0 flex-1">条目（{Object.keys(value.entries).length}）<select aria-label="世界书条目" value={selected} onChange={(e) => setSelected(e.target.value)} className={fieldClass}>
+        {!Object.keys(value.entries).length && <option value="">暂无条目</option>}
+        {Object.entries(value.entries).map(([uid, item]) => <option key={uid} value={uid}>{item.disable ? "⏸ " : ""}{String(item.comment || uid)}</option>)}
+      </select></label>
+      <button type="button" onClick={add} className={buttonClass}>新增条目</button>
+      <button type="button" disabled={!entry} onClick={remove} className={buttonClass}>删除条目</button>
+    </div>
+    {entry && <div className="space-y-4">
+      <label className="block">名称／备注<input aria-label="条目备注" value={String(entry.comment ?? "")} onChange={(e) => update({ comment: e.target.value })} className={fieldClass} /></label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label>主关键词（每行一个）<textarea rows={3} value={Array.isArray(entry.key) ? entry.key.join("\n") : ""} onChange={(e) => update({ key: e.target.value.split("\n") })} className={fieldClass} /></label>
+        <label>辅助关键词（每行一个）<textarea rows={3} value={Array.isArray(entry.keysecondary) ? entry.keysecondary.join("\n") : ""} onChange={(e) => update({ keysecondary: e.target.value.split("\n") })} className={fieldClass} /></label>
+      </div>
+      <label className="block">条目内容<textarea aria-label="条目内容" rows={7} value={String(entry.content ?? "")} onChange={(e) => update({ content: e.target.value })} className={fieldClass} /></label>
+      <div className="flex flex-wrap gap-4"><label className="flex items-center gap-2"><input type="checkbox" checked={entry.disable === true || entry.disabled === true} onChange={(e) => update({ disable: e.target.checked, ...(Object.hasOwn(entry, "disabled") ? { disabled: e.target.checked } : {}) })} />停用</label>{check("constant", "常驻")}{check("vectorized", "向量条目")}{check("selective", "使用辅助关键词", true)}</div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <label>注入位置<select className={fieldClass} value={Number(entry.position ?? 0)} onChange={(e) => update({ position: Number(e.target.value) })}>
+          {["角色定义前", "角色定义后", "作者注释前", "作者注释后", "按聊天深度", "示例前", "示例后", "Outlet"].map((name, i) => <option key={i} value={i}>{name}</option>)}
+        </select></label>
+        {number("order", "排序", 100)}{number("depth", "注入深度", 4)}
+        <label>消息角色<select className={fieldClass} value={String(entry.role ?? 0)} onChange={(e) => update({ role: Number(e.target.value) })}>
+          <option value={0}>System</option><option value={1}>User</option><option value={2}>Assistant</option>
+          {["system", "user", "assistant"].includes(String(entry.role)) && <option value={String(entry.role)}>{String(entry.role)}</option>}
+        </select></label>
+        <label>辅助逻辑<select className={fieldClass} value={Number(entry.selectiveLogic ?? 0)} onChange={(e) => update({ selectiveLogic: Number(e.target.value) })}>
+          <option value={0}>任意命中</option><option value={1}>不全部命中</option><option value={2}>全部不命中</option><option value={3}>全部命中</option>
+        </select></label>
+        <label>Outlet 名称<input className={fieldClass} value={String(entry.outletName ?? "")} onChange={(e) => update({ outletName: e.target.value })} /></label>
+      </div>
+      <details className="rounded-lg border border-tavern-border p-3"><summary className="cursor-pointer">分组、概率与时序</summary>
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <label>包含组（逗号分隔）<input className={fieldClass} value={String(entry.group ?? "")} onChange={(e) => update({ group: e.target.value })} /></label>
+          {number("groupWeight", "组权重", 100)}{inherit("useGroupScoring", "组评分")}
+          {number("probability", "激活概率 %", 100)}{number("sticky", "持续消息数")}{number("cooldown", "冷却消息数")}{number("delay", "延迟消息数")}
+          {number("scanDepth", "扫描深度（空为全局）", 0, true)}
+          <label>递归延迟<input type="number" min={0} step={1} className={fieldClass} value={(entry.delayUntilRecursion ?? entry.delayed) === true ? 1 : Number(entry.delayUntilRecursion ?? entry.delayed ?? 0)} onChange={(e) => update({ delayUntilRecursion: Number(e.target.value) || false })} /></label>
+          {inherit("caseSensitive", "区分大小写")}{inherit("matchWholeWords", "完整词匹配")}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-4">{check("groupOverride", "组内优先覆盖")}{check("useProbability", "启用概率", true)}{check("excludeRecursion", "不参与递归扫描")}{check("preventRecursion", "不触发后续递归")}</div>
+      </details>
+    </div>}
+  </div>;
+}
+
+export default function LibraryDialog({ onClose }: { onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [tab, setTab] = useState<"world" | "regex" | "backup">("world");
+  const [resources, setResources] = useState<LibraryResourceDto[]>([]);
+  const [document, setDocument] = useState<LibraryDocumentDto | null>(null);
+  const [draft, setDraft] = useState<LibraryDocumentDto | null>(null);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const dirty = !!draft && JSON.stringify(draft.data) !== JSON.stringify(document?.data);
+  const discard = () => !dirty || window.confirm("还有未保存的草稿，确定放弃吗？");
+  const close = () => { if (!busy && discard()) onClose(); };
+  useEffect(() => { dialog.current?.showModal(); void api.library().then(setResources).catch((e: Error) => setError(e.message)); }, []);
+  const load = async (id: string) => {
+    if (!discard()) return;
+    setBusy(true); setError(""); setStatus("");
+    try { const value = await api.libraryDocument(id); setDocument(value); setDraft(structuredClone(value)); }
+    catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  };
+  const save = async () => {
+    if (!draft || busy) return;
+    setBusy(true); setError(""); setStatus("");
+    try {
+      const saved = await api.saveLibraryDocument(draft);
+      setDocument(saved); setDraft(structuredClone(saved)); setStatus("已保存，原文件已备份");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  };
+  const create = async () => {
+    if (!discard()) return;
+    setBusy(true); setError(""); setStatus("");
+    try {
+      const value = await api.createWorld(name);
+      setResources(await api.library()); setDocument(value); setDraft(structuredClone(value)); setName(""); setStatus("世界书已创建；请添加条目并在设置中启用");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  };
+  return <dialog ref={dialog} aria-labelledby="library-title" onCancel={(event) => { event.preventDefault(); close(); }}
+    className="m-auto max-h-[92dvh] w-[min(960px,96vw)] overflow-y-auto rounded-xl border border-tavern-border bg-tavern-panel p-0 text-tavern-text backdrop:bg-black/60">
+    <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-tavern-border bg-tavern-panel p-4">
+      <h2 id="library-title" className="font-medium">资料库{dirty ? " · 未保存" : ""}</h2>
+      <button type="button" disabled={busy} onClick={close} className={buttonClass}>关闭</button>
+      <div role="tablist" aria-label="资料库功能" className="flex w-full flex-wrap gap-2">
+        {([["world", "世界书"], ["regex", "正则脚本"], ["backup", "备份与迁移"]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} disabled={busy}
+          onClick={() => { if (tab !== id && discard()) { setTab(id); setDraft(null); setDocument(null); setError(""); setStatus(""); } }} className={buttonClass + (tab === id ? " border-tavern-accent text-tavern-accent" : "")}>{label}</button>)}
+      </div>
+    </div>
+    <div className="space-y-4 p-4 text-sm">
+      {tab === "backup" ? <LibraryBackupPanel onBusy={setBusy} /> : <>
+        <fieldset disabled={busy} className="space-y-4 disabled:opacity-60">
+          <label className="block">{tab === "world" ? "世界书文件" : "正则来源"}<select aria-label="资料文件" value={draft?.resource.id ?? ""} onChange={(e) => { if (e.target.value) void load(e.target.value); }} className={fieldClass}>
+            <option value="">选择资料…</option>
+            {resources.filter((r) => tab === "world" ? r.kind === "world" : r.kind !== "world").map((r) => <option key={r.id} value={r.id}>{r.kind === "preset-regex" ? "预设 · " : r.kind === "character-regex" ? "角色卡 · " : ""}{r.label}</option>)}
+          </select></label>
+          {tab === "world" && <div className="flex items-end gap-2"><label className="min-w-0 flex-1">新世界书名称<input value={name} onChange={(e) => setName(e.target.value)} className={fieldClass} /></label><button type="button" disabled={!name.trim()} onClick={() => void create()} className={buttonClass}>新建世界书</button></div>}
+          {draft && (tab === "world" ? <WorldEditor key={draft.resource.id + draft.revision} value={draft.data as World} onChange={(data) => setDraft({ ...draft, data })} />
+            : <RegexEditor key={draft.resource.id + draft.revision} scripts={draft.data as RegexScript[]} onChange={(data) => setDraft({ ...draft, data })} />)}
+        </fieldset>
+        {draft && <div className="flex flex-wrap gap-3 border-t border-tavern-border pt-4">
+          <button type="button" onClick={() => void save()} disabled={busy || !dirty} className="rounded-lg bg-tavern-accent px-4 py-2 text-tavern-bg disabled:opacity-40">{busy ? "处理中…" : "保存资料"}</button>
+          <button type="button" disabled={busy} onClick={() => void load(draft.resource.id)} className={buttonClass}>重新载入</button>
+          <p className="w-full text-xs text-tavern-dim">生成期间请先停止所有聊天。保存会保留未知字段；冲突时草稿保留，重新载入会丢弃草稿。</p>
+        </div>}
+      </>}
+      {status && <p role="status" className="text-tavern-accent">{status}</p>}
+      {error && <p role="alert" className="break-words text-red-400">{error}</p>}
+    </div>
+  </dialog>;
+}

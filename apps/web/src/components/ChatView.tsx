@@ -37,6 +37,7 @@ interface ChatViewProps {
   loadingOlder: boolean;
   onRestored: () => void;
   disabled: boolean;
+  maintenance?: boolean;
   connected: boolean;
 }
 
@@ -168,7 +169,7 @@ const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRo
 });
 
 export function ChatView({ chat, personaName, streamingText, onSend, onStop, onEdit, onRegenerate,
-  onSelectReply, onLoadOlder, loadingOlder, onRestored, disabled, connected }: ChatViewProps) {
+  onSelectReply, onLoadOlder, loadingOlder, onRestored, disabled, maintenance = false, connected }: ChatViewProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const input = chat ? drafts[chat.id] ?? "" : "";
   const setInput = (value: string) => {
@@ -182,7 +183,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
   const [switching, setSwitching] = useState(false);
   const followRef = useRef(true);
   const isStreaming = streamingText !== null;
-  const locked = isStreaming || switching || !connected;
+  const locked = isStreaming || switching || !connected || maintenance;
   const lastRun = chat?.activity?.records[0];
   const toolItems = useMemo<ToolItem[]>(() => lastRun?.tools.map((tool) => ({ ...tool, kind: "tool" })) ?? [], [lastRun]);
 

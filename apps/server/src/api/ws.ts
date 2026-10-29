@@ -18,7 +18,7 @@ export function attachWebSocket(server: http.Server, sessions: SessionManager): 
   });
 
   wss.on("connection", (ws: WebSocket) => {
-    ws.send(JSON.stringify({ type: "hello", version: PITAVERN_VERSION }));
+    ws.send(JSON.stringify({ type: "hello", version: PITAVERN_VERSION, maintenance: sessions.writeBlocked ?? undefined }));
 
     const unsubscribe = sessions.onEvent((event) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
@@ -52,6 +52,7 @@ export function attachWebSocket(server: http.Server, sessions: SessionManager): 
         case "chat.sync": {
           // 快照和后续增量使用同一连接，保证客户端按服务器顺序应用。
           try {
+            if (sessions.writeBlocked) throw new Error(sessions.writeBlocked);
             const snapshot = sessions.snapshot(message.chatId);
             ws.send(JSON.stringify(snapshot
               ? { type: "chat.snapshot", chatId: message.chatId, snapshot }

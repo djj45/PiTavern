@@ -32,6 +32,7 @@ import { retrieveVectorEntries } from "../context/vectors.ts";
 import { replyChoices, stateFields, validEnforcement } from "../stdata/replies.ts";
 import { ActivityStore, emptyUsage } from "../stdata/activity.ts";
 import { createTokenCounter } from "../context/tokens.ts";
+import { globalRegex } from "../stdata/library.ts";
 
 type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext">;
 
@@ -52,6 +53,8 @@ export class SessionManager {
   private readonly sessions = new Map<string, ChatSession>();
   private readonly listeners = new Set<(event: ServerEvent) => void>();
   private readonly activity: ActivityStore;
+  private maintenanceMessage: string | null = null;
+  private restartRequired = false;
 
   constructor(
     private readonly config: TavernConfig,
@@ -112,6 +115,37 @@ export class SessionManager {
     return this.sessions.get(chatId)?.running ?? false;
   }
 
+  get writeBlocked(): string | null { return this.maintenanceMessage; }
+
+  assertIdle(): void {
+    if (this.maintenanceMessage) throw new Error(this.maintenanceMessage);
+    if ([...this.sessions.values()].some((session) => session.running)) throw new Error("请先停止所有聊天的生成，再操作资料库");
+  }
+
+  beginMaintenance(message: string): () => void {
+    this.assertIdle();
+    this.maintenanceMessage = message;
+    this.emit({ type: "maintenance", message, restartRequired: false });
+    return () => {
+      if (!this.restartRequired) {
+        this.maintenanceMessage = null;
+        this.emit({ type: "maintenance", message: "", restartRequired: false });
+      }
+    };
+  }
+
+  requireRestart(): void {
+    this.restartRequired = true;
+    this.maintenanceMessage = "资料库已恢复，请重启服务后继续";
+    this.emit({ type: "maintenance", message: this.maintenanceMessage, restartRequired: true });
+  }
+
+  libraryChanged(): void {
+    this.characters.invalidate();
+    this.invalidateAll();
+    this.emit({ type: "library.changed" });
+  }
+
   abort(chatId: string): boolean {
     const session = this.sessions.get(chatId);
     if (!session?.running) return false;
@@ -152,8 +186,10 @@ export class SessionManager {
         presetScripts = normalizeRegexScripts(preset.extensions?.regex_scripts);
       } catch { /* 预设读取错误在生成时报告；不阻断已有聊天的显示。 */ }
     }
+    let globals: ReturnType<typeof normalizeRegexScripts> = [];
+    try { globals = globalRegex(this.stDataDir); } catch { /* 报错留给生成流程，已有消息仍可查看。 */ }
     return {
-      scripts: [...presetScripts, ...normalizeRegexScripts(character?.extensions.regex_scripts)].filter((script) => !script.disabled),
+      scripts: [...globals, ...presetScripts, ...normalizeRegexScripts(character?.extensions.regex_scripts)].filter((script) => !script.disabled),
       char: character?.name ?? characterName, user: this.config.persona.name,
       personaDescription: this.config.persona.description,
       variables: metadata.variables && typeof metadata.variables === "object" && !Array.isArray(metadata.variables)
@@ -169,12 +205,14 @@ export class SessionManager {
   }
 
   saveAuthorNote(chatId: string, note: AuthorNoteDto, revision: string): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再编辑作者注释");
     this.chats.saveAuthorNote(chatId, note, revision);
     this.changed(chatId);
   }
 
   editMessage(chatId: string, messageId: string, text: string, expectedText: string): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再编辑消息");
     this.chats.editMessage(chatId, messageId, text, expectedText);
     this.changed(chatId);
@@ -192,12 +230,14 @@ export class SessionManager {
   }
 
   selectReply(chatId: string, userMessageId: string, selected: number, revision: string): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再切换候选回复");
     this.chats.selectReply(chatId, userMessageId, selected, revision);
     this.changed(chatId);
   }
 
   restoreBackup(chatId: string, backupId: string, revision: string): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再恢复备份");
     this.chats.restoreBackup(chatId, backupId, revision);
     this.changed(chatId);
@@ -213,6 +253,10 @@ export class SessionManager {
 
   /** Both normal sends and regeneration stage state and replies until the entire turn succeeds. */
   private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }): Promise<void> {
+    if (this.writeBlocked) {
+      this.emit({ type: "chat.error", chatId, message: this.writeBlocked });
+      return;
+    }
     if (this.isStreaming(chatId)) {
       this.emit({ type: "chat.error", chatId, message: "生成中，请先停止或等待完成" });
       return;
@@ -407,7 +451,7 @@ export class SessionManager {
       throw new Error(`桥接模式未选择有效预设: ${presetName || "(空)"}。请到设置里选择 OpenAI Settings/ 下的预设`);
     }
     const preset = loadPreset(presetFile);
-    const regexScripts = [...normalizeRegexScripts(preset.extensions?.regex_scripts), ...normalizeRegexScripts(character.extensions.regex_scripts)];
+    const regexScripts = [...globalRegex(this.stDataDir), ...normalizeRegexScripts(preset.extensions?.regex_scripts), ...normalizeRegexScripts(character.extensions.regex_scripts)];
     const assembled = assembleBridgeContext({
       preset,
       card: character,

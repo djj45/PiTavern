@@ -17,7 +17,8 @@
     "verify:compat": "tsx scripts/compatibility-verify.ts",
     "verify:chat-ux": "tsx scripts/chat-ux-verify.ts",
     "verify:activity": "tsx scripts/activity-context-verify.ts",
-    "verify:world-display": "tsx scripts/world-display-verify.ts"
+    "verify:world-display": "tsx scripts/world-display-verify.ts",
+    "verify:library": "tsx scripts/library-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

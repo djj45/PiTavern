@@ -23,6 +23,9 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { CharacterStore } from "../stdata/characters.ts";
 import type { ChatStore } from "../stdata/chats.ts";
 import type { SessionManager } from "../session/manager.ts";
+import { LibraryStore } from "../stdata/library.ts";
+import { LibraryBackupStore } from "../stdata/library-backup.ts";
+import { atomicWrite } from "../stdata/files.ts";
 
 export interface HttpDeps {
   config: TavernConfig;
@@ -58,10 +61,82 @@ function characterDto(card: import("../stdata/types.ts").CharacterCard): Charact
 export function createHttpApp(deps: HttpDeps): express.Express {
   const { config, modelsRef, characters, chats, sessions } = deps;
   const app = express();
+  const library = new LibraryStore(deps.stDataDir);
+  const libraryBackups = new LibraryBackupStore(deps.stDataDir);
+  app.use("/api", (req, res, next) => {
+    if (sessions.writeBlocked && req.path !== "/status") return res.status(503).json({ error: sessions.writeBlocked });
+    next();
+  });
+  // Stream uploads before the JSON parser so a whole library never occupies one request buffer.
+  app.post("/api/library-backup/preview", async (req, res) => {
+    let release: (() => void) | undefined;
+    try {
+      release = sessions.beginMaintenance("正在校验资料库备份，请稍候");
+      res.json(await libraryBackups.preview(req));
+    } catch (error) { if (!res.headersSent) res.status(400).json({ error: (error as Error).message }); }
+    finally { release?.(); }
+  });
   app.use(express.json({ limit: "4mb" }));
+  app.use("/api", (req, res, next) => {
+    // A maintenance operation may have started while a request body was arriving.
+    if (sessions.writeBlocked && req.path !== "/status") return res.status(503).json({ error: sessions.writeBlocked });
+    next();
+  });
+
+  app.get("/api/library", (_req, res) => res.json(library.list()));
+  app.get("/api/library/document", (req, res) => {
+    try { res.json(library.read(String(req.query.id ?? ""))); }
+    catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+  app.put("/api/library/document", (req, res) => {
+    try {
+      sessions.assertIdle();
+      const { id, revision, data } = req.body ?? {};
+      if (typeof id !== "string" || typeof revision !== "string") throw new Error("缺少资料或版本");
+      const document = library.save(id, revision, data);
+      sessions.libraryChanged();
+      res.json(document);
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+  app.post("/api/library/world", (req, res) => {
+    try {
+      sessions.assertIdle();
+      if (typeof req.body?.name !== "string") throw new Error("缺少世界书名称");
+      const document = library.createWorld(req.body.name);
+      sessions.libraryChanged();
+      res.json(document);
+    } catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+  app.get("/api/library-backup/export", async (_req, res) => {
+    let release: (() => void) | undefined;
+    try {
+      release = sessions.beginMaintenance("正在导出资料库备份，请稍候");
+      const archive = await libraryBackups.export();
+      release(); release = undefined;
+      res.download(archive, path.basename(archive), { dotfiles: "allow" }, (error) => {
+        if (error && !res.headersSent) res.status(500).json({ error: "备份下载失败，请重新导出" });
+      });
+    } catch (error) { if (!res.headersSent) res.status(409).json({ error: (error as Error).message }); }
+    finally { release?.(); }
+  });
+  app.post("/api/library-backup/restore", async (req, res) => {
+    let release: (() => void) | undefined;
+    try {
+      if (typeof req.body?.id !== "string") throw new Error("缺少归档预览编号");
+      release = sessions.beginMaintenance("正在恢复资料库，请稍候");
+      const result = await libraryBackups.restore(req.body.id, config);
+      sessions.requireRestart();
+      res.json(result);
+    } catch (error) { res.status(400).json({ error: (error as Error).message }); }
+    finally { release?.(); }
+  });
+  app.delete("/api/library-backup/preview", (req, res) => {
+    libraryBackups.discard(String(req.query.id ?? ""));
+    res.json({ ok: true });
+  });
 
   app.get("/api/status", (_req, res) => {
-    res.json({ version: PITAVERN_VERSION, stDataDir: config.stDataDir });
+    res.json({ version: PITAVERN_VERSION, stDataDir: config.stDataDir, maintenance: sessions.writeBlocked });
   });
 
   app.get("/api/connection", (_req, res) => {
@@ -242,65 +317,72 @@ export function createHttpApp(deps: HttpDeps): express.Express {
 
   /** 导入角色卡：PNG（tEXt 内嵌卡）或导出 JSON；同名文件覆盖 */
   app.post("/api/import/character", express.raw({ type: "*/*", limit: "24mb" }), (req, res) => {
-    let fileName: string;
     try {
-      fileName = path.basename(decodeURIComponent(String(req.headers["x-file-name"] ?? "card.png")));
-    } catch {
-      res.status(400).json({ error: "文件名编码无效" });
-      return;
-    }
-    const body = req.body as Buffer;
-    if (!Buffer.isBuffer(body) || body.length === 0) {
-      res.status(400).json({ error: "空文件" });
-      return;
-    }
-    const isPng = body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const lower = fileName.toLowerCase();
-    let safeName: string;
-    if (isPng && lower.endsWith(".png")) {
-      if (!parseCardFromPng(body)) {
-        res.status(400).json({ error: "PNG 里没有找到角色卡数据（chara/ccv3）" });
+      sessions.assertIdle();
+      let fileName: string;
+      try {
+        fileName = path.basename(decodeURIComponent(String(req.headers["x-file-name"] ?? "card.png")));
+      } catch {
+        res.status(400).json({ error: "文件名编码无效" });
         return;
       }
-      safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
-    } else if (lower.endsWith(".json")) {
-      try {
-        const json = JSON.parse(body.toString("utf8"));
-        const data = json?.data && typeof json.data === "object" ? json.data : json;
-        if (typeof data?.name !== "string" || !data.name.trim()) {
-          res.status(400).json({ error: "JSON 缺少 name 字段（不是有效的角色卡）" });
+      const body = req.body as Buffer;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: "空文件" });
+        return;
+      }
+      const isPng = body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const lower = fileName.toLowerCase();
+      let safeName: string;
+      if (isPng && lower.endsWith(".png")) {
+        if (!parseCardFromPng(body)) {
+          res.status(400).json({ error: "PNG 里没有找到角色卡数据（chara/ccv3）" });
           return;
         }
-      } catch {
-        res.status(400).json({ error: "JSON 解析失败" });
+        safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
+      } else if (lower.endsWith(".json")) {
+        try {
+          const json = JSON.parse(body.toString("utf8"));
+          const data = json?.data && typeof json.data === "object" ? json.data : json;
+          if (typeof data?.name !== "string" || !data.name.trim()) {
+            res.status(400).json({ error: "JSON 缺少 name 字段（不是有效的角色卡）" });
+            return;
+          }
+        } catch {
+          res.status(400).json({ error: "JSON 解析失败" });
+          return;
+        }
+        safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
+      } else {
+        res.status(400).json({ error: "仅支持 .png（内嵌卡）或 .json 角色卡" });
         return;
       }
-      safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
-    } else {
-      res.status(400).json({ error: "仅支持 .png（内嵌卡）或 .json 角色卡" });
-      return;
-    }
-    const target = path.join(deps.stDataDir, "characters", safeName);
-    fs.writeFileSync(target, body);
-    res.json({ ok: true, file: safeName });
+      const target = path.join(deps.stDataDir, "characters", safeName);
+      atomicWrite(target, body);
+      sessions.libraryChanged();
+      res.json({ ok: true, file: safeName });
+    } catch (error) { res.status(400).json({ error: (error as Error).message }); }
   });
 
   /** 导入世界书：ST worlds JSON（entries 对象） */
   app.post("/api/import/world", (req, res) => {
-    const { name, data } = req.body as { name?: unknown; data?: unknown };
-    const safeName = typeof name === "string" && name.trim() ? path.basename(name.trim().replace(/\.json$/, "")).replace(/[\\/:*?"<>|]/g, "_") : "";
-    if (!safeName) {
-      res.status(400).json({ error: "缺少世界书名称" });
-      return;
-    }
-    const entries = normalizeWorldFile(data, safeName);
-    if (entries.length === 0) {
-      res.status(400).json({ error: "没有有效条目（需要 entries 对象）" });
-      return;
-    }
-    fs.mkdirSync(path.join(deps.stDataDir, "worlds"), { recursive: true });
-    fs.writeFileSync(path.join(deps.stDataDir, "worlds", `${safeName}.json`), JSON.stringify(data, null, 2));
-    res.json({ ok: true, name: safeName, entryCount: entries.length });
+    try {
+      sessions.assertIdle();
+      const { name, data } = req.body as { name?: unknown; data?: unknown };
+      const safeName = typeof name === "string" && name.trim() ? path.basename(name.trim().replace(/\.json$/, "")).replace(/[\\/:*?"<>|]/g, "_") : "";
+      if (!safeName) {
+        res.status(400).json({ error: "缺少世界书名称" });
+        return;
+      }
+      const entries = normalizeWorldFile(data, safeName);
+      if (entries.length === 0) {
+        res.status(400).json({ error: "没有有效条目（需要 entries 对象）" });
+        return;
+      }
+      library.importWorld(safeName, data);
+      sessions.libraryChanged();
+      res.json({ ok: true, name: safeName, entryCount: entries.length });
+    } catch (error) { res.status(400).json({ error: (error as Error).message }); }
   });
 
   app.get("/api/characters/:name/avatar", (req: Request, res: Response) => {

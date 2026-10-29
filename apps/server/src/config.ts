@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InstructTemplate, TokenizerSetting, VectorSettings, WorldInfoSettings } from "@pitavern/shared";
+import { atomicWrite } from "./stdata/files.ts";
 
 /** 单个中转/供应商下的模型条目（用户在设置里手填，M1 不做目录自动发现） */
 export interface ProviderModelConfig {
@@ -122,8 +123,7 @@ export function loadConfig(): TavernConfig {
 }
 
 export function saveConfig(config: TavernConfig): void {
-  fs.mkdirSync(path.dirname(resolveDataPath(CONFIG_PATH)), { recursive: true });
-  fs.writeFileSync(resolveDataPath(CONFIG_PATH), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  atomicWrite(resolveDataPath(CONFIG_PATH), `${JSON.stringify(config, null, 2)}\n`);
 }
 
 /** 在 stDataDir 下播种 ST 兼容目录结构 */

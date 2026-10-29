@@ -5,6 +5,7 @@ interface TopBarProps {
   wsConnected: boolean;
   onModelChange: (providerId: string, modelId: string) => void;
   onOpenSettings: () => void;
+  onOpenLibrary: () => void;
   panelOpen: boolean;
   onTogglePanel: () => void;
   theme: string;
@@ -19,6 +20,7 @@ export function TopBar({
   wsConnected,
   onModelChange,
   onOpenSettings,
+  onOpenLibrary,
   panelOpen,
   onTogglePanel,
   theme,
@@ -94,6 +96,7 @@ export function TopBar({
         >
           📊
         </button>
+        <button type="button" onClick={onOpenLibrary} className="shrink-0 whitespace-nowrap rounded-md border border-tavern-border bg-tavern-raised px-3 py-1 text-sm text-tavern-text hover:border-tavern-accent-dim">资料库</button>
         <button
           type="button"
           onClick={onOpenSettings}
