@@ -413,6 +413,17 @@ export interface BranchPreviewDto {
   nextOffset: number | null;
 }
 
+export interface BranchSearchMatchDto {
+  nodeId: string;
+  snippet: string;
+}
+
+export interface BranchSearchDto {
+  query: string;
+  matches: BranchSearchMatchDto[];
+  truncated: boolean;
+}
+
 export interface GreetingChoicesDto {
   selected: number;
   labels: string[];

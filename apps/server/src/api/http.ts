@@ -643,6 +643,12 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
+  app.get("/api/chat/branch-search", (req, res) => {
+    if (typeof req.query.chatId !== "string" || typeof req.query.q !== "string") { res.status(400).json({ error: "分支搜索参数无效" }); return; }
+    try { res.json(sessions.searchBranches(req.query.chatId, req.query.q)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   app.post("/api/chat/branch-switch", (req, res) => {
     const { chatId, revision, path } = req.body ?? {};
     if (typeof chatId !== "string" || typeof revision !== "string" || !Array.isArray(path) || path.length === 0 || path.length > 100

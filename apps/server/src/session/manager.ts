@@ -280,6 +280,10 @@ export class SessionManager {
     return this.chats.branchPreview(chatId, nodeId, offset, limit);
   }
 
+  searchBranches(chatId: string, query: string) {
+    return this.chats.searchBranches(chatId, query);
+  }
+
   switchBranchPath(chatId: string, steps: BranchPathStepDto[], revision: string): BranchIndexDto {
     if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再切换路线");

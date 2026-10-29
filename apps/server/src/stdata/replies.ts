@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BranchPointDto, ReplyChoicesDto } from "@pitavern/shared";
 import type { StChatLine } from "./types.ts";
 
@@ -67,6 +68,15 @@ function currentReplies(lines: StChatLine[], userIndex: number): StChatLine[] {
 
 function lineId(line: StChatLine, index: number): string {
   return typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + index;
+}
+
+/**
+ * 分支路径使用的消息 ID。旧 JSONL 没有 messageId 时不能用局部数组下标，
+ * 否则 continuation 子源与完整文件里的 line-N 会指到不同回合；改用内容哈希。
+ */
+export function branchMessageId(line: StChatLine): string {
+  if (typeof line.extra?.messageId === "string") return line.extra.messageId;
+  return "legacy-" + createHash("sha256").update(JSON.stringify(line)).digest("hex").slice(0, 20);
 }
 
 function previewText(text: string, limit = 90): string {
@@ -174,7 +184,8 @@ export function selectReplySource(source: string, userMessageId: string, selecte
   const rev = parseChatSource(source);
   const metadata = (rev.header.chat_metadata ?? {}) as Record<string, unknown>;
   const lines = rev.records.map((record) => record.line);
-  const userIndex = rev.records.findIndex(({ line }, index) => line.is_user && !line.is_system && messageIdOf(line, index) === userMessageId);
+  const userIndex = rev.records.findIndex(({ line }, index) => line.is_user && !line.is_system
+    && (messageIdOf(line, index) === userMessageId || branchMessageId(line) === userMessageId));
   if (userIndex < 0) throw new Error("找不到对应的用户回合，请刷新后重试");
   const { catalog } = turnReplies(lines, metadata, userIndex);
   if (!Number.isInteger(selected) || selected < 0 || selected >= catalog.versions.length) throw new Error("候选回复不存在");

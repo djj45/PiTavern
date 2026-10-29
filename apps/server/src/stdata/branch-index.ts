@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { BranchIndexDto, BranchPathStepDto, BranchTreeNodeDto } from "@pitavern/shared";
-import { parseChatSource, turnReplies } from "./replies.ts";
+import { branchMessageId, parseChatSource, turnReplies } from "./replies.ts";
 import type { StChatLine } from "./types.ts";
 
-const MAX_NODES = 4000;
-const MAX_DEPTH = 40;
+const MAX_NODES = 10000;
+const MAX_DEPTH = 200;
 
 function previewText(text: string, limit = 140): string {
   return text.replace(/\s+/g, " ").trim().slice(0, limit);
@@ -22,8 +22,8 @@ function lastStoryText(lines: StChatLine[]): string {
   return "";
 }
 
-function lineId(line: StChatLine, index: number): string {
-  return typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + index;
+function lineId(line: StChatLine, _index: number): string {
+  return branchMessageId(line);
 }
 
 function parseRawLines(raw?: string[]): StChatLine[] {
@@ -81,16 +81,19 @@ function buildChildren(lines: StChatLine[], ctx: WalkContext, state: WalkState):
   for (let index = 0; index < catalog.versions.length; index++) {
     if (state.count >= MAX_NODES) { state.truncated = true; break; }
     const version = catalog.versions[index];
-    const activeCandidate = ctx.active && index === catalog.selected;
+    const locallySelected = index === catalog.selected;
+    const activeCandidate = ctx.active && locallySelected;
     const step: BranchPathStepDto = { userMessageId: lineId(userLine, userIndex), selected: index };
     const path = [...ctx.path, step];
     const id = pathId(path);
     const assistantPreview = previewText(version.messages.find((message) => !message.is_user && !message.is_system)?.mes ?? "", 100);
     const baseName = userPreview && userPreview !== "继续" ? userPreview : assistantPreview || "空回复";
-    const title = `第 ${turn} 轮 · ${previewText(baseName, 32)}`;
+    const title = `第 ${turn} 轮 · ${previewText(baseName, 28)}${catalog.versions.length > 1 ? ` · 候选 ${index + 1}` : ""}`;
     const meta = ctx.meta[id] ?? {};
     const labels = [...ctx.pathLabels, typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : title];
-    const routeLines = activeCandidate
+    // 局部选中版本同样以当前局部源的实际后续为准；非活动只影响 isActive/当前路线，
+    // 不能影响“后续原本就在这份源里”的事实，否则非活动路线的更深分支会被丢掉。
+    const routeLines = locallySelected
       ? actualSuffix
       : [...version.messages, ...parseRawLines(version.continuation)];
     const childCtx: WalkContext = {

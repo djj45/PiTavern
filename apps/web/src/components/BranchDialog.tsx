@@ -35,6 +35,11 @@ function countNodes(nodes: BranchTreeNodeDto[]): number {
   return nodes.reduce((sum, node) => sum + 1 + countNodes(node.children), 0);
 }
 
+function containsNode(node: BranchTreeNodeDto, id?: string): boolean {
+  if (!id) return false;
+  return node.id === id || node.children.some((child) => containsNode(child, id));
+}
+
 function filterTree(nodes: BranchTreeNodeDto[], predicate: (node: BranchTreeNodeDto) => boolean): BranchTreeNodeDto[] {
   return nodes.flatMap((node) => {
     const children = filterTree(node.children, predicate);
@@ -66,6 +71,8 @@ interface BranchRowProps {
   selectedId?: string;
   expanded: Set<string>;
   forceOpen: boolean;
+  focusId?: string;
+  matchSnippets?: Map<string, string>;
   bulkMode: boolean;
   bulkSelected: Set<string>;
   onToggle: (id: string) => void;
@@ -73,15 +80,17 @@ interface BranchRowProps {
   onToggleBulk: (id: string) => void;
 }
 
-function BranchRow({ node, depth, selectedId, expanded, forceOpen, bulkMode, bulkSelected, onToggle, onSelect, onToggleBulk }: BranchRowProps) {
+function BranchRow({ node, depth, selectedId, expanded, forceOpen, focusId, matchSnippets, bulkMode, bulkSelected, onToggle, onSelect, onToggleBulk }: BranchRowProps) {
   const open = forceOpen || expanded.has(node.id);
   const [showUnused, setShowUnused] = useState(false);
   const [page, setPage] = useState(1);
   const normal = node.children.filter((child) => !isUnused(child));
   const unused = node.children.filter(isUnused);
-  const limit = forceOpen ? normal.length : page * 12;
+  const focusIndex = focusId ? normal.findIndex((child) => containsNode(child, focusId)) : -1;
+  const limit = forceOpen ? normal.length : Math.max(page * 12, focusIndex >= 0 ? focusIndex + 1 : 0);
   const shown = normal.slice(0, limit);
   const selected = selectedId === node.id;
+  const snippet = matchSnippets?.get(node.id);
   return <div>
     <div data-branch-id={node.id} style={{ paddingLeft: depth * 14 }}
       className={"group flex min-w-0 items-start gap-1 rounded-md pr-1 " + (selected ? "bg-tavern-accent/15" : "hover:bg-tavern-raised/70")}>
@@ -108,28 +117,29 @@ function BranchRow({ node, depth, selectedId, expanded, forceOpen, bulkMode, bul
           {node.childCount > 0 && <span>{node.childCount} 个下级分支</span>}
           {node.descendantCount > 0 && <span>共 {node.descendantCount + 1} 个节点</span>}
           {(node.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="rounded-full bg-tavern-accent/10 px-1.5 text-tavern-accent">#{tag}</span>)}
+          {snippet && <span className="w-full truncate text-amber-300/90">…{snippet}…</span>}
         </span>
       </button>
     </div>
     {open && (normal.length > 0 || unused.length > 0) && (
       <div>
         {shown.map((child) => <BranchRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId}
-          expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={onToggle} onSelect={onSelect} onToggleBulk={onToggleBulk} />)}
+          expanded={expanded} forceOpen={forceOpen} focusId={focusId} matchSnippets={matchSnippets} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={onToggle} onSelect={onSelect} onToggleBulk={onToggleBulk} />)}
         {!forceOpen && normal.length > limit && (
           <button type="button" onClick={() => setPage((value) => value + 1)}
             className="ml-8 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">
             显示更多（剩余 {normal.length - limit}）
           </button>
         )}
-        {unused.length > 0 && !showUnused && (
+        {unused.length > 0 && !showUnused && !forceOpen && (
           <button type="button" onClick={() => setShowUnused(true)}
             className="ml-8 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">
             未继续的候选 × {unused.length}
           </button>
         )}
-        {showUnused && unused.map((child) => <BranchRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId}
-          expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={onToggle} onSelect={onSelect} onToggleBulk={onToggleBulk} />)}
-        {showUnused && <button type="button" onClick={() => setShowUnused(false)}
+        {(showUnused || forceOpen) && unused.map((child) => <BranchRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId}
+          expanded={expanded} forceOpen={forceOpen} focusId={focusId} matchSnippets={matchSnippets} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={onToggle} onSelect={onSelect} onToggleBulk={onToggleBulk} />)}
+        {showUnused && !forceOpen && <button type="button" onClick={() => setShowUnused(false)}
           className="ml-8 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">收起未继续候选</button>}
       </div>
     )}
@@ -161,6 +171,9 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const [compareIds, setCompareIds] = useState<[string, string]>();
   const [tagEditing, setTagEditing] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
+  const [searchHits, setSearchHits] = useState<Map<string, string>>(new Map());
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [locateTick, setLocateTick] = useState(0);
   const [preview, setPreview] = useState<{ messages: ChatMessageDto[]; total: number; nextOffset: number | null; nodeId: string }>();
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
@@ -238,7 +251,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   useEffect(() => {
     if (!selectedId) return;
     requestAnimationFrame(() => document.querySelector('[data-branch-id="' + selectedId + '"]')?.scrollIntoView({ block: "nearest" }));
-  }, [selectedId]);
+  }, [selectedId, locateTick]);
 
   useEffect(() => {
     if (!selectedId) { setPreview(undefined); return; }
@@ -379,7 +392,20 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   ];
 
   const normalizedQuery = query.trim().toLowerCase();
-  const matches = (node: BranchTreeNodeDto) => !normalizedQuery || [node.name, node.title, node.userPreview, node.assistantPreview, node.preview, node.pathText, (node.tags ?? []).join(" ")]
+  useEffect(() => {
+    if (!normalizedQuery) { setSearchHits(new Map()); setSearchLoading(false); return; }
+    let active = true;
+    setSearchLoading(true);
+    const timer = setTimeout(() => {
+      void api.searchBranches(chatId, normalizedQuery).then((result) => {
+        if (!active) return;
+        setSearchHits(new Map(result.matches.map((match) => [match.nodeId, match.snippet])));
+      }).catch(() => { if (active) setSearchHits(new Map()); })
+        .finally(() => { if (active) setSearchLoading(false); });
+    }, 250);
+    return () => { active = false; clearTimeout(timer); };
+  }, [chatId, normalizedQuery]);
+  const matches = (node: BranchTreeNodeDto) => !normalizedQuery || searchHits.has(node.id) || [node.name, node.title, node.userPreview, node.assistantPreview, node.preview, node.pathText, (node.tags ?? []).join(" ")]
     .some((value) => (value ?? "").toLowerCase().includes(normalizedQuery));
   const predicate = (node: BranchTreeNodeDto) => matches(node) && (filter === "all" || filter === "archived"
     || (filter === "favorite" ? node.favorite : recentIds.includes(node.id)));
@@ -420,7 +446,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
         </div>
         <div className="ml-auto flex items-center gap-2">
           <button type="button" onClick={() => {
-            setQuery(""); selectFilter("all"); setSelectedId(index?.currentNodeId ?? index?.nodes[0]?.id);
+            setQuery(""); selectFilter("all"); setSelectedId(index?.currentNodeId ?? index?.nodes[0]?.id); setLocateTick((value) => value + 1);
             const next = new Set(index?.activePath ?? []); setExpanded(next); saveUi(next, "all", index?.currentNodeId);
           }}
             className="rounded-md border border-tavern-border px-2.5 py-1.5 text-xs text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text">定位当前路线</button>
@@ -445,7 +471,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
             className={"rounded-full px-2.5 py-1 text-xs " + (filter === item.value ? "bg-tavern-accent/20 text-tavern-accent" : "text-tavern-dim hover:text-tavern-text")}>
             {item.label}
           </button>)}
-          <span className="ml-auto text-[11px] text-tavern-dim">{filteredCount} 个节点{index?.truncated ? " · 已截断" : ""}</span>
+          <span className="ml-auto text-[11px] text-tavern-dim">{searchLoading ? "搜索正文中…" : filteredCount + " 个节点"}{index?.truncated ? " · 已截断" : ""}</span>
         </div>
         {bulkMode && <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md border border-tavern-border bg-tavern-raised/40 px-2 py-1.5 text-xs">
           <span className="text-tavern-dim">已选 {bulkSelected.size} 条</span>
@@ -483,16 +509,17 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
                   {(() => {
                     const normal = filtered.filter((node) => !isUnused(node));
                     const unused = filtered.filter(isUnused);
-                    const limit = forceOpen ? normal.length : rootPage * 12;
+                    const focusIndex = normal.findIndex((node) => containsNode(node, selectedId));
+                    const limit = forceOpen ? normal.length : Math.max(rootPage * 12, focusIndex >= 0 ? focusIndex + 1 : 0);
                     return <>
                       {normal.slice(0, limit).map((node) => <BranchRow key={node.id} node={node} depth={0} selectedId={selectedId}
-                        expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={toggle} onSelect={choose} onToggleBulk={toggleBulk} />)}
+                        expanded={expanded} forceOpen={forceOpen} focusId={selectedId} matchSnippets={searchHits} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={toggle} onSelect={choose} onToggleBulk={toggleBulk} />)}
                       {!forceOpen && normal.length > limit && <button type="button" onClick={() => setRootPage((value) => value + 1)}
                         className="ml-7 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">显示更多（剩余 {normal.length - limit}）</button>}
                       {unused.length > 0 && !showUnusedRoot && !forceOpen && <button type="button" onClick={() => setShowUnusedRoot(true)}
                         className="ml-7 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">未继续的候选 × {unused.length}</button>}
                       {(showUnusedRoot || forceOpen) && unused.map((node) => <BranchRow key={node.id} node={node} depth={0} selectedId={selectedId}
-                        expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={toggle} onSelect={choose} onToggleBulk={toggleBulk} />)}
+                        expanded={expanded} forceOpen={forceOpen} focusId={selectedId} matchSnippets={searchHits} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={toggle} onSelect={choose} onToggleBulk={toggleBulk} />)}
                       {showUnusedRoot && !forceOpen && <button type="button" onClick={() => setShowUnusedRoot(false)}
                         className="ml-7 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">收起未继续候选</button>}
                     </>;

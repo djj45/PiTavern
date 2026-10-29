@@ -584,6 +584,30 @@ export class ChatStore {
     };
   }
 
+  searchBranches(chatId: string, query: string) {
+    const needle = query.trim().toLowerCase();
+    if (!needle || needle.length > 100) throw new Error("搜索关键词长度需为 1–100 个字符");
+    const index = this.branchIndex(chatId);
+    const rev = this.revision(chatId);
+    const nodes: import("@pitavern/shared").BranchTreeNodeDto[] = [];
+    const walk = (list: import("@pitavern/shared").BranchTreeNodeDto[]) => { for (const node of list) { nodes.push(node); walk(node.children); } };
+    walk(index.nodes);
+    const matches: { nodeId: string; snippet: string }[] = [];
+    let truncated = nodes.length > 5000;
+    for (const node of nodes.slice(0, 5000)) {
+      if (matches.length >= 100) { truncated = true; break; }
+      let source = rev.source;
+      for (const step of node.path) source = selectReplySource(source, step.userMessageId, step.selected);
+      const messages = chatMessages(parseChatSource(source).records.map((record) => record.line));
+      const message = messages.find((item) => item.text.toLowerCase().includes(needle));
+      if (!message) continue;
+      const position = message.text.toLowerCase().indexOf(needle);
+      const snippet = message.text.slice(Math.max(0, position - 35), Math.min(message.text.length, position + needle.length + 65)).replace(/\s+/g, " ").trim();
+      matches.push({ nodeId: node.id, snippet: (position > 35 ? "…" : "") + snippet + (position + needle.length + 65 < message.text.length ? "…" : "") });
+    }
+    return { query: needle, matches, truncated };
+  }
+
   updateBranchMeta(chatId: string, nodeId: string, patch: BranchMetaPatchDto, expectedRevision: string) {
     return this.updateBranchMetas(chatId, [nodeId], patch, expectedRevision);
   }
