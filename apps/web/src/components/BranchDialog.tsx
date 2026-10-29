@@ -440,7 +440,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
             <div className="mt-4 shrink-0">
               <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-tavern-dim">
                 <span>剧情预览 · 原文</span>
-                {preview && <span>{preview.messages.length} / {preview.total} 条 · 下滑加载</span>}
+                {preview && <span>{preview.messages.length} / {preview.total} 条{preview.nextOffset !== null ? " · 下滑加载" : " · 已加载全文"}</span>}
               </div>
               <div ref={previewRef} onScroll={(event) => {
                 const element = event.currentTarget;
