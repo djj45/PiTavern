@@ -410,7 +410,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
                 })}
               </div>
             </div>
-            <div className="mt-4 min-h-0">
+            <div className="mt-4 shrink-0">
               <p className="mb-2 text-[11px] text-tavern-dim">剧情预览</p>
               <p className="whitespace-pre-wrap break-words rounded-lg border border-tavern-border bg-tavern-bg/40 p-3 text-sm leading-6 text-tavern-text">{previewText(selected.preview || selected.assistantPreview || "（暂无正文预览）", 1600)}</p>
               {selected.note && <p className="mt-2 whitespace-pre-wrap text-xs text-tavern-dim">备注：{selected.note}</p>}
@@ -424,7 +424,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
               {previousPath && <button type="button" onClick={() => void switchTo(previousPath, previousLabel)} disabled={busy || switching}
                 className="rounded-md border border-tavern-border px-3 py-2 text-sm text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text">返回刚才路线</button>}
             </div>
-            <div className="mt-auto pt-5">
+            <div className="mt-auto shrink-0 pt-5">
               <div className="border-t border-tavern-border pt-3">
                 <label htmlFor="branch-regenerate-instruction" className="block text-xs font-medium">换条路线（可选）</label>
                 <textarea id="branch-regenerate-instruction" rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)}
