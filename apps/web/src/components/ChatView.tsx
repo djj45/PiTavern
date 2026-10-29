@@ -15,21 +15,24 @@ const MarkdownContent = lazy(() => import("./MessageContent.tsx").then(({ Messag
 const MessageContent = memo(function MessageContent({ text, placement, depth, display, dialoguePairs }: {
   text: string; placement: number; depth: number; display?: ChatDisplayDto; dialoguePairs?: DialoguePairDto[];
 }) {
-  const [result, setResult] = useState<{ text: string; error?: string; source: string; display?: ChatDisplayDto; placement: number; depth: number }>();
+  // 分支切换会带来新的 display 对象，但内容通常没变；用内容签名避免重跑显示正则后短暂回退到原文（宏展开会造成换行抖动）。
+  const displayKey = JSON.stringify(display ?? null);
+  const [result, setResult] = useState<{ text: string; error?: string; source: string; displayKey: string; placement: number; depth: number }>();
   useEffect(() => {
     const controller = new AbortController();
     // Debounce streaming updates so each delta does not spawn and terminate a worker.
     const timer = setTimeout(() => {
       void displayMessageIsolated(text, placement, depth, display, controller.signal).then((value) => {
-        if (!controller.signal.aborted) setResult({ text: value, source: text, display, placement, depth });
+        if (!controller.signal.aborted) setResult({ text: value, source: text, displayKey, placement, depth });
       }).catch((error: Error) => {
-        if (!controller.signal.aborted) setResult({ text, error: error.message, source: text, display, placement, depth });
+        if (!controller.signal.aborted) setResult({ text, error: error.message, source: text, displayKey, placement, depth });
       });
     }, 60);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [text, placement, depth, display]);
-  const valid = result?.source === text && result.display === display && result.placement === placement && result.depth === depth;
-  const rendered = valid ? result.text : text;
+  }, [text, placement, depth, displayKey]);
+  const valid = result?.source === text && result.displayKey === displayKey && result.placement === placement && result.depth === depth;
+  // 内容没变时保留上一次处理结果，避免分支切换/显示配置刷新时短暂回退到未展开宏的原文。
+  const rendered = result?.source === text ? result.text : text;
   return <><Suspense fallback={<div className="whitespace-pre-wrap break-words">{rendered}</div>}><MarkdownContent text={rendered} dialoguePairs={dialoguePairs} /></Suspense>
     {valid && result.error && <p role="alert" className="mt-1 text-xs text-amber-400">{result.error}</p>}</>;
 });
