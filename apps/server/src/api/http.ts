@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
 import type {
+  BranchMetaPatchDto,
   CharacterDto,
   ChatSummaryDto,
   ConnectionDto,
@@ -61,6 +62,22 @@ function characterDto(card: import("../stdata/types.ts").CharacterCard): Charact
     alternateGreetings: card.alternateGreetings,
     tags: card.tags,
     creator: card.creator,
+  };
+}
+
+function parseBranchPatch(value: unknown): BranchMetaPatchDto | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const patch = value as Record<string, unknown>;
+  if ([patch.name, patch.note].some((item) => item !== undefined && item !== null && typeof item !== "string")) return null;
+  if ([patch.favorite, patch.archived].some((item) => item !== undefined && typeof item !== "boolean")) return null;
+  if (patch.tags !== undefined && (!Array.isArray(patch.tags) || patch.tags.length > 32
+    || !patch.tags.every((tag) => typeof tag === "string" && tag.length <= 80))) return null;
+  return {
+    ...(patch.name !== undefined ? { name: patch.name as string | null } : {}),
+    ...(patch.note !== undefined ? { note: patch.note as string | null } : {}),
+    ...(patch.favorite !== undefined ? { favorite: patch.favorite as boolean } : {}),
+    ...(patch.archived !== undefined ? { archived: patch.archived as boolean } : {}),
+    ...(patch.tags !== undefined ? { tags: patch.tags as string[] } : {}),
   };
 }
 
@@ -642,22 +659,26 @@ export function createHttpApp(deps: HttpDeps): express.Express {
 
   app.patch("/api/chat/branch-meta", (req, res) => {
     const { chatId, revision, nodeId, patch } = req.body ?? {};
-    if (typeof chatId !== "string" || typeof revision !== "string" || typeof nodeId !== "string"
-      || !patch || typeof patch !== "object" || Array.isArray(patch)) {
-      res.status(400).json({ error: "分支资料参数无效" }); return;
-    }
-    const values = patch as Record<string, unknown>;
-    if ([values.name, values.note].some((value) => value !== undefined && value !== null && typeof value !== "string")
-      || [values.favorite, values.archived].some((value) => value !== undefined && typeof value !== "boolean")) {
+    const values = parseBranchPatch(patch);
+    if (typeof chatId !== "string" || typeof revision !== "string" || typeof nodeId !== "string" || !values) {
       res.status(400).json({ error: "分支资料参数无效" }); return;
     }
     try {
-      const index = sessions.updateBranchMeta(chatId, nodeId, {
-        ...(values.name !== undefined ? { name: values.name as string | null } : {}),
-        ...(values.note !== undefined ? { note: values.note as string | null } : {}),
-        ...(values.favorite !== undefined ? { favorite: values.favorite as boolean } : {}),
-        ...(values.archived !== undefined ? { archived: values.archived as boolean } : {}),
-      }, revision);
+      const index = sessions.updateBranchMeta(chatId, nodeId, values, revision);
+      res.json({ revision: index.revision, index });
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.patch("/api/chat/branch-meta-bulk", (req, res) => {
+    const { chatId, revision, nodeIds, patch } = req.body ?? {};
+    const values = parseBranchPatch(patch);
+    if (typeof chatId !== "string" || typeof revision !== "string" || !values
+      || !Array.isArray(nodeIds) || nodeIds.length === 0 || nodeIds.length > 500
+      || !nodeIds.every((id: unknown) => typeof id === "string")) {
+      res.status(400).json({ error: "批量分支资料参数无效" }); return;
+    }
+    try {
+      const index = sessions.updateBranchMetas(chatId, nodeIds, values, revision);
       res.json({ revision: index.revision, index });
     } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, BranchSwitchResultDto, BranchTreeNodeDto, ChatMessageDto } from "@pitavern/shared";
 import { api } from "../api.ts";
 
-type Filter = "all" | "favorite" | "recent";
+type Filter = "all" | "favorite" | "recent" | "archived";
 
 interface BranchDialogProps {
   chatId: string;
@@ -15,7 +15,20 @@ interface BranchDialogProps {
 }
 
 function isUnused(node: BranchTreeNodeDto): boolean {
-  return !node.isActive && !node.favorite && node.children.length === 0 && node.linearTurns === 0;
+  return !node.isActive && !node.favorite && !node.archived && !(node.tags?.length) && node.children.length === 0 && node.linearTurns === 0;
+}
+
+function withoutArchived(nodes: BranchTreeNodeDto[]): BranchTreeNodeDto[] {
+  return nodes.flatMap((node) => node.archived ? [] : [{ ...node, children: withoutArchived(node.children) }]);
+}
+
+/** 归档按整棵子树处理：只展示归档根及其后代，同时保留必要的祖先路径。 */
+function archivedOnly(nodes: BranchTreeNodeDto[]): BranchTreeNodeDto[] {
+  return nodes.flatMap((node) => {
+    if (node.archived) return [node];
+    const children = archivedOnly(node.children);
+    return children.length ? [{ ...node, children }] : [];
+  });
 }
 
 function countNodes(nodes: BranchTreeNodeDto[]): number {
@@ -53,11 +66,14 @@ interface BranchRowProps {
   selectedId?: string;
   expanded: Set<string>;
   forceOpen: boolean;
+  bulkMode: boolean;
+  bulkSelected: Set<string>;
   onToggle: (id: string) => void;
   onSelect: (node: BranchTreeNodeDto) => void;
+  onToggleBulk: (id: string) => void;
 }
 
-function BranchRow({ node, depth, selectedId, expanded, forceOpen, onToggle, onSelect }: BranchRowProps) {
+function BranchRow({ node, depth, selectedId, expanded, forceOpen, bulkMode, bulkSelected, onToggle, onSelect, onToggleBulk }: BranchRowProps) {
   const open = forceOpen || expanded.has(node.id);
   const [showUnused, setShowUnused] = useState(false);
   const [page, setPage] = useState(1);
@@ -69,6 +85,9 @@ function BranchRow({ node, depth, selectedId, expanded, forceOpen, onToggle, onS
   return <div>
     <div data-branch-id={node.id} style={{ paddingLeft: depth * 14 }}
       className={"group flex min-w-0 items-start gap-1 rounded-md pr-1 " + (selected ? "bg-tavern-accent/15" : "hover:bg-tavern-raised/70")}>
+      {bulkMode && <input type="checkbox" aria-label={"选择路线：" + node.title} checked={bulkSelected.has(node.id)}
+        onChange={() => onToggleBulk(node.id)} onClick={(event) => event.stopPropagation()}
+        className="mt-2 shrink-0 accent-tavern-accent" />}
       {node.children.length ? (
         <button type="button" onClick={() => onToggle(node.id)} aria-label={(open ? "收起分支：" : "展开分支：") + node.title}
           className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-xs text-tavern-dim hover:text-tavern-text">
@@ -88,13 +107,14 @@ function BranchRow({ node, depth, selectedId, expanded, forceOpen, onToggle, onS
           {node.linearTurns > 0 && <span>后续 {node.linearTurns} 轮</span>}
           {node.childCount > 0 && <span>{node.childCount} 个下级分支</span>}
           {node.descendantCount > 0 && <span>共 {node.descendantCount + 1} 个节点</span>}
+          {(node.tags ?? []).slice(0, 3).map((tag) => <span key={tag} className="rounded-full bg-tavern-accent/10 px-1.5 text-tavern-accent">#{tag}</span>)}
         </span>
       </button>
     </div>
     {open && (normal.length > 0 || unused.length > 0) && (
       <div>
         {shown.map((child) => <BranchRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId}
-          expanded={expanded} forceOpen={forceOpen} onToggle={onToggle} onSelect={onSelect} />)}
+          expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={onToggle} onSelect={onSelect} onToggleBulk={onToggleBulk} />)}
         {!forceOpen && normal.length > limit && (
           <button type="button" onClick={() => setPage((value) => value + 1)}
             className="ml-8 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">
@@ -108,7 +128,7 @@ function BranchRow({ node, depth, selectedId, expanded, forceOpen, onToggle, onS
           </button>
         )}
         {showUnused && unused.map((child) => <BranchRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId}
-          expanded={expanded} forceOpen={forceOpen} onToggle={onToggle} onSelect={onSelect} />)}
+          expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={onToggle} onSelect={onSelect} onToggleBulk={onToggleBulk} />)}
         {showUnused && <button type="button" onClick={() => setShowUnused(false)}
           className="ml-8 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">收起未继续候选</button>}
       </div>
@@ -135,6 +155,12 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const [previousLabel, setPreviousLabel] = useState("");
   const [showUnusedRoot, setShowUnusedRoot] = useState(false);
   const [rootPage, setRootPage] = useState(1);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [compareIds, setCompareIds] = useState<[string, string]>();
+  const [tagEditing, setTagEditing] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
   const [preview, setPreview] = useState<{ messages: ChatMessageDto[]; total: number; nextOffset: number | null; nodeId: string }>();
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
@@ -190,7 +216,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const readUi = useCallback(() => {
     try {
       const value = JSON.parse(localStorage.getItem("pitavern.branch.ui." + chatId) ?? "{}") as { expanded?: string[]; filter?: Filter; selectedId?: string; scrollTop?: number };
-      return { expanded: Array.isArray(value.expanded) ? value.expanded : [], filter: value.filter === "favorite" || value.filter === "recent" ? value.filter : "all" as Filter, selectedId: value.selectedId, scrollTop: typeof value.scrollTop === "number" ? value.scrollTop : 0 };
+      return { expanded: Array.isArray(value.expanded) ? value.expanded : [], filter: value.filter === "favorite" || value.filter === "recent" || value.filter === "archived" ? value.filter : "all" as Filter, selectedId: value.selectedId, scrollTop: typeof value.scrollTop === "number" ? value.scrollTop : 0 };
     } catch { return { expanded: [], filter: "all" as Filter, selectedId: undefined, scrollTop: 0 }; }
   }, [chatId]);
   const readRecent = useCallback((): string[] => {
@@ -204,7 +230,9 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
 
   useEffect(() => {
     setNameDraft(selected?.name ?? "");
+    setTagDraft((selected?.tags ?? []).join(", "));
     setRenaming(false);
+    setTagEditing(false);
   }, [selectedId]);
 
   useEffect(() => {
@@ -291,24 +319,79 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
     if (result) setRenaming(false);
   };
 
+  const saveTags = async () => {
+    const tags = tagDraft.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
+    const result = await updateMeta({ tags });
+    if (result) setTagEditing(false);
+  };
+
   const toggleFavorite = async () => {
     if (!selected) return;
     await updateMeta({ favorite: !selected.favorite });
+  };
+
+  const toggleArchive = async () => {
+    if (!selected) return;
+    if (!selected.archived && selected.isActive) { setError("当前路线节点不能归档，请先切换到其他路线"); return; }
+    const result = await updateMeta({ archived: !selected.archived });
+    if (result) {
+      const nextFilter: Filter = selected.archived ? "all" : "archived";
+      setFilter(nextFilter);
+      if (selected.archived) setSelectedId(result.currentNodeId ?? result.nodes[0]?.id);
+      saveUi(expanded, nextFilter, selected.archived ? result.currentNodeId : selected.id);
+    }
+  };
+
+  const toggleBulk = (id: string) => {
+    setBulkSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const bulkAction = async (patch: BranchMetaPatchDto) => {
+    if (!index || !bulkSelected.size || bulkBusy) return;
+    const ids = [...bulkSelected];
+    if (patch.archived) {
+      const nodes = ids.map((id) => nodeMap.get(id)).filter((node): node is BranchTreeNodeDto => Boolean(node));
+      if (nodes.some((node) => node.isActive)) { setError("所选路线包含当前路径节点，不能归档"); return; }
+    }
+    setBulkBusy(true); setError("");
+    try {
+      const result = await api.updateBranchMetas(chatId, index.revision, ids, patch);
+      setIndex(result.index);
+      setBulkSelected(new Set());
+      if (patch.archived) setFilter("archived");
+      else if (patch.archived === false) {
+        setFilter("all");
+        setSelectedId(result.index.currentNodeId ?? result.index.nodes[0]?.id);
+      }
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBulkBusy(false); }
   };
 
   const filters: { value: Filter; label: string }[] = [
     { value: "all", label: "全部" },
     { value: "favorite", label: "收藏路线" },
     { value: "recent", label: "最近访问" },
+    { value: "archived", label: "已归档" },
   ];
 
   const normalizedQuery = query.trim().toLowerCase();
-  const matches = (node: BranchTreeNodeDto) => !normalizedQuery || [node.name, node.title, node.userPreview, node.assistantPreview, node.preview, node.pathText]
+  const matches = (node: BranchTreeNodeDto) => !normalizedQuery || [node.name, node.title, node.userPreview, node.assistantPreview, node.preview, node.pathText, (node.tags ?? []).join(" ")]
     .some((value) => (value ?? "").toLowerCase().includes(normalizedQuery));
-  const predicate = (node: BranchTreeNodeDto) => matches(node) && (filter === "all" || (filter === "favorite" ? node.favorite : recentIds.includes(node.id)));
-  const filtered = index && (normalizedQuery || filter !== "all") ? filterTree(index.nodes, predicate) : index?.nodes ?? [];
+  const predicate = (node: BranchTreeNodeDto) => matches(node) && (filter === "all" || filter === "archived"
+    || (filter === "favorite" ? node.favorite : recentIds.includes(node.id)));
+  const baseNodes = index ? (filter === "archived" ? archivedOnly(index.nodes) : withoutArchived(index.nodes)) : [];
+  const filtered = index && (normalizedQuery || filter !== "all") ? filterTree(baseNodes, predicate) : baseNodes;
   const filteredCount = countNodes(filtered);
   const forceOpen = Boolean(normalizedQuery) || filter !== "all";
+  const compareNodes = (compareIds ?? []).map((id) => nodeMap.get(id)).filter((node): node is BranchTreeNodeDto => Boolean(node));
+  let commonPathLength = 0;
+  if (compareNodes.length === 2) {
+    while (compareNodes[0].pathIds[commonPathLength] && compareNodes[0].pathIds[commonPathLength] === compareNodes[1].pathIds[commonPathLength]) commonPathLength += 1;
+  }
 
   const toggle = (id: string) => {
     const next = new Set(expanded);
@@ -345,6 +428,10 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
             const next = new Set(index?.activePath ?? []); setExpanded(next); saveUi(next, filter, selectedId);
           }}
             className="rounded-md border border-tavern-border px-2.5 py-1.5 text-xs text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text">收起其他分支</button>
+          <button type="button" aria-pressed={bulkMode} onClick={() => { setBulkMode((value) => !value); setBulkSelected(new Set()); setCompareIds(undefined); }}
+            className={"rounded-md border px-2.5 py-1.5 text-xs " + (bulkMode ? "border-tavern-accent-dim bg-tavern-raised text-tavern-accent" : "border-tavern-border text-tavern-dim hover:text-tavern-text")}>
+            批量操作
+          </button>
           <button type="button" onClick={onClose} aria-label="关闭分支选择" className="rounded-md px-2 py-1 text-tavern-dim hover:text-tavern-text">✕</button>
         </div>
       </div>
@@ -360,6 +447,23 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
           </button>)}
           <span className="ml-auto text-[11px] text-tavern-dim">{filteredCount} 个节点{index?.truncated ? " · 已截断" : ""}</span>
         </div>
+        {bulkMode && <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md border border-tavern-border bg-tavern-raised/40 px-2 py-1.5 text-xs">
+          <span className="text-tavern-dim">已选 {bulkSelected.size} 条</span>
+          <button type="button" disabled={!bulkSelected.size || bulkBusy} onClick={() => void bulkAction({ favorite: true })}
+            className="rounded border border-tavern-border px-2 py-0.5 text-tavern-dim hover:text-tavern-text disabled:opacity-40">收藏</button>
+          <button type="button" disabled={!bulkSelected.size || bulkBusy} onClick={() => void bulkAction({ favorite: false })}
+            className="rounded border border-tavern-border px-2 py-0.5 text-tavern-dim hover:text-tavern-text disabled:opacity-40">取消收藏</button>
+          <button type="button" disabled={!bulkSelected.size || bulkBusy} onClick={() => void bulkAction({ archived: true })}
+            className="rounded border border-tavern-border px-2 py-0.5 text-tavern-dim hover:text-red-300 disabled:opacity-40">归档</button>
+          <button type="button" disabled={!bulkSelected.size || bulkBusy} onClick={() => void bulkAction({ archived: false })}
+            className="rounded border border-tavern-border px-2 py-0.5 text-tavern-dim hover:text-tavern-text disabled:opacity-40">恢复</button>
+          <button type="button" disabled={bulkSelected.size !== 2} onClick={() => {
+            const pair = [...bulkSelected] as [string, string];
+            setCompareIds(pair); setBulkMode(false);
+          }} className="rounded border border-tavern-border px-2 py-0.5 text-tavern-dim hover:text-tavern-text disabled:opacity-40">对比这 2 条</button>
+          <button type="button" disabled={!bulkSelected.size} onClick={() => setBulkSelected(new Set())}
+            className="rounded border border-tavern-border px-2 py-0.5 text-tavern-dim hover:text-tavern-text disabled:opacity-40">清除选择</button>
+        </div>}
       </div>
       <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(280px,380px)_1fr]">
         <div className={(mobileView ? "hidden md:flex" : "flex") + " min-h-0 flex-col border-r border-tavern-border"}>
@@ -370,7 +474,7 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
               <button type="button" onClick={() => void load()} className="rounded border border-red-500/30 px-2 py-0.5 hover:text-red-200">重试</button>
             </div>}
             {!index?.nodes.length ? <p className="rounded-lg border border-dashed border-tavern-border p-4 text-sm leading-6 text-tavern-dim">还没有分支。重新生成回复后，旧回复会保留为可切换的候选。</p>
-              : !filtered.length ? <p className="rounded-lg border border-dashed border-tavern-border p-4 text-sm leading-6 text-tavern-dim">{filter === "recent" ? "还没有最近访问的路线。" : filter === "favorite" ? "还没有收藏路线。打开一条路线后点收藏。" : "没有匹配的分支。"}</p>
+              : !filtered.length ? <p className="rounded-lg border border-dashed border-tavern-border p-4 text-sm leading-6 text-tavern-dim">{filter === "recent" ? "还没有最近访问的路线。" : filter === "favorite" ? "还没有收藏路线。打开一条路线后点收藏。" : filter === "archived" ? "还没有归档路线。" : "没有匹配的分支。"}</p>
                 : <>
                   <div className="mb-2 flex items-center justify-between rounded-md bg-tavern-raised/60 px-2 py-1.5 text-xs">
                     <span className="font-medium">故事起点</span>
@@ -382,13 +486,13 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
                     const limit = forceOpen ? normal.length : rootPage * 12;
                     return <>
                       {normal.slice(0, limit).map((node) => <BranchRow key={node.id} node={node} depth={0} selectedId={selectedId}
-                        expanded={expanded} forceOpen={forceOpen} onToggle={toggle} onSelect={choose} />)}
+                        expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={toggle} onSelect={choose} onToggleBulk={toggleBulk} />)}
                       {!forceOpen && normal.length > limit && <button type="button" onClick={() => setRootPage((value) => value + 1)}
                         className="ml-7 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">显示更多（剩余 {normal.length - limit}）</button>}
                       {unused.length > 0 && !showUnusedRoot && !forceOpen && <button type="button" onClick={() => setShowUnusedRoot(true)}
                         className="ml-7 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">未继续的候选 × {unused.length}</button>}
                       {(showUnusedRoot || forceOpen) && unused.map((node) => <BranchRow key={node.id} node={node} depth={0} selectedId={selectedId}
-                        expanded={expanded} forceOpen={forceOpen} onToggle={toggle} onSelect={choose} />)}
+                        expanded={expanded} forceOpen={forceOpen} bulkMode={bulkMode} bulkSelected={bulkSelected} onToggle={toggle} onSelect={choose} onToggleBulk={toggleBulk} />)}
                       {showUnusedRoot && !forceOpen && <button type="button" onClick={() => setShowUnusedRoot(false)}
                         className="ml-7 rounded px-2 py-1 text-[10px] text-tavern-dim hover:text-tavern-text">收起未继续候选</button>}
                     </>;
@@ -399,6 +503,28 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
         <div className={(mobileView ? "flex" : "hidden md:flex") + " min-h-0 flex-col overflow-y-auto p-5"}>
           {mobileView && <button type="button" onClick={() => setMobileView(false)}
             className="mb-3 self-start rounded-md border border-tavern-border px-3 py-1.5 text-xs text-tavern-dim md:hidden">← 返回目录</button>}
+          {compareNodes.length === 2 && <div className="mb-4 rounded-lg border border-tavern-accent/40 bg-tavern-accent/5 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">路线对比</h3>
+              <button type="button" onClick={() => setCompareIds(undefined)} className="text-xs text-tavern-dim hover:text-tavern-text">关闭对比</button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {compareNodes.map((node) => <div key={node.id} className="min-w-0 rounded-md border border-tavern-border bg-tavern-bg/50 p-2.5">
+                <p className="truncate text-xs font-medium">{node.name || node.title}</p>
+                <p className="mt-1 line-clamp-2 text-[11px] text-tavern-dim">{node.pathText}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-tavern-dim">
+                  <span>第 {node.turn} 轮</span><span>保存到第 {node.totalTurns} 轮</span><span>下级 {node.childCount}</span>
+                  {(node.tags ?? []).map((tag) => <span key={tag} className="text-tavern-accent">#{tag}</span>)}
+                </div>
+                <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-xs leading-5 text-tavern-text">{node.preview || "（暂无正文）"}</p>
+              </div>)}
+            </div>
+            <p className="mt-2 text-[11px] text-tavern-dim">
+              共同前缀：{commonPathLength ? nodeMap.get(compareNodes[0].pathIds[commonPathLength - 1])?.title ?? "共同路径" : "故事起点"}
+              {commonPathLength < compareNodes[0].pathIds.length || commonPathLength < compareNodes[1].pathIds.length
+                ? " · 此后分叉" : " · 两条路线当前重合"}
+            </p>
+          </div>}
           {selected ? <>
             <div className="flex flex-wrap items-start gap-2">
               <div className="min-w-0 flex-1">
@@ -411,6 +537,13 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
               </button>
               <button type="button" onClick={() => setRenaming((value) => !value)} disabled={metaSaving}
                 className="rounded-md border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-tavern-text">重命名</button>
+              <button type="button" onClick={() => setTagEditing((value) => !value)} disabled={metaSaving}
+                className="rounded-md border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-tavern-text">标签</button>
+              <button type="button" onClick={() => void toggleArchive()} disabled={metaSaving || (!selected.archived && selected.isActive)}
+                title={!selected.archived && selected.isActive ? "当前路线节点不能归档" : undefined}
+                className="rounded-md border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:border-red-400/50 hover:text-red-300 disabled:opacity-40">
+                {selected.archived ? "恢复" : "归档"}
+              </button>
             </div>
             {renaming && <div className="mt-2 flex gap-2">
               <input aria-label="路线名称" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={80}
@@ -419,10 +552,18 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
               <button type="button" onClick={() => void saveName()} disabled={metaSaving}
                 className="rounded-md bg-tavern-accent px-3 py-1.5 text-xs font-medium text-tavern-bg disabled:opacity-40">保存名称</button>
             </div>}
+            {tagEditing && <div className="mt-2 flex gap-2">
+              <input aria-label="路线标签" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} maxLength={200}
+                placeholder="用逗号分隔，如：主线, 图书馆"
+                className="min-w-0 flex-1 rounded-md border border-tavern-border bg-tavern-bg px-2 py-1.5 text-sm text-tavern-text outline-none" />
+              <button type="button" onClick={() => void saveTags()} disabled={metaSaving}
+                className="rounded-md bg-tavern-accent px-3 py-1.5 text-xs font-medium text-tavern-bg disabled:opacity-40">保存标签</button>
+            </div>}
             <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] text-tavern-dim">
               <span className="rounded-full border border-tavern-border px-2 py-0.5">第 {selected.turn} 轮</span>
               <span className="rounded-full border border-tavern-border px-2 py-0.5">保存到第 {selected.totalTurns} 轮</span>
               <span className="rounded-full border border-tavern-border px-2 py-0.5">下级分支 {selected.childCount}</span>
+              {(selected.tags ?? []).map((tag) => <span key={tag} className="rounded-full border border-tavern-accent/30 px-2 py-0.5 text-tavern-accent">#{tag}</span>)}
               {selected.archived && <span className="rounded-full border border-tavern-border px-2 py-0.5">已归档</span>}
             </div>
             <div className="mt-3 min-w-0 rounded-lg border border-tavern-border bg-tavern-bg/50 p-3">

@@ -460,8 +460,8 @@ test('创建群聊、全员与指定角色发言、候选切换和重载', async
   const branchDialog = page.getByRole('dialog', { name: '分支选择' });
   await expect(branchDialog.getByText(/共 2 个节点/)).toBeVisible();
   await branchDialog.getByRole('button', { name: /未继续的候选/ }).click();
-  await expect(branchDialog.locator('button[aria-pressed]')).toHaveCount(2);
-  await branchDialog.locator('button[aria-pressed]').nth(1).click();
+  await expect(branchDialog.locator('[data-branch-id] button[aria-pressed]')).toHaveCount(2);
+  await branchDialog.locator('[data-branch-id] button[aria-pressed]').nth(1).click();
   await branchDialog.getByRole('button', { name: '继续这条路线' }).click();
   await expect(page.getByText('已切换剧情路线', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/2');
@@ -530,8 +530,8 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   const dialog = page.getByRole('dialog', { name: '分支选择', exact: true });
   await expect(dialog.getByText(/共 3 个节点/)).toBeVisible();
   await dialog.getByRole('button', { name: /未继续的候选/ }).click();
-  await expect(dialog.locator('button[aria-pressed]')).toHaveCount(3);
-  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await expect(dialog.locator('[data-branch-id] button[aria-pressed]')).toHaveCount(3);
+  await dialog.locator('[data-branch-id] button[aria-pressed]').nth(1).click();
   await expect(dialog.getByText('剧情预览 · 原文', { exact: true })).toBeVisible();
   await expect(dialog.getByText('已加载全文', { exact: true })).toBeVisible();
   await page.screenshot({ path: path.join(app.runDir, 'branch-manager.png') });
@@ -548,7 +548,7 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await expect(settings).toHaveCount(0);
   await page.getByRole('button', { name: '剧情分支' }).click();
   await dialog.getByRole('button', { name: /未继续的候选/ }).click();
-  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await dialog.locator('[data-branch-id] button[aria-pressed]').nth(1).click();
   await dialog.getByRole('button', { name: '继续这条路线' }).click();
   await dialog.getByRole('button', { name: '关闭分支选择' }).click();
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/3');
@@ -559,14 +559,14 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await page.getByRole('button', { name: '剧情分支' }).click();
   await expect(dialog.getByText(/第 1 轮/).first()).toBeVisible();
   await dialog.getByRole('button', { name: /未继续的候选/ }).click();
-  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await dialog.locator('[data-branch-id] button[aria-pressed]').nth(1).click();
   await dialog.getByRole('button', { name: '继续这条路线' }).click();
   await dialog.getByRole('button', { name: '关闭分支选择' }).click();
   await expect(page.getByText('沿着第二条分支继续', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/3');
   await page.getByRole('button', { name: '剧情分支' }).click();
   await dialog.getByRole('button', { name: /未继续的候选/ }).click();
-  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await dialog.locator('[data-branch-id] button[aria-pressed]').nth(1).click();
   await dialog.getByRole('button', { name: '继续这条路线' }).click();
   await dialog.getByRole('button', { name: '关闭分支选择' }).click();
   await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible({ timeout: 10000 });
@@ -575,7 +575,7 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   // 收藏和重命名持久化，并能通过搜索定位非当前路线。
   await page.getByRole('button', { name: '剧情分支' }).click();
   await dialog.getByRole('button', { name: /未继续的候选/ }).click();
-  await dialog.locator('button[aria-pressed]').last().click();
+  await dialog.locator('[data-branch-id] button[aria-pressed]').last().click();
   await dialog.getByRole('button', { name: '☆ 收藏' }).click();
   await expect(dialog.getByRole('button', { name: '★ 已收藏' })).toBeVisible();
   await dialog.getByRole('button', { name: '重命名' }).click();
@@ -586,6 +586,27 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await expect(dialog.getByText('备用路线', { exact: true }).first()).toBeVisible();
   await dialog.getByRole('tab', { name: '收藏路线' }).click();
   await expect(dialog.getByText('备用路线', { exact: true }).first()).toBeVisible();
+
+  // 第二期：标签、整条路线归档/恢复、批量操作和对比。
+  await dialog.getByRole('button', { name: '标签', exact: true }).click();
+  await dialog.getByLabel('路线标签').fill('主线, 备用');
+  await dialog.getByRole('button', { name: '保存标签' }).click();
+  await expect(dialog.getByText('#主线', { exact: true }).first()).toBeVisible();
+  await page.screenshot({ path: path.join(app.runDir, 'branch-manager-phase2.png') });
+  await dialog.getByRole('button', { name: '归档', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '恢复', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('tab', { name: '已归档' })).toHaveAttribute('aria-selected', 'true');
+  await dialog.getByRole('button', { name: '恢复', exact: true }).click();
+  await expect(dialog.getByRole('tab', { name: '全部' })).toHaveAttribute('aria-selected', 'true');
+  await dialog.getByLabel('搜索分支').fill('');
+  await dialog.getByRole('tab', { name: '全部' }).click();
+  await dialog.getByRole('button', { name: '批量操作' }).click();
+  const checkboxes = dialog.getByRole('checkbox');
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  await dialog.getByRole('button', { name: '对比这 2 条' }).click();
+  await expect(dialog.getByText('路线对比', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭对比' }).click();
   await dialog.getByRole('button', { name: '关闭分支选择' }).click();
 
   await page.reload();
@@ -597,7 +618,7 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await page.getByRole('button', { name: '统计', exact: true }).click();
   await page.getByRole('button', { name: '剧情分支' }).click();
   await expect(dialog.getByLabel('搜索分支')).toBeVisible();
-  await dialog.locator('button[aria-pressed]').first().click();
+  await dialog.locator('[data-branch-id] button[aria-pressed]').first().click();
   await expect(dialog.getByRole('button', { name: '← 返回目录' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: path.join(app.runDir, 'mobile-branch-manager.png'), fullPage: true });

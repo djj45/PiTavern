@@ -246,7 +246,29 @@ try {
   assert.equal(reloadedMeta?.name, "深层路线", "重启/重新读取后名称保留");
   assert.equal(reloadedMeta?.favorite, true, "重启/重新读取后收藏保留");
   assert.equal(reloadedMeta?.branchId, deepLeaf.branchId, "branchId 跨读取稳定");
-  console.log("✓ 分支名称与收藏写入 chat_metadata，刷新目录后保留");
+  const tagsResponse = await fetch(base + "/api/chat/branch-meta", { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId: chat.id, revision: revision(chat.id), nodeId: deepLeaf.id, patch: { tags: ["主线", "备用"] } }) });
+  const tagsText = await tagsResponse.text();
+  assert.equal(tagsResponse.status, 200, tagsText);
+  const tagsIndex = JSON.parse(tagsText) as any;
+  const tagNodes: any[] = []; const collectTags = (nodes: any[]) => { for (const node of nodes) { tagNodes.push(node); collectTags(node.children); } }; collectTags(tagsIndex.index.nodes);
+  assert.deepEqual(tagNodes.find((node) => node.id === deepLeaf.id)?.tags, ["主线", "备用"]);
+  console.log("✓ 分支标签写入 chat_metadata");
+
+  const inactive = allNodes.filter((node) => !node.isActive).slice(0, 2);
+  assert.equal(inactive.length, 2, "批量操作需要至少两个非活动节点");
+  const bulkResponse = await fetch(base + "/api/chat/branch-meta-bulk", { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId: chat.id, revision: revision(chat.id), nodeIds: inactive.map((node) => node.id), patch: { favorite: true, tags: ["批量"] } }) });
+  const bulkText = await bulkResponse.text();
+  assert.equal(bulkResponse.status, 200, bulkText);
+  const bulkIndex = JSON.parse(bulkText) as any;
+  const bulkNodes: any[] = []; const collectBulk = (nodes: any[]) => { for (const node of nodes) { bulkNodes.push(node); collectBulk(node.children); } }; collectBulk(bulkIndex.index.nodes);
+  for (const node of inactive) {
+    const updated = bulkNodes.find((item) => item.id === node.id);
+    assert.equal(updated?.favorite, true, "批量收藏必须生效");
+    assert.deepEqual(updated?.tags, ["批量"], "批量标签必须生效");
+  }
+  console.log("✓ 批量收藏与标签一次写入");
 
   const beforeBadSwitch = fs.readFileSync(chat.file, "utf8");
   const badResponse = await fetch(base + "/api/chat/branch-switch", { method: "POST", headers: { "Content-Type": "application/json" },

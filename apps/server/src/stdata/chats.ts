@@ -2,7 +2,7 @@ import { readGroup } from "./groups.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import type { AuthorNoteDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
+import type { AuthorNoteDto, BranchMetaPatchDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
 import type { CharacterCard, StChatLine } from "./types.ts";
 import { greetingCatalog } from "./greetings.ts";
 import { lastReplies, parseChatSource, restoreState, selectedMessages, selectReplySource, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
@@ -584,33 +584,46 @@ export class ChatStore {
     };
   }
 
-  updateBranchMeta(chatId: string, nodeId: string, patch: { name?: string | null; note?: string | null; favorite?: boolean; archived?: boolean }, expectedRevision: string) {
+  updateBranchMeta(chatId: string, nodeId: string, patch: BranchMetaPatchDto, expectedRevision: string) {
+    return this.updateBranchMetas(chatId, [nodeId], patch, expectedRevision);
+  }
+
+  updateBranchMetas(chatId: string, nodeIds: string[], patch: BranchMetaPatchDto, expectedRevision: string) {
     if (this.revisionId(chatId) !== expectedRevision) throw new Error("分支目录已变化，请刷新后重试");
+    const ids = [...new Set(nodeIds)];
+    if (!ids.length || ids.length > 500) throw new Error("批量分支数量无效");
     const rev = this.revision(chatId);
     const index = buildBranchIndex(rev.source, expectedRevision);
-    if (!findBranchNode(index.nodes, nodeId)) throw new Error("分支节点不存在，请刷新后重试");
+    if (ids.some((id) => !findBranchNode(index.nodes, id))) throw new Error("分支节点不存在，请刷新后重试");
     const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
     const map = metadata._pitavernBranchMeta && typeof metadata._pitavernBranchMeta === "object" && !Array.isArray(metadata._pitavernBranchMeta)
       ? { ...(metadata._pitavernBranchMeta as Record<string, Record<string, unknown>>) } : {};
-    const current = { ...(map[nodeId] ?? {}) };
-    if (patch.name !== undefined) {
-      if (patch.name && patch.name.trim()) current.name = patch.name.trim().slice(0, 80);
-      else delete current.name;
+    for (const nodeId of ids) {
+      const current = { ...(map[nodeId] ?? {}) };
+      if (patch.name !== undefined) {
+        if (patch.name && patch.name.trim()) current.name = patch.name.trim().slice(0, 80);
+        else delete current.name;
+      }
+      if (patch.note !== undefined) {
+        if (patch.note && patch.note.trim()) current.note = patch.note.trim().slice(0, 300);
+        else delete current.note;
+      }
+      if (patch.favorite !== undefined) {
+        if (patch.favorite) current.favorite = true;
+        else delete current.favorite;
+      }
+      if (patch.archived !== undefined) {
+        if (patch.archived) current.archived = true;
+        else delete current.archived;
+      }
+      if (patch.tags !== undefined) {
+        const tags = [...new Set(patch.tags.map((tag) => tag.trim().slice(0, 24)).filter(Boolean))].slice(0, 12);
+        if (tags.length) current.tags = tags;
+        else delete current.tags;
+      }
+      if (Object.keys(current).length) map[nodeId] = current;
+      else delete map[nodeId];
     }
-    if (patch.note !== undefined) {
-      if (patch.note && patch.note.trim()) current.note = patch.note.trim().slice(0, 300);
-      else delete current.note;
-    }
-    if (patch.favorite !== undefined) {
-      if (patch.favorite) current.favorite = true;
-      else delete current.favorite;
-    }
-    if (patch.archived !== undefined) {
-      if (patch.archived) current.archived = true;
-      else delete current.archived;
-    }
-    if (Object.keys(current).length) map[nodeId] = current;
-    else delete map[nodeId];
     metadata._pitavernBranchMeta = map;
     rev.header.chat_metadata = metadata;
     if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);

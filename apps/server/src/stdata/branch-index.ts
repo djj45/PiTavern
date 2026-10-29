@@ -131,6 +131,7 @@ function buildChildren(lines: StChatLine[], ctx: WalkContext, state: WalkState):
       isActive: activeCandidate,
       isCurrent: false,
       favorite: meta.favorite === true,
+      tags: Array.isArray(meta.tags) ? meta.tags.filter((tag): tag is string => typeof tag === "string" && Boolean(tag.trim())).map((tag) => tag.trim()).slice(0, 12) : [],
       ...(meta.archived === true ? { archived: true } : {}),
       ...(typeof meta.visitedAt === "string" ? { visitedAt: meta.visitedAt } : {}),
       children,

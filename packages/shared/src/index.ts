@@ -376,6 +376,7 @@ export interface BranchTreeNodeDto {
   isActive: boolean;
   isCurrent: boolean;
   favorite: boolean;
+  tags: string[];
   archived?: boolean;
   visitedAt?: string;
   children: BranchTreeNodeDto[];
@@ -395,6 +396,7 @@ export interface BranchMetaPatchDto {
   note?: string | null;
   favorite?: boolean;
   archived?: boolean;
+  tags?: string[];
 }
 
 export interface BranchSwitchResultDto {

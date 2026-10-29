@@ -147,6 +147,9 @@ export const api = {
   updateBranchMeta: (chatId: string, revision: string, nodeId: string, patch: BranchMetaPatchDto) =>
     fetch("/api/chat/branch-meta", { method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, revision, nodeId, patch }) }).then((r) => json<BranchSwitchResultDto>(r)),
+  updateBranchMetas: (chatId: string, revision: string, nodeIds: string[], patch: BranchMetaPatchDto) =>
+    fetch("/api/chat/branch-meta-bulk", { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, revision, nodeIds, patch }) }).then((r) => json<BranchSwitchResultDto>(r)),
   /** 侧栏对话菜单：置顶 / 归档 / 重命名（服务端写入 chat_metadata）。 */
   updateChatMeta: (chatId: string, patch: { pinned?: boolean; archived?: boolean; displayName?: string | null }) =>
     fetch("/api/chat/meta", { method: "PATCH", headers: { "Content-Type": "application/json" },

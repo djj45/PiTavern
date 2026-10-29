@@ -297,6 +297,14 @@ export class SessionManager {
     return index;
   }
 
+  updateBranchMetas(chatId: string, nodeIds: string[], patch: BranchMetaPatchDto, revision: string): BranchIndexDto {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再批量修改路线");
+    const index = this.chats.updateBranchMetas(chatId, nodeIds, patch, revision);
+    this.changed(chatId);
+    return index;
+  }
+
   restoreBackup(chatId: string, backupId: string, revision: string): void {
     if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再恢复备份");
