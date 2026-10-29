@@ -14,6 +14,10 @@ import type {
   LibraryResourceDto,
   LibraryDocumentDto,
   LibraryBackupPreviewDto,
+  LibraryBackupJobDto,
+  LibraryBackupStorageDto,
+  LibraryHistoryPageDto,
+  LibraryHistoryPreviewDto,
 } from "@pitavern/shared";
 
 async function json<T>(res: Response): Promise<T> {
@@ -25,12 +29,26 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  startLibraryBackupJob: (options: { action: "export" | "import" | "restore"; includeSettings?: boolean; previewId?: string; applySettings?: boolean }) => fetch("/api/library-backup/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) }).then((r) => json<LibraryBackupJobDto>(r)),
+  libraryBackupJob: (id: string, signal?: AbortSignal) => fetch("/api/library-backup/jobs/" + encodeURIComponent(id), { signal }).then((r) => json<LibraryBackupJobDto>(r)),
+  cancelLibraryBackupJob: (id: string) => fetch("/api/library-backup/jobs/" + encodeURIComponent(id) + "/cancel", { method: "POST" }).then((r) => json<LibraryBackupJobDto>(r)),
+  uploadLibraryBackupJob: (id: string, file: File, progress: (bytes: number) => void) => new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/library-backup/jobs/" + encodeURIComponent(id) + "/upload"); xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (event) => progress(event.loaded);
+    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error("上传请求失败，请查看任务结果")); };
+    xhr.onerror = () => reject(new Error("上传连接中断")); xhr.onabort = () => reject(new Error("上传已取消")); xhr.send(file);
+  }),
+  libraryBackupStorage: () => fetch("/api/library-backup/storage").then((r) => json<LibraryBackupStorageDto>(r)),
+  removeLibraryBackupArtifact: (id: string, confirmation: string) => fetch("/api/library-backup/storage", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, confirmation }) }).then((r) => json<{ ok: true }>(r)),
   library: () => fetch("/api/library").then((r) => json<LibraryResourceDto[]>(r)),
   libraryDocument: (id: string) => fetch("/api/library/document?" + new URLSearchParams({ id })).then((r) => json<LibraryDocumentDto>(r)),
   saveLibraryDocument: (document: LibraryDocumentDto) => fetch("/api/library/document", {
     method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: document.resource.id, revision: document.revision, data: document.data }),
   }).then((r) => json<LibraryDocumentDto>(r)),
+  libraryHistory: (id: string, before?: string) => fetch("/api/library/history?" + new URLSearchParams({ id, ...(before ? { before } : {}) })).then((r) => json<LibraryHistoryPageDto>(r)),
+  previewLibraryHistory: (id: string, backupId: string) => fetch("/api/library/history/preview?" + new URLSearchParams({ id, backupId })).then((r) => json<LibraryHistoryPreviewDto>(r)),
+  restoreLibraryHistory: (id: string, backupId: string, revision: string) => fetch("/api/library/history/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, backupId, revision }) }).then((r) => json<LibraryDocumentDto>(r)),
   createWorld: (name: string) => fetch("/api/library/world", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
     .then((r) => json<LibraryDocumentDto>(r)),
   previewLibraryBackup: (file: File) => fetch("/api/library-backup/preview", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file })

@@ -380,4 +380,25 @@ export interface LibraryBackupPreviewDto {
   files: number;
   bytes: number;
   counts: Record<string, number>;
+  settings?: Pick<ConnectionDto, "persona" | "contextMode" | "activePreset" | "activeWorlds" | "worldInfo" | "outputProtocol" | "protocolStrict" | "compression" | "takeover"> & { thinkingLevel: string; toolsEnabled: boolean };
+}
+
+export interface LibraryHistoryDto { id: string; createdAt: string; bytes: number; revision: string }
+export interface LibraryHistoryPageDto { items: LibraryHistoryDto[]; before: string | null }
+export interface LibraryHistoryPreviewDto { backup: LibraryHistoryDto; document: LibraryDocumentDto }
+
+export interface LibraryBackupProgressDto {
+  phase: "collecting" | "compressing" | "uploading" | "validating" | "restoring" | "committing" | "done";
+  files: number; bytes: number; totalFiles?: number; totalBytes?: number;
+}
+export interface LibraryBackupJobDto {
+  id: string; action: "export" | "import" | "restore";
+  state: "running" | "succeeded" | "failed" | "cancelled";
+  progress: LibraryBackupProgressDto; error?: string;
+  preview?: LibraryBackupPreviewDto;
+  restored?: { stDataDir: string; previousDataDir: string; restartRequired: true };
+}
+export interface LibraryBackupStorageDto {
+  directory: string; bytes: number; files: number;
+  items: { id: string; kind: "archive" | "import" | "incomplete"; bytes: number; files: number; modifiedAt: string; inUse: boolean }[];
 }

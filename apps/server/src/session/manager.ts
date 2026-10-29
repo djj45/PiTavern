@@ -13,7 +13,7 @@ import {
   GAME_TOOL_NAME,
   OUTPUT_PROTOCOL_INSTRUCTION,
 } from "../agent/protocol/game-content.ts";
-import { assembleBridgeContext } from "../context/bridge.ts";
+import { assembleBridgeIsolated } from "../context/bridge-isolated.ts";
 import { assembleTakeoverContext } from "../context/takeover.ts";
 import { substituteMacros } from "../context/macros.ts";
 import type { MacroEnv } from "../context/macros.ts";
@@ -359,7 +359,7 @@ export class SessionManager {
       ) : undefined;
       session.controller.signal.throwIfAborted();
       const agent = config.contextMode === "bridge"
-        ? this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, document.metadata)
+        ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, document.metadata, session.controller.signal)
         : config.contextMode === "takeover"
           ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...document.metadata, variables }, character, contextHooks)
           : createTavernAgent({
@@ -431,7 +431,7 @@ export class SessionManager {
     ].join("\n");
   }
 
-  private buildBridgeAgent(
+  private async buildBridgeAgent(
     chatId: string,
     character: CharacterCard,
     model: ReturnType<typeof resolveModel>,
@@ -444,7 +444,8 @@ export class SessionManager {
     timedState?: import("../context/worldinfo.ts").TimedEffectsState,
     vectorMatches?: ReadonlySet<string>,
     metadata?: Record<string, unknown>,
-  ): Agent {
+    signal?: AbortSignal,
+  ): Promise<Agent> {
     const presetName = config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
     if (!presetName || !fs.existsSync(presetFile)) {
@@ -452,7 +453,7 @@ export class SessionManager {
     }
     const preset = loadPreset(presetFile);
     const regexScripts = [...globalRegex(this.stDataDir), ...normalizeRegexScripts(preset.extensions?.regex_scripts), ...normalizeRegexScripts(character.extensions.regex_scripts)];
-    const assembled = assembleBridgeContext({
+    const assembled = await assembleBridgeIsolated({
       preset,
       card: character,
       persona: config.persona,
@@ -463,11 +464,10 @@ export class SessionManager {
       metadata,
       options: {
         ...config.worldInfo,
-        countTokens: contextHooks.tokenCounter?.count,
         vectorMatches,
         ...(timedState ? { timed: timedState, messageCount: toolCtx.lines.length } : {}),
       },
-    });
+    }, model.id, config.providers.find((p) => p.id === model.provider)?.models.find((m) => m.id === model.id)?.tokenizer, signal);
     const messages = [...assembled.messages];
     if (useProtocol) {
       // 协议指令压尾注入（pi 会把 system 重放合并到前部，但内容与顺序保留），

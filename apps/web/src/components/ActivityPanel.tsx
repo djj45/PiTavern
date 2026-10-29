@@ -33,7 +33,7 @@ export const ActivityPanel = memo(function ActivityPanel({ items, usage, project
 
   return (
     // 小屏为右侧浮层（可关闭），lg 起为常驻侧栏
-    <aside className="fixed inset-y-0 right-0 z-40 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l border-tavern-border bg-tavern-panel p-4 text-shadow-sm shadow-2xl lg:static lg:z-auto lg:max-w-none lg:shadow-none">
+    <aside className="absolute inset-y-0 right-0 z-40 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l border-tavern-border bg-tavern-panel p-4 text-shadow-sm shadow-2xl lg:static lg:z-auto lg:max-w-none lg:shadow-none">
       <h3 className="mb-3 flex items-center gap-2 font-medium text-tavern-accent">
         活动与用量
         {onClose && (

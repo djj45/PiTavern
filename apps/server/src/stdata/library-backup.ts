@@ -4,10 +4,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { Readable, Transform, type TransformCallback } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip, createGunzip } from "node:zlib";
-import type { LibraryBackupPreviewDto } from "@pitavern/shared";
+import type { LibraryBackupPreviewDto, LibraryBackupProgressDto, LibraryBackupStorageDto } from "@pitavern/shared";
 import type { TavernConfig } from "../config.ts";
 import { saveConfig, seedDataDirs } from "../config.ts";
 import { object } from "./files.ts";
+import { parsePortableSettings, applyPortableSettings, type PortableSettings } from "./portable-config.ts";
+
+export interface BackupOperation { signal?: AbortSignal; update?: (progress: LibraryBackupProgressDto) => void }
+const check = (op?: BackupOperation) => op?.signal?.throwIfAborted();
 
 const ROOTS = ["characters", "chats", "worlds", "OpenAI Settings", "skills", ".pitavern"];
 const MAX_FILE = 32 * 1024 * 1024;
@@ -19,9 +23,9 @@ const digest = (buffer: Buffer) => createHash("sha256").update(buffer).digest("h
 
 class ByteLimit extends Transform {
   private bytes = 0;
-  constructor(private readonly limit: number) { super(); }
+  constructor(private readonly limit: number, private readonly progress?: (bytes: number) => void) { super(); }
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
-    this.bytes += chunk.length;
+    this.bytes += chunk.length; this.progress?.(this.bytes);
     callback(this.bytes > this.limit ? new Error("归档超过大小上限") : null, chunk);
   }
 }
@@ -57,23 +61,25 @@ function allowed(relative: string): boolean {
 
 interface SourceFile { relative: string; size: number; mtimeMs: number; ctimeMs: number }
 
-function inventory(root: string): SourceFile[] {
+async function inventory(root: string, op?: BackupOperation): Promise<SourceFile[]> {
   const files: SourceFile[] = [];
   let bytes = 0;
-  const walk = (relative: string): void => {
+  const walk = async (relative: string): Promise<void> => {
+    check(op);
     if (relative === ".pitavern/vectors") return;
     const target = path.join(root, relative);
-    const stat = fs.lstatSync(target);
+    const stat = await fs.promises.lstat(target);
     if (stat.isSymbolicLink()) throw new Error(`备份不跟随符号链接：${relative}`);
     if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(target).sort()) walk(`${relative}/${name}`);
+      for (const name of (await fs.promises.readdir(target)).sort()) await walk(relative + "/" + name);
     } else if (stat.isFile() && allowed(relative)) {
       bytes += stat.size;
       if (stat.size > MAX_FILE || bytes > MAX_TOTAL || files.length >= MAX_FILES) throw new Error("资料库超过备份大小上限（单文件 32 MiB、总计 2 GiB、10 万文件）");
       files.push({ relative, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs });
+      op?.update?.({ phase: "collecting", files: files.length, bytes });
     } else if (!stat.isFile()) throw new Error(`不支持的资料类型：${relative}`);
   };
-  for (const name of ROOTS) if (fs.existsSync(path.join(root, name))) walk(name);
+  for (const name of ROOTS) if (fs.existsSync(path.join(root, name))) await walk(name);
   return files;
 }
 
@@ -86,28 +92,34 @@ export class LibraryBackupStore {
 
   discard(id: string): void { this.previews.delete(id); }
 
-  async export(): Promise<string> {
+  async export(settings?: PortableSettings, op?: BackupOperation): Promise<string> {
+    check(op);
+    if (settings) settings = parsePortableSettings(settings);
     fs.mkdirSync(this.maintenanceDir, { recursive: true, mode: 0o700 });
     const archive = path.join(this.maintenanceDir, `backup-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.pitavern.gz`);
-    const sources = inventory(this.root);
+    const sources = await inventory(this.root, op);
+    const totalBytes = sources.reduce((sum, item) => sum + item.size, 0);
     const root = this.root;
     const records = async function* () {
-      yield JSON.stringify({ format: "pitavern-library", version: 1, createdAt: new Date().toISOString() }) + "\n";
+      yield JSON.stringify({ format: "pitavern-library", version: 1, createdAt: new Date().toISOString(), ...(settings ? { settings, settingsSha256: digest(Buffer.from(JSON.stringify(settings))) } : {}) }) + "\n";
       const checksums = createHash("sha256");
-      let bytes = 0;
+      if (settings) checksums.update("settings\0" + digest(Buffer.from(JSON.stringify(settings))) + "\n");
+      let bytes = 0, files = 0;
       for (const source of sources) {
+        check(op);
         const buffer = await fs.promises.readFile(path.join(root, source.relative));
         if (buffer.length !== source.size) throw new Error("备份期间源文件发生变化，请重新导出");
         const sha256 = digest(buffer);
         checksums.update(`${source.relative}\0${sha256}\n`);
-        bytes += buffer.length;
+        bytes += buffer.length; files++;
+        op?.update?.({ phase: "compressing", files, bytes, totalFiles: sources.length, totalBytes });
         yield JSON.stringify({ path: source.relative, sha256, data: buffer.toString("base64") }) + "\n";
       }
-      if (JSON.stringify(inventory(root)) !== JSON.stringify(sources)) throw new Error("备份期间资料库发生变化，请重新导出");
+      if (JSON.stringify(await inventory(root, { signal: op?.signal })) !== JSON.stringify(sources)) throw new Error("备份期间资料库发生变化，请重新导出");
       yield JSON.stringify({ end: true, files: sources.length, bytes, sha256: checksums.digest("hex") }) + "\n";
     };
     try {
-      await pipeline(Readable.from(records()), createGzip(), new ByteLimit(MAX_ARCHIVE), fs.createWriteStream(archive, { flags: "wx", mode: 0o600 }));
+      await pipeline(Readable.from(records()), createGzip(), new ByteLimit(MAX_ARCHIVE), fs.createWriteStream(archive, { flags: "wx", mode: 0o600 }), { signal: op?.signal });
       return archive;
     } catch (error) {
       // Keep a failed artifact for diagnosis, but never advertise it as a complete backup.
@@ -116,9 +128,10 @@ export class LibraryBackupStore {
     }
   }
 
-  private async extract(archive: string, target: string, id: string): Promise<LibraryBackupPreviewDto & { checksum: string }> {
+  private async extract(archive: string, target: string, id: string, op?: BackupOperation, restoring = false): Promise<LibraryBackupPreviewDto & { checksum: string }> {
     const decoded = new Transform({ transform(chunk, _encoding, callback) { callback(null, chunk); } });
-    const pumping = pipeline(fs.createReadStream(archive), createGunzip(), new ByteLimit(MAX_TOTAL * 1.4 + MAX_FILES * 2048), decoded);
+    check(op);
+    const pumping = pipeline(fs.createReadStream(archive), createGunzip(), new ByteLimit(MAX_TOTAL * 1.4 + MAX_FILES * 2048), decoded, { signal: op?.signal });
     // Attach the rejection handler immediately; parsing and decompression run concurrently.
     void pumping.catch(() => {});
     const seen = new Set<string>();
@@ -129,14 +142,22 @@ export class LibraryBackupStore {
     let ended = false;
     let checksum = "";
     let first = true;
+    let settings: PortableSettings | undefined;
     try {
       for await (const line of lines(decoded)) {
+        check(op);
         const record: unknown = JSON.parse(line);
         if (!object(record) || ended) throw new Error("归档记录结构无效");
         if (first) {
           first = false;
           if (record.format !== "pitavern-library" || record.version !== 1 || typeof record.createdAt !== "string" || !Number.isFinite(Date.parse(record.createdAt))) throw new Error("不支持的备份格式或版本");
           createdAt = record.createdAt;
+          if (record.settings !== undefined) {
+            settings = parsePortableSettings(record.settings);
+            const sha256 = digest(Buffer.from(JSON.stringify(settings)));
+            if (record.settingsSha256 !== sha256) throw new Error("便携设置校验失败");
+            checksums.update("settings\0" + sha256 + "\n");
+          }
           continue;
         }
         if (record.end === true) {
@@ -157,37 +178,83 @@ export class LibraryBackupStore {
         checksums.update(`${record.path}\0${record.sha256}\n`);
         const category = record.path.split("/")[0];
         counts[category] = (counts[category] ?? 0) + 1;
+        op?.update?.({ phase: restoring ? "restoring" : "validating", files: seen.size, bytes });
+        if (seen.size % 32 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       }
       await pumping;
       if (!ended) throw new Error("归档不完整，缺少汇总记录");
-      return { id, createdAt, files: seen.size, bytes, counts, checksum };
+      return { id, createdAt, files: seen.size, bytes, counts, checksum, ...(settings ? { settings } : {}) };
     } catch (error) {
       decoded.destroy(); await pumping.catch(() => {}); throw error;
     }
   }
 
-  async preview(input: Readable): Promise<LibraryBackupPreviewDto> {
+  async preview(input: Readable, op?: BackupOperation): Promise<LibraryBackupPreviewDto> {
+    check(op);
     if (this.previews.size >= 3) throw new Error("已有 3 份待恢复归档；请取消不需要的预览后再导入");
     const id = randomUUID();
     const dir = path.join(this.maintenanceDir, `import-${id}`);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const archive = path.join(dir, "source.pitavern.gz");
-    await pipeline(input, new ByteLimit(MAX_ARCHIVE), fs.createWriteStream(archive, { flags: "wx", mode: 0o600 }));
-    const { checksum, ...dto } = await this.extract(archive, path.join(dir, "preview"), id);
+    await pipeline(input, new ByteLimit(MAX_ARCHIVE, (bytes) => op?.update?.({ phase: "uploading", bytes, files: 0 })), fs.createWriteStream(archive, { flags: "wx", mode: 0o600 }), { signal: op?.signal });
+    const { checksum, ...dto } = await this.extract(archive, path.join(dir, "preview"), id, op);
     this.previews.set(id, { dto, archive, checksum });
     return dto;
   }
 
-  async restore(id: string, config: TavernConfig): Promise<{ stDataDir: string; previousDataDir: string; restartRequired: true }> {
+  private artifact(id: string): string {
+    if (!/^(backup-[a-zA-Z0-9.-]+\.pitavern\.gz(?:\.incomplete)?|import-[a-f0-9-]{36})$/.test(id)) throw new Error("归档标识无效");
+    const file = path.join(this.maintenanceDir, id);
+    if (fs.lstatSync(file).isSymbolicLink()) throw new Error("不能管理符号链接");
+    return file;
+  }
+
+  async storage(active = false): Promise<LibraryBackupStorageDto> {
+    const result: LibraryBackupStorageDto = { directory: this.maintenanceDir, bytes: 0, files: 0, items: [] };
+    if (!fs.existsSync(this.maintenanceDir)) return result;
+    const measure = async (file: string): Promise<{ bytes: number; files: number }> => {
+      const stat = await fs.promises.lstat(file);
+      if (stat.isSymbolicLink()) return { bytes: 0, files: 0 };
+      if (stat.isFile()) return { bytes: stat.size, files: 1 };
+      if (!stat.isDirectory()) return { bytes: 0, files: 0 };
+      let bytes = 0, files = 0;
+      for (const name of await fs.promises.readdir(file)) { const child = await measure(path.join(file, name)); bytes += child.bytes; files += child.files; }
+      return { bytes, files };
+    };
+    for (const id of (await fs.promises.readdir(this.maintenanceDir)).sort().reverse()) {
+      if (!/^(backup-[a-zA-Z0-9.-]+\.pitavern\.gz(?:\.incomplete)?|import-[a-f0-9-]{36})$/.test(id)) continue;
+      const file = this.artifact(id), stat = await fs.promises.lstat(file);
+      const size = await measure(file);
+      result.bytes += size.bytes; result.files += size.files;
+      result.items.push({ id, ...size, kind: id.startsWith("import-") ? "import" : id.endsWith(".incomplete") ? "incomplete" : "archive", modifiedAt: stat.mtime.toISOString(),
+        inUse: active || [...this.previews.values()].some((preview) => path.dirname(preview.archive) === file) });
+    }
+    return result;
+  }
+
+  removeArtifact(id: string, confirmation: string): void {
+    if (id !== confirmation) throw new Error("请确认要移除的归档名称");
+    const file = this.artifact(id);
+    if ([...this.previews.values()].some((preview) => path.dirname(preview.archive) === file)) throw new Error("此归档仍在恢复预览中，请先取消预览");
+    fs.rmSync(file, { recursive: true });
+  }
+
+  async restore(id: string, config: TavernConfig, applySettings = false, op?: BackupOperation): Promise<{ stDataDir: string; previousDataDir: string; restartRequired: true }> {
+    check(op);
     const preview = this.previews.get(id);
     if (!preview) throw new Error("预览已失效，请重新上传归档");
     const target = fs.mkdtempSync(path.join(path.dirname(this.root), `${path.basename(this.root)}-restored-`));
     // Re-validate the original archive; never trust mutable preview files.
-    const actual = await this.extract(preview.archive, target, id);
+    const actual = await this.extract(preview.archive, target, id, op, true);
     const { checksum, ...dto } = actual;
     if (checksum !== preview.checksum || JSON.stringify(dto) !== JSON.stringify(preview.dto)) throw new Error("归档在预览后发生变化，请重新上传");
     seedDataDirs(target);
-    const next = { ...config, stDataDir: target };
+    if (applySettings && !actual.settings) throw new Error("归档不含便携设置");
+    const merged = applySettings ? applyPortableSettings(config, parsePortableSettings(actual.settings)) : config;
+    const next = { ...merged, stDataDir: target };
+    check(op);
+    op?.update?.({ phase: "committing", files: actual.files, bytes: actual.bytes, totalFiles: actual.files, totalBytes: actual.bytes });
+    // Commit is synchronous and cannot be cancelled halfway through the atomic config replacement.
     saveConfig(next);
     Object.assign(config, next);
     this.previews.delete(id);

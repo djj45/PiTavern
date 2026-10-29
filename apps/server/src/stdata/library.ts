@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import type { LibraryDocumentDto, LibraryKind, LibraryResourceDto } from "@pitavern/shared";
+import type { LibraryDocumentDto, LibraryKind, LibraryResourceDto, LibraryHistoryDto, LibraryHistoryPageDto, LibraryHistoryPreviewDto } from "@pitavern/shared";
 import { normalizeRegexScripts, parseFindRegex, type RegexScript } from "@pitavern/shared/regex";
 import { atomicWrite, object } from "./files.ts";
 import { parseCardFromPng, rewritePngRegex } from "./png.ts";
@@ -92,6 +92,10 @@ export class LibraryStore {
 
   read(id: string): LibraryDocumentDto {
     const { resource, buffer, raw } = this.source(id);
+    return this.document(resource, buffer, raw);
+  }
+
+  private document(resource: LibraryResourceDto, buffer: Buffer, raw: Record<string, unknown>): LibraryDocumentDto {
     let data: LibraryDocumentDto["data"];
     if (resource.kind === "world") { validateWorld(raw); data = raw; }
     else if (resource.kind === "global-regex") data = (raw.scripts ?? []) as RegexScript[];
@@ -129,6 +133,48 @@ export class LibraryStore {
     }
     if (exists) this.backup(file, buffer);
     atomicWrite(file, output);
+    return this.read(id);
+  }
+
+  private historyDirectory(id: string): string {
+    const { file } = this.locate(id);
+    return path.join(this.root, ".pitavern/editor-backups", hash(path.relative(this.root, file)));
+  }
+
+  private historySource(id: string, backupId: string) {
+    if (!/^\d{13}-[a-f0-9-]{36}\.(json|png)$/i.test(backupId)) throw new Error("历史版本标识无效");
+    const file = path.join(this.historyDirectory(id), backupId);
+    if (!fs.lstatSync(file).isFile()) throw new Error("历史版本不是普通文件");
+    const buffer = fs.readFileSync(file);
+    const backup: LibraryHistoryDto = { id: backupId, createdAt: new Date(Number(backupId.slice(0, 13))).toISOString(), bytes: buffer.length, revision: hash(buffer) };
+    return { buffer, backup };
+  }
+
+  history(id: string, before?: string): LibraryHistoryPageDto {
+    const directory = this.historyDirectory(id);
+    if (!fs.existsSync(directory)) return { items: [], before: null };
+    const names = fs.readdirSync(directory).filter((name) => /^\d{13}-[a-f0-9-]{36}\.(json|png)$/i.test(name) && (!before || name < before)).sort().reverse();
+    const items = names.slice(0, 50).map((name) => this.historySource(id, name).backup);
+    return { items, before: names.length > 50 ? items.at(-1)!.id : null };
+  }
+
+  previewHistory(id: string, backupId: string): LibraryHistoryPreviewDto {
+    const { buffer, backup } = this.historySource(id, backupId);
+    const { resource } = this.locate(id);
+    const raw = /\.png$/i.test(resource.label) ? parseCardFromPng(buffer)?.data : JSON.parse(buffer.toString("utf8"));
+    if (!object(raw)) throw new Error("历史版本内容损坏");
+    return { backup, document: this.document(resource, buffer, raw) };
+  }
+
+  restoreHistory(id: string, backupId: string, revision: string): LibraryDocumentDto {
+    const current = this.source(id);
+    if (hash(current.buffer) !== revision) throw new Error("资料已被其他窗口修改，请重新载入后再恢复");
+    const { buffer } = this.historySource(id, backupId);
+    const raw = /\.png$/i.test(current.resource.label) ? parseCardFromPng(buffer)?.data : JSON.parse(buffer.toString("utf8"));
+    if (!object(raw)) throw new Error("历史版本内容损坏");
+    this.document(current.resource, buffer, raw); // Validate and restore the same bytes.
+    if (current.exists) this.backup(current.file, current.buffer);
+    atomicWrite(current.file, buffer);
     return this.read(id);
   }
 

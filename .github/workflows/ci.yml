@@ -25,6 +25,8 @@ jobs:
       - run: npm run check
       - run: npm run build
       - run: npm run verify:ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run verify:browser
       - name: Preserve failed run fixtures
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { ChatDisplayDto, ChatMessageDto } from "@pitavern/shared";
 import { RegexPlacement } from "@pitavern/shared/regex";
-import { displayMessage } from "../messageDisplay.ts";
+import { displayMessageIsolated } from "../displayRegex.ts";
 import { isToolItem, TOOL_META, toolArgPreview, type ChatItem, type ToolItem } from "../chatItems.ts";
 
 import { chatExportUrl } from "../api.ts";
@@ -13,8 +13,23 @@ const MarkdownContent = lazy(() => import("./MessageContent.tsx").then(({ Messag
 const MessageContent = memo(function MessageContent({ text, placement, depth, display }: {
   text: string; placement: number; depth: number; display?: ChatDisplayDto;
 }) {
-  const rendered = useMemo(() => displayMessage(text, placement, depth, display), [text, placement, depth, display]);
-  return <Suspense fallback={<div className="whitespace-pre-wrap break-words">{rendered}</div>}><MarkdownContent text={rendered} /></Suspense>;
+  const [result, setResult] = useState<{ text: string; error?: string; source: string; display?: ChatDisplayDto; placement: number; depth: number }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    // Debounce streaming updates so each delta does not spawn and terminate a worker.
+    const timer = setTimeout(() => {
+      void displayMessageIsolated(text, placement, depth, display, controller.signal).then((value) => {
+        if (!controller.signal.aborted) setResult({ text: value, source: text, display, placement, depth });
+      }).catch((error: Error) => {
+        if (!controller.signal.aborted) setResult({ text, error: error.message, source: text, display, placement, depth });
+      });
+    }, 60);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [text, placement, depth, display]);
+  const valid = result?.source === text && result.display === display && result.placement === placement && result.depth === depth;
+  const rendered = valid ? result.text : text;
+  return <><Suspense fallback={<div className="whitespace-pre-wrap break-words">{rendered}</div>}><MarkdownContent text={rendered} /></Suspense>
+    {valid && result.error && <p role="alert" className="mt-1 text-xs text-amber-400">{result.error}</p>}</>;
 });
 
 function CharacterAvatar({ src, name }: { src: string; name: string }) {

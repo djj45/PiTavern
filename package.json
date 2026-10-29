@@ -12,7 +12,7 @@
     "dev:server": "npm run dev -w apps/server",
     "dev:web": "npm run dev -w apps/web",
     "build": "npm run build --workspaces --if-present",
-    "check": "npm run check --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present && tsc -p tsconfig.browser.json",
     "e2e": "npm run e2e -w apps/server",
     "verify:bridge": "npm run verify:bridge -w apps/server",
     "verify:tools": "npm run verify:tools -w apps/server",
@@ -26,9 +26,15 @@
     "verify:activity": "npm run verify:activity -w apps/server",
     "verify:world-display": "npm run verify:world-display -w apps/server",
     "verify:library": "npm run verify:library -w apps/server",
-    "verify:ci": "node scripts/verify-ci.mjs"
+    "verify:ci": "node scripts/verify-ci.mjs",
+    "verify:browser": "playwright test",
+    "verify:regex-isolation": "npm run verify:regex-isolation -w apps/server",
+    "verify:library-maintenance": "npm run verify:library-maintenance -w apps/server"
   },
   "engines": {
     "node": ">=22.19"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
   }
 }

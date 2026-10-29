@@ -25,6 +25,7 @@ import type { ChatStore } from "../stdata/chats.ts";
 import type { SessionManager } from "../session/manager.ts";
 import { LibraryStore } from "../stdata/library.ts";
 import { LibraryBackupStore } from "../stdata/library-backup.ts";
+import { attachLibraryBackupJobs, backupControlPath } from "./library-backup-jobs.ts";
 import { atomicWrite } from "../stdata/files.ts";
 
 export interface HttpDeps {
@@ -64,7 +65,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   const library = new LibraryStore(deps.stDataDir);
   const libraryBackups = new LibraryBackupStore(deps.stDataDir);
   app.use("/api", (req, res, next) => {
-    if (sessions.writeBlocked && req.path !== "/status") return res.status(503).json({ error: sessions.writeBlocked });
+    if (sessions.writeBlocked && req.path !== "/status" && !backupControlPath(req.path)) return res.status(503).json({ error: sessions.writeBlocked });
     next();
   });
   // Stream uploads before the JSON parser so a whole library never occupies one request buffer.
@@ -79,9 +80,11 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   app.use(express.json({ limit: "4mb" }));
   app.use("/api", (req, res, next) => {
     // A maintenance operation may have started while a request body was arriving.
-    if (sessions.writeBlocked && req.path !== "/status") return res.status(503).json({ error: sessions.writeBlocked });
+    if (sessions.writeBlocked && req.path !== "/status" && !backupControlPath(req.path)) return res.status(503).json({ error: sessions.writeBlocked });
     next();
   });
+
+  attachLibraryBackupJobs(app, libraryBackups, config, sessions);
 
   app.get("/api/library", (_req, res) => res.json(library.list()));
   app.get("/api/library/document", (req, res) => {
@@ -96,6 +99,23 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       const document = library.save(id, revision, data);
       sessions.libraryChanged();
       res.json(document);
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+  app.get("/api/library/history", (req, res) => {
+    try { res.json(library.history(String(req.query.id ?? ""), typeof req.query.before === "string" ? req.query.before : undefined)); }
+    catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+  app.get("/api/library/history/preview", (req, res) => {
+    try { res.json(library.previewHistory(String(req.query.id ?? ""), String(req.query.backupId ?? ""))); }
+    catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+  app.post("/api/library/history/restore", (req, res) => {
+    try {
+      sessions.assertIdle();
+      const { id, backupId, revision } = req.body ?? {};
+      if ([id, backupId, revision].some((v) => typeof v !== "string")) throw new Error("历史恢复参数无效");
+      const document = library.restoreHistory(id, backupId, revision);
+      sessions.libraryChanged(); res.json(document);
     } catch (error) { res.status(409).json({ error: (error as Error).message }); }
   });
   app.post("/api/library/world", (req, res) => {

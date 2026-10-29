@@ -95,6 +95,16 @@ try {
     offset += length + 12;
   }
   assert.equal((parseCardFromPng(changedPng)!.data as any).name, card.data.name);
+  const history = await get<import("@pitavern/shared").LibraryHistoryPageDto>("/api/library/history?id=character-regex:fixture.png");
+  assert.equal(history.items.length, 1);
+  const previous = await get<import("@pitavern/shared").LibraryHistoryPreviewDto>("/api/library/history/preview?" + new URLSearchParams({ id: pngDoc.resource.id, backupId: history.items[0].id }));
+  assert.deepEqual(previous.document.data, card.data.extensions.regex_scripts);
+  const restoreHistory = (revision: string) => fetch(base + "/api/library/history/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: pngDoc.resource.id, backupId: history.items[0].id, revision }) });
+  assert.equal((await restoreHistory("stale")).status, 409);
+  assert.equal((await restoreHistory((await document(pngDoc.resource.id)).revision)).status, 200);
+  assert.deepEqual(fs.readFileSync(path.join(originalRoot, "characters/fixture.png")), pngCard, "历史恢复保持 PNG 原始字节");
+  assert.equal((await put(pngDoc)).status, 200);
+  assert.equal((await fetch(base + "/api/library/history/preview?" + new URLSearchParams({ id: pngDoc.resource.id, backupId: "../config.json" }))).status, 400);
   assert.ok(events.some((event) => event.type === "library.changed"));
   console.log("✓ 世界书增改、未知字段、旧版本冲突、JSON/PNG 双格式正则、图片与 CRC 保留、缓存刷新");
 

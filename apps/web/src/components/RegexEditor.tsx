@@ -18,11 +18,14 @@ export function RegexEditor({ scripts, onChange }: { scripts: RegexScript[]; onC
   const worker = useRef<Worker | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => { worker.current?.terminate(); clearTimeout(timer.current); }, []);
-  const script = scripts[index];
-  const patch = (value: Partial<RegexScript>) => onChange(scripts.map((s, i) => i === index ? { ...s, ...value } : s));
+  const [query, setQuery] = useState("");
+  const matches = scripts.map((script, index) => ({ script, index })).filter(({ script }) => !query.trim() || [script.scriptName, script.findRegex, script.replaceString].join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const active = matches.some((item) => item.index === index) ? index : matches[0]?.index ?? -1;
+  const script = scripts[active];
+  const patch = (value: Partial<RegexScript>) => onChange(scripts.map((s, i) => i === active ? { ...s, ...value } : s));
   const move = (direction: number) => {
-    const next = [...scripts]; const other = index + direction;
-    [next[index], next[other]] = [next[other], next[index]]; onChange(next); setIndex(other);
+    const next = [...scripts]; const other = active + direction;
+    [next[active], next[other]] = [next[other], next[active]]; onChange(next); setIndex(other);
   };
   const run = () => {
     worker.current?.terminate(); clearTimeout(timer.current); setError(""); setRunning(true); setPreview("");
@@ -32,18 +35,20 @@ export function RegexEditor({ scripts, onChange }: { scripts: RegexScript[]; onC
     current.onmessage = (event: MessageEvent<{ text?: string; error?: string }>) => { finish(); setPreview(event.data.text ?? ""); setError(event.data.error ?? ""); };
     current.onerror = () => { finish(); setError("预览执行失败"); };
     timer.current = setTimeout(() => { finish(); setError("预览超时，请简化表达式或缩短输入"); }, 1500);
-    current.postMessage({ text: input, scripts, context: { placement, depth, layer, env: { char, user, variables: {}, readOnly: true } } });
+    current.postMessage({ strict: true, text: input, scripts, context: { placement, depth, layer, env: { char, user, variables: {}, readOnly: true } } });
   };
   return <div className="space-y-4">
     <p className="text-xs leading-5 text-tavern-dim">执行顺序：全局 → 当前预设 → 当前角色卡。提示词正则参与 ST 桥接模式，显示正则适用于全部模式，存档保留原文。预览只测试本来源的脚本。</p>
+    <label className="block">搜索脚本<input aria-label="搜索正则脚本" className={fieldClass} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="名称、查找或替换内容" /></label>
     <div className="flex flex-wrap items-end gap-2">
-      <label className="min-w-0 flex-1">脚本（{scripts.length}）<select aria-label="正则脚本" value={scripts.length ? index : ""} onChange={(e) => setIndex(Number(e.target.value))} className={fieldClass}>
-        {!scripts.length && <option value="">暂无脚本</option>}{scripts.map((s, i) => <option key={i} value={i}>{s.disabled ? "⏸ " : ""}{s.scriptName || `脚本 ${i + 1}`}</option>)}
+      <label className="min-w-0 flex-1">脚本（{scripts.length}）<select aria-label="正则脚本" value={active >= 0 ? active : ""} onChange={(e) => setIndex(Number(e.target.value))} className={fieldClass}>
+        {!matches.length && <option value="">暂无匹配脚本</option>}{matches.map(({ script: s, index: i }) => <option key={i} value={i}>{s.disabled ? "⏸ " : ""}{s.scriptName || `脚本 ${i + 1}`}</option>)}
       </select></label>
-      <button type="button" onClick={() => { onChange([...scripts, { id: crypto.randomUUID(), scriptName: "新脚本", findRegex: "", replaceString: "", placement: [2], disabled: true }]); setIndex(scripts.length); }} className={buttonClass}>新增脚本</button>
-      <button type="button" disabled={!script} onClick={() => { onChange(scripts.filter((_, i) => i !== index)); setIndex(Math.max(0, index - 1)); }} className={buttonClass}>删除脚本</button>
-      <button type="button" aria-label="脚本上移" disabled={!script || index === 0} onClick={() => move(-1)} className={buttonClass}>↑</button>
-      <button type="button" aria-label="脚本下移" disabled={!script || index === scripts.length - 1} onClick={() => move(1)} className={buttonClass}>↓</button>
+      <button type="button" onClick={() => { onChange([...scripts, { id: crypto.randomUUID(), scriptName: "新脚本", findRegex: "", replaceString: "", placement: [2], disabled: true }]); setQuery(""); setIndex(scripts.length); }} className={buttonClass}>新增脚本</button>
+      <button type="button" disabled={!script} onClick={() => { onChange([...scripts, { ...structuredClone(script), id: crypto.randomUUID(), scriptName: (script.scriptName || "脚本") + "（副本）" }]); setQuery(""); setIndex(scripts.length); }} className={buttonClass}>复制脚本</button>
+      <button type="button" disabled={!script} onClick={() => { onChange(scripts.filter((_, i) => i !== active)); setIndex(Math.max(0, active - 1)); }} className={buttonClass}>删除脚本</button>
+      <button type="button" aria-label="脚本上移" disabled={!script || active === 0} onClick={() => move(-1)} className={buttonClass}>↑</button>
+      <button type="button" aria-label="脚本下移" disabled={!script || active === scripts.length - 1} onClick={() => move(1)} className={buttonClass}>↓</button>
     </div>
     {script && <>
       <label className="block">脚本名称<input value={script.scriptName ?? ""} onChange={(e) => patch({ scriptName: e.target.value })} className={fieldClass} /></label>
@@ -56,7 +61,7 @@ export function RegexEditor({ scripts, onChange }: { scripts: RegexScript[]; onC
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <label>作用层<select className={fieldClass} value={script.markdownOnly && !script.promptOnly ? "display" : script.promptOnly && !script.markdownOnly ? "prompt" : "both"}
           onChange={(e) => patch({ markdownOnly: e.target.value === "display", promptOnly: e.target.value === "prompt" })}><option value="both">显示与提示词</option><option value="display">仅显示</option><option value="prompt">仅提示词</option></select></label>
-        <label>查找宏替换<select className={fieldClass} value={script.substituteRegex ?? 0} onChange={(e) => patch({ substituteRegex: Number(e.target.value) })}><option value={0}>关闭</option><option value={1}>原文替换</option><option value={2}>转义替换</option></select></label>
+        <label>查找宏替换<select aria-label="查找宏替换" className={fieldClass} value={script.substituteRegex ?? 0} onChange={(e) => patch({ substituteRegex: Number(e.target.value) })}><option value={0}>关闭</option><option value={1}>原文替换</option><option value={2}>转义替换</option></select></label>
         {(["minDepth", "maxDepth"] as const).map((key, i) => <label key={key}>{i ? "最大深度" : "最小深度"}<input type="number" min={-1} step={1} placeholder="不限" className={fieldClass} value={script[key] ?? ""} onChange={(e) => patch({ [key]: e.target.value === "" ? null : Number(e.target.value) })} /></label>)}
       </div>
       <label className="block">捕获内容裁剪（每行一项）<textarea rows={2} className={fieldClass} value={(script.trimStrings ?? []).join("\n")} onChange={(e) => patch({ trimStrings: e.target.value.split("\n") })} /></label>

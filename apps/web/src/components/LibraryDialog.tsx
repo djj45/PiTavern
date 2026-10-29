@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { LibraryDocumentDto, LibraryResourceDto } from "@pitavern/shared";
 import type { RegexScript } from "@pitavern/shared/regex";
 import { api } from "../api.ts";
+import { LibraryHistory } from "./LibraryHistory.tsx";
+import { readLibraryDraft, writeLibraryDraft, removeLibraryDraft, type LibraryDraft } from "../libraryDrafts.ts";
 import { RegexEditor } from "./RegexEditor.tsx";
 import { LibraryBackupPanel } from "./LibraryBackupPanel.tsx";
 import { fieldClass, buttonClass } from "./libraryStyles.ts";
@@ -10,8 +12,11 @@ type World = Record<string, unknown> & { entries: Record<string, Record<string, 
 
 function WorldEditor({ value, onChange }: { value: World; onChange: (world: World) => void }) {
   const [selected, setSelected] = useState(() => Object.keys(value.entries)[0] ?? "");
-  const entry = value.entries[selected];
-  const update = (patch: Record<string, unknown>) => onChange({ ...value, entries: { ...value.entries, [selected]: { ...entry, ...patch } } });
+  const [query, setQuery] = useState("");
+  const matches = Object.entries(value.entries).filter(([uid, item]) => !query.trim() || [uid, item.comment, item.content, ...(Array.isArray(item.key) ? item.key : [])].join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const active = matches.some(([uid]) => uid === selected) ? selected : matches[0]?.[0] ?? "";
+  const entry = value.entries[active];
+  const update = (patch: Record<string, unknown>) => onChange({ ...value, entries: { ...value.entries, [active]: { ...entry, ...patch } } });
   const number = (key: string, label: string, fallback = 0, nullable = false) => <label key={key}>{label}<input type="number" step={1} aria-label={label} className={fieldClass}
     value={entry[key] == null ? (nullable ? "" : fallback) : Number(entry[key])} onChange={(e) => update({ [key]: e.target.value === "" && nullable ? null : Number(e.target.value) })} /></label>;
   const check = (key: string, label: string, fallback = false) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={typeof entry[key] === "boolean" ? entry[key] as boolean : fallback} onChange={(e) => update({ [key]: e.target.checked })} />{label}</label>;
@@ -20,20 +25,28 @@ function WorldEditor({ value, onChange }: { value: World; onChange: (world: Worl
   const add = () => {
     let uid = 0; while (Object.hasOwn(value.entries, String(uid))) uid++;
     onChange({ ...value, entries: { ...value.entries, [uid]: { uid, key: [], keysecondary: [], comment: "新条目", content: "", order: 100, position: 0, disable: false } } });
-    setSelected(String(uid));
+    setQuery(""); setSelected(String(uid));
   };
   const remove = () => {
-    const entries = { ...value.entries }; delete entries[selected];
+    const entries = { ...value.entries }; delete entries[active];
     onChange({ ...value, entries }); setSelected(Object.keys(entries)[0] ?? "");
   };
+  const duplicate = () => {
+    if (!entry) return;
+    let uid = 0; while (Object.hasOwn(value.entries, String(uid))) uid++;
+    onChange({ ...value, entries: { ...value.entries, [uid]: { ...structuredClone(entry), uid, comment: String(entry.comment || active) + "（副本）" } } });
+    setQuery(""); setSelected(String(uid));
+  };
   return <div className="space-y-4">
+    <label className="block">搜索条目<input aria-label="搜索世界书条目" className={fieldClass} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="名称、关键词或正文" /></label>
     <p className="text-xs leading-5 text-tavern-dim">编辑外部世界书。启用范围、全局扫描和预算仍在设置中选择；卡内世界书暂不在此编辑。</p>
     <div className="flex flex-wrap items-end gap-2">
-      <label className="min-w-0 flex-1">条目（{Object.keys(value.entries).length}）<select aria-label="世界书条目" value={selected} onChange={(e) => setSelected(e.target.value)} className={fieldClass}>
-        {!Object.keys(value.entries).length && <option value="">暂无条目</option>}
-        {Object.entries(value.entries).map(([uid, item]) => <option key={uid} value={uid}>{item.disable ? "⏸ " : ""}{String(item.comment || uid)}</option>)}
+      <label className="min-w-0 flex-1">条目（{Object.keys(value.entries).length}）<select aria-label="世界书条目" value={active} onChange={(e) => setSelected(e.target.value)} className={fieldClass}>
+        {!matches.length && <option value="">暂无匹配条目</option>}
+        {matches.map(([uid, item]) => <option key={uid} value={uid}>{item.disable ? "⏸ " : ""}{String(item.comment || uid)}</option>)}
       </select></label>
       <button type="button" onClick={add} className={buttonClass}>新增条目</button>
+      <button type="button" disabled={!entry} onClick={duplicate} className={buttonClass}>复制条目</button>
       <button type="button" disabled={!entry} onClick={remove} className={buttonClass}>删除条目</button>
     </div>
     {entry && <div className="space-y-4">
@@ -73,7 +86,7 @@ function WorldEditor({ value, onChange }: { value: World; onChange: (world: Worl
   </div>;
 }
 
-export default function LibraryDialog({ onClose }: { onClose: () => void }) {
+export default function LibraryDialog({ onClose, scope }: { onClose: () => void; scope: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [tab, setTab] = useState<"world" | "regex" | "backup">("world");
   const [resources, setResources] = useState<LibraryResourceDto[]>([]);
@@ -83,14 +96,38 @@ export default function LibraryDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [localDraft, setLocalDraft] = useState<LibraryDraft | null>(null);
+  const [draftError, setDraftError] = useState("");
   const dirty = !!draft && JSON.stringify(draft.data) !== JSON.stringify(document?.data);
-  const discard = () => !dirty || window.confirm("还有未保存的草稿，确定放弃吗？");
+  const clearDraft = (id: string) => { try { removeLibraryDraft(scope, id); setDraftError(""); } catch { setDraftError("无法移除浏览器本地草稿，请检查站点存储权限"); } };
+  const discard = () => {
+    if (!dirty) return true;
+    if (!window.confirm("还有未保存的草稿，确定放弃并移除本地草稿吗？")) return false;
+    if (draft) clearDraft(draft.resource.id);
+    return true;
+  };
+  const change = (data: LibraryDocumentDto["data"]) => {
+    if (!draft) return;
+    const next = { ...draft, data }; setDraft(next);
+    try { writeLibraryDraft(scope, next); setDraftError(""); }
+    catch { setDraftError("本地草稿保存失败（存储不可用或空间不足），请及时保存资料或复制内容"); }
+  };
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   const close = () => { if (!busy && discard()) onClose(); };
   useEffect(() => { dialog.current?.showModal(); void api.library().then(setResources).catch((e: Error) => setError(e.message)); }, []);
   const load = async (id: string) => {
     if (!discard()) return;
     setBusy(true); setError(""); setStatus("");
-    try { const value = await api.libraryDocument(id); setDocument(value); setDraft(structuredClone(value)); }
+    try {
+      const value = await api.libraryDocument(id); setDocument(value); setDraft(structuredClone(value)); setLocalDraft(null);
+      try { const saved = readLibraryDraft(scope, id); if (saved && JSON.stringify(saved.document.data) !== JSON.stringify(value.data)) setLocalDraft(saved); }
+      catch { setDraftError("本地草稿读取失败，可点击清除本地草稿后重试"); }
+    }
     catch (cause) { setError((cause as Error).message); }
     finally { setBusy(false); }
   };
@@ -99,7 +136,7 @@ export default function LibraryDialog({ onClose }: { onClose: () => void }) {
     setBusy(true); setError(""); setStatus("");
     try {
       const saved = await api.saveLibraryDocument(draft);
-      setDocument(saved); setDraft(structuredClone(saved)); setStatus("已保存，原文件已备份");
+      setDocument(saved); setDraft(structuredClone(saved)); clearDraft(saved.resource.id); setLocalDraft(null); setStatus("已保存，原文件已备份");
     } catch (cause) { setError((cause as Error).message); }
     finally { setBusy(false); }
   };
@@ -108,7 +145,7 @@ export default function LibraryDialog({ onClose }: { onClose: () => void }) {
     setBusy(true); setError(""); setStatus("");
     try {
       const value = await api.createWorld(name);
-      setResources(await api.library()); setDocument(value); setDraft(structuredClone(value)); setName(""); setStatus("世界书已创建；请添加条目并在设置中启用");
+      setResources(await api.library()); setDocument(value); setDraft(structuredClone(value)); setName(""); setLocalDraft(null); setStatus("世界书已创建；请添加条目并在设置中启用");
     } catch (cause) { setError((cause as Error).message); }
     finally { setBusy(false); }
   };
@@ -119,7 +156,7 @@ export default function LibraryDialog({ onClose }: { onClose: () => void }) {
       <button type="button" disabled={busy} onClick={close} className={buttonClass}>关闭</button>
       <div role="tablist" aria-label="资料库功能" className="flex w-full flex-wrap gap-2">
         {([["world", "世界书"], ["regex", "正则脚本"], ["backup", "备份与迁移"]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} disabled={busy}
-          onClick={() => { if (tab !== id && discard()) { setTab(id); setDraft(null); setDocument(null); setError(""); setStatus(""); } }} className={buttonClass + (tab === id ? " border-tavern-accent text-tavern-accent" : "")}>{label}</button>)}
+          onClick={() => { if (tab !== id && discard()) { setTab(id); setDraft(null); setDocument(null); setLocalDraft(null); setError(""); setStatus(""); } }} className={buttonClass + (tab === id ? " border-tavern-accent text-tavern-accent" : "")}>{label}</button>)}
       </div>
     </div>
     <div className="space-y-4 p-4 text-sm">
@@ -130,9 +167,16 @@ export default function LibraryDialog({ onClose }: { onClose: () => void }) {
             {resources.filter((r) => tab === "world" ? r.kind === "world" : r.kind !== "world").map((r) => <option key={r.id} value={r.id}>{r.kind === "preset-regex" ? "预设 · " : r.kind === "character-regex" ? "角色卡 · " : ""}{r.label}</option>)}
           </select></label>
           {tab === "world" && <div className="flex items-end gap-2"><label className="min-w-0 flex-1">新世界书名称<input value={name} onChange={(e) => setName(e.target.value)} className={fieldClass} /></label><button type="button" disabled={!name.trim()} onClick={() => void create()} className={buttonClass}>新建世界书</button></div>}
-          {draft && (tab === "world" ? <WorldEditor key={draft.resource.id + draft.revision} value={draft.data as World} onChange={(data) => setDraft({ ...draft, data })} />
-            : <RegexEditor key={draft.resource.id + draft.revision} scripts={draft.data as RegexScript[]} onChange={(data) => setDraft({ ...draft, data })} />)}
+          {localDraft && <div role="status" className="space-y-2 rounded border border-tavern-accent p-3">
+            <p>发现本地草稿（{new Date(localDraft.updatedAt).toLocaleString()}）。{localDraft.document.revision !== document?.revision ? "原文件已更新，恢复后仍需处理版本冲突。" : ""}</p>
+            <button type="button" className={buttonClass} onClick={() => { setDraft(structuredClone(localDraft.document)); setLocalDraft(null); setStatus("已恢复本地草稿，尚未写入资料库"); }}>恢复本地草稿</button>
+            <button type="button" className={buttonClass + " ml-2"} onClick={() => { clearDraft(localDraft.document.resource.id); setLocalDraft(null); }}>清除本地草稿</button>
+          </div>}
+          {draft && (tab === "world" ? <WorldEditor key={draft.resource.id + draft.revision} value={draft.data as World} onChange={change} />
+            : <RegexEditor key={draft.resource.id + draft.revision} scripts={draft.data as RegexScript[]} onChange={change} />)}
         </fieldset>
+        {document && <LibraryHistory key={document.resource.id + document.revision} document={document} dirty={dirty} busy={busy} onBusy={setBusy} onRestored={(value) => { setDocument(value); setDraft(structuredClone(value)); clearDraft(value.resource.id); setLocalDraft(null); setStatus("历史版本已恢复，恢复前原文件已备份"); }} />}
+        {draftError && <div role="alert" className="text-amber-400">{draftError}{draft && <button type="button" className={buttonClass + " ml-2"} onClick={() => { clearDraft(draft.resource.id); setLocalDraft(null); }}>清除本地草稿</button>}</div>}
         {draft && <div className="flex flex-wrap gap-3 border-t border-tavern-border pt-4">
           <button type="button" onClick={() => void save()} disabled={busy || !dirty} className="rounded-lg bg-tavern-accent px-4 py-2 text-tavern-bg disabled:opacity-40">{busy ? "处理中…" : "保存资料"}</button>
           <button type="button" disabled={busy} onClick={() => void load(draft.resource.id)} className={buttonClass}>重新载入</button>

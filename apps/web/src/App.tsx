@@ -207,7 +207,7 @@ export function App() {
         onOpenSettings={() => setSettingsOpen(true)} panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((v) => !v)}
         theme={theme} onCycleTheme={cycleTheme} onToggleNav={() => setNavOpen((v) => !v)} />
       {maintenance && <p role="status" className="shrink-0 border-b border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-accent">{maintenance}</p>}
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <Sidebar characters={characters} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
           chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onDeleteChat={deleteChat}
           onCharactersChanged={refreshCharacters} onNotice={showNotice} mobileOpen={navOpen} onClose={() => setNavOpen(false)} />
@@ -235,7 +235,7 @@ export function App() {
           showNotice(restartRequired ? "设置已保存，数据目录将在重启服务后生效" : "设置已保存");
         }} onError={showNotice} onNotice={showNotice} />}
       {libraryOpen && <Suspense fallback={<p role="status" className="fixed bottom-4 right-4 rounded bg-tavern-panel p-3">正在打开资料库…</p>}>
-        <LibraryDialog onClose={() => setLibraryOpen(false)} />
+        <LibraryDialog scope={connection?.stDataDir ?? ""} onClose={() => setLibraryOpen(false)} />
       </Suspense>}
     </div>
   );
