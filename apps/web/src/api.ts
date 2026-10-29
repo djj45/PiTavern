@@ -89,6 +89,12 @@ export const api = {
     fetch(`/api/chats${character ? `?character=${encodeURIComponent(character)}` : ""}`).then((r) =>
       json<ChatSummaryDto[]>(r),
     ),
+  runScript: (chatId: string, source: string, revision: string) => fetch("/api/chat/script", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, source, revision }),
+  }).then((r) => json<{ pipe: string; notices: string[]; steps: number }>(r)),
+  createGroup: (name: string, members: string[]) => fetch("/api/groups", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, members }),
+  }).then((r) => json<{ id: string }>(r)),
   createChat: (character: string, greeting?: string) =>
     fetch("/api/chats", {
       method: "POST",
@@ -125,7 +131,7 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent(file.name) },
       body: file,
-    }).then((r) => json<{ ok: boolean; file: string }>(r)),
+    }).then((r) => json<{ ok: boolean; file: string; warnings?: string[]; chats?: number; assets?: number }>(r)),
   importWorld: (name: string, data: unknown) =>
     fetch("/api/import/world", {
       method: "POST",

@@ -1,3 +1,4 @@
+import { ScriptDialog } from "./ScriptDialog.tsx";
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { ChatDisplayDto, ChatMessageDto } from "@pitavern/shared";
 import { RegexPlacement } from "@pitavern/shared/regex";
@@ -43,7 +44,7 @@ interface ChatViewProps {
   chat: ChatState | null;
   personaName: string;
   streamingText: string | null;
-  onSend: (text: string) => boolean;
+  onSend: (text: string, speakers?: string[]) => boolean;
   onStop: () => void;
   onEdit: (messageId: string, text: string, expectedText: string) => Promise<boolean>;
   onRegenerate: () => void;
@@ -113,7 +114,7 @@ function MessageBubble({ message, avatarUrl, onEdit, busy, onPin, depth, display
         ) : (
           <div className={"min-w-0 w-full rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed " +
             (isUser ? "bg-tavern-accent/20 text-tavern-text" : "bg-tavern-raised text-tavern-text")}>
-            <MessageContent text={message.text} placement={isUser ? RegexPlacement.USER_INPUT : RegexPlacement.AI_OUTPUT} depth={depth} display={display} />
+            <MessageContent text={message.text} placement={isUser ? RegexPlacement.USER_INPUT : RegexPlacement.AI_OUTPUT} depth={depth} display={display ? { ...display, char: message.name } : undefined} />
           </div>
         )}
         {!draft && <button type="button" aria-label={"编辑" + message.name + "的消息"} disabled={busy}
@@ -167,9 +168,9 @@ function ToolCard({ item, onPin }: { item: ToolItem; onPin: (value: boolean) => 
   );
 }
 
-const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRoot, display, streamingOffset = 0 }: {
+const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRoot, display, memberDisplays, streamingOffset = 0 }: {
   items: ChatItem[]; avatarUrl: string; onEdit: ChatViewProps["onEdit"]; busy: boolean; scrollRoot: RefObject<HTMLDivElement | null>;
-  display?: ChatDisplayDto; streamingOffset?: number;
+  display?: ChatDisplayDto; memberDisplays?: Record<string, ChatDisplayDto>; streamingOffset?: number;
 }) {
   const depths = new Map<string, number>();
   let depth = streamingOffset;
@@ -179,12 +180,14 @@ const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRo
   }
   return <>{items.map((item, index) => <VirtualRow key={isToolItem(item) ? item.key : item.id} root={scrollRoot} initialVisible={index >= items.length - 8}>
     {(onPin) => isToolItem(item) ? <ToolCard item={item} onPin={onPin} />
-      : <MessageBubble message={item} avatarUrl={avatarUrl} onEdit={onEdit} busy={busy} onPin={onPin} depth={depths.get(item.id)!} display={display} />}
+      : <MessageBubble message={item} avatarUrl={"/api/characters/" + encodeURIComponent(item.name) + "/avatar"} onEdit={onEdit} busy={busy} onPin={onPin} depth={depths.get(item.id)!} display={memberDisplays?.[item.name] ?? display} />}
   </VirtualRow>)}</>;
 });
 
 export function ChatView({ chat, personaName, streamingText, onSend, onStop, onEdit, onRegenerate,
   onSelectReply, onLoadOlder, loadingOlder, onRestored, disabled, maintenance = false, connected }: ChatViewProps) {
+  const [responder, setResponder] = useState("");
+  useEffect(() => setResponder(""), [chat?.id]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const input = chat ? drafts[chat.id] ?? "" : "";
   const setInput = (value: string) => {
@@ -194,6 +197,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
   const scrollRoot = useRef<HTMLDivElement>(null);
   const contents = useRef<HTMLDivElement>(null);
   const [backupsFor, setBackupsFor] = useState<string | null>(null);
+  const [scriptFor, setScriptFor] = useState<string | null>(null);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   const followRef = useRef(true);
@@ -250,16 +254,19 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
   const avatarUrl = `/api/characters/${encodeURIComponent(chat.character)}/avatar`;
   const submit = () => {
     const text = input.trim();
-    if (!text || locked || disabled) return;
-    if (onSend(text)) setInput("");
+    if (!text || locked || (disabled && !text.startsWith("/"))) return;
+    if (onSend(text, chat.group && responder ? [responder] : undefined)) setInput("");
   };
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
+      {scriptFor === chat.id && chat.page && <ScriptDialog chatId={chat.id} revision={chat.page.revision} onClose={() => setScriptFor(null)} onStop={onStop} />}
       <div className="flex min-h-9 flex-wrap shrink-0 items-center gap-2 border-b border-tavern-border bg-tavern-panel px-4 text-xs text-tavern-dim">
-        <span className="truncate font-medium text-tavern-text">{chat.character}</span>
+        <span className="truncate font-medium text-tavern-text">{chat.group?.name ?? chat.character}</span>
         <span>· {chat.page?.total ?? chat.items.filter((i) => !isToolItem(i)).length} 条消息</span>
         <span className="ml-auto flex items-center gap-2">
+          <button type="button" onClick={() => setScriptFor(chat.id)} disabled={locked || !chat.page?.revision}
+            className="rounded border border-tavern-border px-1.5 py-0.5 disabled:opacity-40">STscript</button>
           <button onClick={() => setNoteFor(chat.id)} disabled={locked}
             className="rounded border border-tavern-border px-1.5 py-0.5 disabled:opacity-40">作者注释</button>
           <button onClick={() => setBackupsFor(chat.id)} disabled={locked}
@@ -285,19 +292,19 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
         <div ref={contents} className="mx-auto flex max-w-3xl flex-col gap-4">
           {chat.page?.before != null && <button type="button" onClick={() => void loadOlder()} disabled={loadingOlder || locked}
             className="self-center rounded border border-tavern-border px-3 py-2 text-xs text-tavern-dim disabled:opacity-40">{loadingOlder ? "加载中…" : "加载更早的消息"}</button>}
-          <History key={chat.id} items={chat.items} avatarUrl={avatarUrl} onEdit={onEdit} busy={locked} scrollRoot={scrollRoot}
-            display={chat.display} streamingOffset={streamingText ? 1 : 0} />
+          <History key={chat.id} items={[...chat.items, ...(chat.stagedMessages ?? [])]} avatarUrl={avatarUrl} onEdit={onEdit} busy={locked} scrollRoot={scrollRoot}
+            display={chat.display} memberDisplays={chat.memberDisplays} streamingOffset={streamingText ? 1 : 0} />
           {toolItems.length > 0 && <section aria-label="最近一次生成的工具活动" className="flex flex-col gap-3">
             <p className="text-center text-xs text-tavern-dim">最近一次生成的工具活动 · 完整记录见活动面板</p>
             <History items={toolItems} avatarUrl={avatarUrl} onEdit={onEdit} busy={locked} scrollRoot={scrollRoot} />
           </section>}
           {isStreaming && (
             <div className="flex gap-3">
-              <CharacterAvatar key={avatarUrl} src={avatarUrl} name={chat.character} />
+              <CharacterAvatar key={chat.streamingCharacter} src={"/api/characters/" + encodeURIComponent(chat.streamingCharacter ?? chat.character) + "/avatar"} name={chat.streamingCharacter ?? chat.character} />
               <div className="flex min-w-0 max-w-[90%] flex-col sm:max-w-[80%]">
-                <span className="mb-1 px-1 text-xs text-tavern-dim">{chat.character}</span>
+                <span className="mb-1 px-1 text-xs text-tavern-dim">{chat.streamingCharacter ?? chat.character}</span>
                 <div className="min-w-0 w-full rounded-2xl bg-tavern-raised px-4 py-2.5 text-[15px] leading-relaxed">
-                  <MessageContent text={streamingText ?? ""} placement={RegexPlacement.AI_OUTPUT} depth={0} display={chat.display} />
+                  <MessageContent text={streamingText ?? ""} placement={RegexPlacement.AI_OUTPUT} depth={0} display={chat.memberDisplays?.[chat.streamingCharacter ?? chat.character] ?? chat.display} />
                   <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-tavern-accent align-middle" />
                 </div>
               </div>
@@ -308,6 +315,12 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
       </div>
 
       <div className="shrink-0 border-t border-tavern-border bg-tavern-panel p-4">
+        {chat.group && <label className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-tavern-dim">本轮发言
+          <select aria-label="本轮发言角色" value={responder} disabled={locked} onChange={(e) => setResponder(e.target.value)} className="min-w-0 rounded border border-tavern-border bg-tavern-bg p-1.5">
+            <option value="">全员依次：{chat.group.members.join(" → ")}</option>
+            {chat.group.members.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>}
         {(chat.replyChoices || chat.items.some((item) => !isToolItem(item) && item.role === "user")) && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2 text-xs">
           <button type="button" onClick={onRegenerate} disabled={locked || disabled}
             className="shrink-0 rounded border border-tavern-border px-2.5 py-1.5 text-tavern-dim hover:text-tavern-text disabled:opacity-40">{chat.replyChoices?.count === 0 ? "重试本轮" : "重新生成回复"}</button>
@@ -331,7 +344,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
               }
             }}
             rows={Math.min(6, Math.max(1, input.split("\n").length))}
-            placeholder={`以 ${personaName} 的身份发言…（Enter 发送，Shift+Enter 换行）`}
+            placeholder={`/ 开头执行 STscript；以 ${personaName} 的身份发言…（Enter 发送，Shift+Enter 换行）`}
             className="flex-1 resize-none rounded-xl border border-tavern-border bg-tavern-bg px-3.5 py-2.5 text-[15px] text-tavern-text outline-none placeholder:text-tavern-dim focus:border-tavern-accent-dim"
           />
           {isStreaming ? (
@@ -347,7 +360,7 @@ export function ChatView({ chat, personaName, streamingText, onSend, onStop, onE
             <button
               type="button"
               onClick={submit}
-              disabled={disabled || locked || !input.trim()}
+              disabled={(disabled && !input.trim().startsWith("/")) || locked || !input.trim()}
               className="rounded-xl bg-tavern-accent px-4 py-2.5 text-sm font-medium text-tavern-bg disabled:opacity-40"
             >
               发送

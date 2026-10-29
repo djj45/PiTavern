@@ -132,7 +132,7 @@ export function normalizeCardBook(book: unknown, worldName: string): WiEntry[] {
         role: ext.role,
         probability: ext.probability ?? e.probability,
         useProbability: ext.useProbability ?? e.useProbability,
-        caseSensitive: ext.case_sensitive ?? ext.caseSensitive,
+        caseSensitive: e.case_sensitive ?? ext.case_sensitive ?? ext.caseSensitive,
         matchWholeWords: ext.match_whole_words ?? ext.matchWholeWords,
         scanDepth: ext.scan_depth ?? ext.scanDepth,
         excludeRecursion: ext.exclude_recursion ?? ext.excludeRecursion,

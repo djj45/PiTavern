@@ -1,3 +1,4 @@
+import { readGroup } from "./groups.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -7,6 +8,7 @@ import { lastReplies, restoreState, selectedMessages, stateFields, type ReplyVer
 import { validateAuthorNote } from "../context/author-note.ts";
 
 export interface ChatMeta {
+  group?: import("@pitavern/shared").GroupChatDto;
   id: string;
   file: string;
   character: string;
@@ -79,6 +81,7 @@ export class ChatStore {
         id: path.relative(this.stDataDir, file).split(path.sep).join("/"),
         file,
         character: document.character,
+        group: readGroup(document.metadata),
         messageCount: document.lines.length,
         lastMessage: document.lines.at(-1)?.mes.slice(0, 80) ?? "",
         updatedAt: new Date(stat.mtimeMs).toISOString(),
@@ -128,15 +131,14 @@ export class ChatStore {
   listChats(character?: string): ChatMeta[] {
     const root = path.join(this.stDataDir, "chats");
     if (!fs.existsSync(root)) return [];
-    const dirs = character ? [this.characterChatsDir(character)]
-      : fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(root, d.name));
+    const dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(root, d.name));
     const metas: ChatMeta[] = [];
     for (const dir of dirs) {
       if (!fs.existsSync(dir)) continue;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
         const meta = this.statChat(path.join(dir, entry.name));
-        if (meta) metas.push(meta);
+        if (meta && (!character || meta.character === character || meta.group?.members.includes(character))) metas.push(meta);
       }
     }
     return metas.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -272,12 +274,12 @@ export class ChatStore {
     return full;
   }
 
-  createChat(character: string, greeting: (Omit<StChatLine, "send_date"> & { send_date?: string }) | null, userName = "User"): ChatMeta {
+  createChat(character: string, greeting: (Omit<StChatLine, "send_date"> & { send_date?: string }) | null, userName = "User", metadata: Record<string, unknown> = {}): ChatMeta {
     const dir = this.characterChatsDir(character);
     fs.mkdirSync(dir, { recursive: true });
     let file = path.join(dir, stChatFileName());
     for (let i = 0; fs.existsSync(file); i++) file = path.join(dir, stChatFileName(new Date(Date.now() + (i + 1) * 1000)));
-    const header = JSON.stringify({ user_name: userName, character_name: character, chat_metadata: {} });
+    const header = JSON.stringify({ user_name: userName, character_name: character, chat_metadata: metadata });
     const first = greeting ? { ...greeting, send_date: greeting.send_date ?? new Date().toISOString() } : null;
     fs.writeFileSync(file, first ? `${header}\n${JSON.stringify(first)}\n` : `${header}\n`, "utf8");
     const meta = this.statChat(file);
@@ -324,6 +326,36 @@ export class ChatStore {
       } catch { /* Preserve unparseable lines verbatim. */ }
     });
     return { source, raw, records, header, hasHeader };
+  }
+
+  /** Preserve raw unknown/damaged records and commit a whole script in one replacement. */
+  prepareScript(chatId: string, expectedRevision: string) {
+    if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请同步后重新运行脚本");
+    const rev = this.revision(chatId);
+    const lines = rev.records.map((record) => structuredClone(record.line));
+    const origins = new Map(lines.map((line, index) => [line, rev.records[index].rawIndex]));
+    const metadata = structuredClone(rev.header.chat_metadata as Record<string, unknown> ?? {});
+    const beforeVariables = JSON.stringify(metadata.variables);
+    return { lines, metadata, commit: () => {
+      const next = [...rev.raw.slice(0, rev.hasHeader ? 1 : 0)];
+      let cursor = rev.hasHeader ? 1 : 0;
+      const changed = lines.length !== rev.records.length || JSON.stringify(metadata.variables) !== beforeVariables;
+      for (const line of lines) {
+        const original = origins.get(line);
+        if (original !== undefined) {
+          while (cursor < original) next.push(rev.raw[cursor++]);
+          cursor = original + 1;
+          if (changed && line.extra) { delete line.extra._pitavernReplies; delete line.extra._pitavernBeforeTurn; }
+          next.push(changed ? JSON.stringify(line) : rev.raw[original]);
+        } else next.push(JSON.stringify({ ...line, extra: { ...line.extra, messageId: randomUUID() } }));
+      }
+      next.push(...rev.raw.slice(cursor));
+      if (changed) { delete metadata.projection; delete metadata.timedWorldInfo; delete metadata._pitavernEnforcement; }
+      rev.header.chat_metadata = metadata;
+      if (rev.hasHeader) next[0] = JSON.stringify(rev.header); else next.unshift(JSON.stringify(rev.header));
+      const result = next.join("\n");
+      this.replaceSource(chatId, rev.source, result.endsWith("\n") ? result : result + "\n");
+    } };
   }
 
   saveAuthorNote(chatId: string, note: AuthorNoteDto, expectedRevision: string): void {

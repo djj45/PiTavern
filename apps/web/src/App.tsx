@@ -114,9 +114,19 @@ export function App() {
     } catch (e) { showNotice(`新建聊天失败: ${(e as Error).message}`); }
   }, [selectedCharacter, characters, refreshChats, openChat, showNotice]);
 
-  const sendMessage = useCallback((text: string): boolean => {
+  const sendMessage = useCallback((text: string, speakers?: string[]): boolean => {
     if (!activeChat || activeChat.pending || activeChat.streamingText !== null) return false;
-    if (!socket.send({ type: "chat.send", chatId: activeChat.id, text })) {
+    if (text.startsWith("/")) {
+      if (!activeChat.page?.revision) { showNotice("请等待聊天同步后再执行脚本"); return false; }
+      dispatch({ type: "pending", chatId: activeChat.id });
+      void api.runScript(activeChat.id, text, activeChat.page.revision).then((result) => {
+        showNotice(result.notices.join("；") || result.pipe || "脚本执行完成（" + result.steps + " 步）");
+      }).catch((error: Error) => showNotice("脚本失败: " + error.message)).finally(() => {
+        dispatch({ type: "chat.finished", chatId: activeChat.id }); socket.send({ type: "chat.sync", chatId: activeChat.id });
+      });
+      return true;
+    }
+    if (!socket.send({ type: "chat.send", chatId: activeChat.id, text, speakers })) {
       showNotice("消息未发送：服务未连接，请重连后重试");
       return false;
     }
@@ -209,8 +219,11 @@ export function App() {
       {maintenance && <p role="status" className="shrink-0 border-b border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-accent">{maintenance}</p>}
       <div className="relative flex min-h-0 flex-1">
         <Sidebar characters={characters} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
-          chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onDeleteChat={deleteChat}
-          onCharactersChanged={refreshCharacters} onNotice={showNotice} mobileOpen={navOpen} onClose={() => setNavOpen(false)} />
+          chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onNewGroup={async (name, members) => {
+            try { const { id } = await api.createGroup(name, members); setSelectedCharacter(null); openChat(id); await refreshChats(); return true; }
+            catch (error) { showNotice("创建群聊失败: " + (error as Error).message); return false; }
+          }} onDeleteChat={deleteChat}
+          onCharactersChanged={() => { void refreshCharacters(); void refreshChats(); }} onNotice={showNotice} mobileOpen={navOpen} onClose={() => setNavOpen(false)} />
         <ChatView chat={activeChat} personaName={connection?.persona.name ?? "你"}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
           onSelectReply={selectReply} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored}

@@ -1,4 +1,4 @@
-import type { ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, ServerEvent } from "@pitavern/shared";
+import type { GroupChatDto, ChatMessageDto, ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, ServerEvent } from "@pitavern/shared";
 import { isToolItem, type ChatItem } from "./chatItems.ts";
 export interface UsageStats {
   input: number;
@@ -13,6 +13,10 @@ export const EMPTY_USAGE: UsageStats = { input: 0, output: 0, totalTokens: 0, co
 export interface ChatState {
   id: string;
   character: string;
+  group?: GroupChatDto;
+  memberDisplays?: Record<string, ChatDisplayDto>;
+  streamingCharacter?: string;
+  stagedMessages?: ChatMessageDto[];
   items: ChatItem[];
   streamingText: string | null;
   pending: boolean;
@@ -58,7 +62,7 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       ...(preserve && previous.page ? { before: previous.page.before } : {}),
     };
     return { ...state, [event.chatId]: {
-      id: snapshot.id, character: snapshot.character, items, page, replyChoices: snapshot.replyChoices,
+      id: snapshot.id, character: snapshot.character, group: snapshot.group, memberDisplays: snapshot.memberDisplays, streamingCharacter: snapshot.streamingCharacter, stagedMessages: snapshot.stagedMessages, items, page, replyChoices: snapshot.replyChoices,
       streamingText: snapshot.running ? snapshot.streamingText : null,
       pending: false, activity, activityError: snapshot.activityError, display: snapshot.display,
       usage: activity ? { ...activity.usage, turns: activity.turns } : previous?.usage ?? EMPTY_USAGE,
@@ -89,19 +93,22 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       chat = { ...chat, pending: false, streamingText: "" };
       break;
     case "chat.started":
-      chat = { ...chat, pending: false, streamingText: "", items: [...chat.items, event.message],
+      chat = { ...chat, pending: false, streamingText: "", stagedMessages: [], items: [...chat.items, event.message],
         display: chat.display && { ...chat.display, lastUserMessage: event.message.text },
         page: chat.page && { ...chat.page, total: chat.page.total + 1 }, replyChoices: undefined,
         usage: chat.activity ? chat.usage : { ...chat.usage, turns: chat.usage.turns + 1 } };
+      break;
+    case "chat.speaker":
+      chat = { ...chat, streamingText: "", streamingCharacter: event.character, stagedMessages: event.stagedMessages };
       break;
     case "chat.delta":
       chat = { ...chat, streamingText: (chat.streamingText ?? "") + event.delta };
       break;
     case "chat.done":
-      chat = { ...chat, streamingText: "", items: [...chat.items, event.message] };
+      chat = { ...chat, streamingText: "", stagedMessages: [], items: [...chat.items, event.message] };
       break;
     case "chat.finished":
-      chat = { ...chat, pending: false, streamingText: null, items: chat.items.map((item) =>
+      chat = { ...chat, pending: false, streamingText: null, stagedMessages: [], items: chat.items.map((item) =>
         isToolItem(item) && item.status === "running" ? { ...item, status: "error", summary: "本轮已结束" } : item) };
       break;
     case "chat.error":

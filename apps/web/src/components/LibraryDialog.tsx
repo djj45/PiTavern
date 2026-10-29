@@ -7,10 +7,11 @@ import { readLibraryDraft, writeLibraryDraft, removeLibraryDraft, type LibraryDr
 import { RegexEditor } from "./RegexEditor.tsx";
 import { LibraryBackupPanel } from "./LibraryBackupPanel.tsx";
 import { fieldClass, buttonClass } from "./libraryStyles.ts";
+import { cardBookToWorld, updateCardBook, type CardBook } from "../cardBookEditor.ts";
 
 type World = Record<string, unknown> & { entries: Record<string, Record<string, unknown>> };
 
-function WorldEditor({ value, onChange }: { value: World; onChange: (world: World) => void }) {
+function WorldEditor({ value, onChange, embedded = false }: { value: World; onChange: (world: World) => void; embedded?: boolean }) {
   const [selected, setSelected] = useState(() => Object.keys(value.entries)[0] ?? "");
   const [query, setQuery] = useState("");
   const matches = Object.entries(value.entries).filter(([uid, item]) => !query.trim() || [uid, item.comment, item.content, ...(Array.isArray(item.key) ? item.key : [])].join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -39,7 +40,7 @@ function WorldEditor({ value, onChange }: { value: World; onChange: (world: Worl
   };
   return <div className="space-y-4">
     <label className="block">搜索条目<input aria-label="搜索世界书条目" className={fieldClass} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="名称、关键词或正文" /></label>
-    <p className="text-xs leading-5 text-tavern-dim">编辑外部世界书。启用范围、全局扫描和预算仍在设置中选择；卡内世界书暂不在此编辑。</p>
+    <p className="text-xs leading-5 text-tavern-dim">{embedded ? "编辑当前角色卡的内嵌世界书，桥接模式自动读取；保存保留卡片、图片及未知字段。" : "编辑外部世界书。启用范围、全局扫描和预算仍在设置中选择。"}</p>
     <div className="flex flex-wrap items-end gap-2">
       <label className="min-w-0 flex-1">条目（{Object.keys(value.entries).length}）<select aria-label="世界书条目" value={active} onChange={(e) => setSelected(e.target.value)} className={fieldClass}>
         {!matches.length && <option value="">暂无匹配条目</option>}
@@ -164,7 +165,7 @@ export default function LibraryDialog({ onClose, scope }: { onClose: () => void;
         <fieldset disabled={busy} className="space-y-4 disabled:opacity-60">
           <label className="block">{tab === "world" ? "世界书文件" : "正则来源"}<select aria-label="资料文件" value={draft?.resource.id ?? ""} onChange={(e) => { if (e.target.value) void load(e.target.value); }} className={fieldClass}>
             <option value="">选择资料…</option>
-            {resources.filter((r) => tab === "world" ? r.kind === "world" : r.kind !== "world").map((r) => <option key={r.id} value={r.id}>{r.kind === "preset-regex" ? "预设 · " : r.kind === "character-regex" ? "角色卡 · " : ""}{r.label}</option>)}
+            {resources.filter((r) => tab === "world" ? r.kind === "world" || r.kind === "character-world" : r.kind !== "world" && r.kind !== "character-world").map((r) => <option key={r.id} value={r.id}>{r.kind === "preset-regex" ? "预设 · " : r.kind === "character-regex" ? "角色卡 · " : r.kind === "character-world" ? "卡内世界书 · " : ""}{r.label}</option>)}
           </select></label>
           {tab === "world" && <div className="flex items-end gap-2"><label className="min-w-0 flex-1">新世界书名称<input value={name} onChange={(e) => setName(e.target.value)} className={fieldClass} /></label><button type="button" disabled={!name.trim()} onClick={() => void create()} className={buttonClass}>新建世界书</button></div>}
           {localDraft && <div role="status" className="space-y-2 rounded border border-tavern-accent p-3">
@@ -172,7 +173,7 @@ export default function LibraryDialog({ onClose, scope }: { onClose: () => void;
             <button type="button" className={buttonClass} onClick={() => { setDraft(structuredClone(localDraft.document)); setLocalDraft(null); setStatus("已恢复本地草稿，尚未写入资料库"); }}>恢复本地草稿</button>
             <button type="button" className={buttonClass + " ml-2"} onClick={() => { clearDraft(localDraft.document.resource.id); setLocalDraft(null); }}>清除本地草稿</button>
           </div>}
-          {draft && (tab === "world" ? <WorldEditor key={draft.resource.id + draft.revision} value={draft.data as World} onChange={change} />
+          {draft && (tab === "world" ? <WorldEditor key={draft.resource.id + draft.revision} embedded={draft.resource.kind === "character-world"} value={draft.resource.kind === "character-world" ? cardBookToWorld(draft.data as CardBook) : draft.data as World} onChange={(value) => change(draft.resource.kind === "character-world" ? updateCardBook(draft.data as CardBook, value) : value)} />
             : <RegexEditor key={draft.resource.id + draft.revision} scripts={draft.data as RegexScript[]} onChange={change} />)}
         </fieldset>
         {document && <LibraryHistory key={document.resource.id + document.revision} document={document} dirty={dirty} busy={busy} onBusy={setBusy} onRestored={(value) => { setDocument(value); setDraft(structuredClone(value)); clearDraft(value.resource.id); setLocalDraft(null); setStatus("历史版本已恢复，恢复前原文件已备份"); }} />}

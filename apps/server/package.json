@@ -1,7 +1,7 @@
 {
   "name": "@pitavern/server",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -20,7 +20,10 @@
     "verify:world-display": "tsx scripts/world-display-verify.ts",
     "verify:library": "tsx scripts/library-verify.ts",
     "verify:regex-isolation": "tsx scripts/regex-isolation-verify.ts",
-    "verify:library-maintenance": "tsx scripts/library-maintenance-verify.ts"
+    "verify:library-maintenance": "tsx scripts/library-maintenance-verify.ts",
+    "verify:card-compat": "tsx scripts/card-compat-verify.ts",
+    "verify:local": "tsx scripts/local-verify.ts",
+    "verify:group-script": "tsx scripts/group-script-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

@@ -5,7 +5,7 @@
  * 两端 TS 会同时报错，避免契约漂移。
  */
 
-export const PITAVERN_VERSION = "0.1.0";
+export const PITAVERN_VERSION = "0.2.0-rc.1";
 
 /** SillyTavern instruct 预设的单人对话字段。 */
 export interface InstructTemplate {
@@ -143,7 +143,7 @@ export interface GenerationRecordDto {
   id: string;
   version: number;
   userMessageId: string;
-  kind: "send" | "regenerate" | "retry";
+  kind: "send" | "regenerate" | "retry" | "script";
   provider: string;
   model: string;
   startedAt: string;
@@ -223,7 +223,10 @@ export interface CharacterDto {
   creator: string;
 }
 
+export interface GroupChatDto { name: string; members: string[] }
+
 export interface ChatSummaryDto {
+  group?: GroupChatDto;
   /** 相对 dataDir 的路径，作为唯一 id，如 "chats/Seraphina/2026-10-26@20h30m00s.jsonl" */
   id: string;
   character: string;
@@ -280,6 +283,10 @@ export interface ChatSnapshotDto {
   messages: ChatMessageDto[];
   running: boolean;
   streamingText: string;
+  group?: GroupChatDto;
+  memberDisplays?: Record<string, ChatDisplayDto>;
+  streamingCharacter?: string;
+  stagedMessages?: ChatMessageDto[];
   /** 接管模式的状态投影（chat_metadata.projection） */
   projection?: string;
   page?: Omit<ChatPageDto, "messages">;
@@ -317,7 +324,7 @@ export interface AuthorNoteSnapshotDto {
 // ---------------------------------------------------------------- WS 协议
 
 export type ClientMessage =
-  | { type: "chat.send"; chatId: string; text: string }
+  | { type: "chat.send"; chatId: string; text: string; speakers?: string[] }
   | { type: "chat.regenerate"; chatId: string; messageId: string; expectedText: string }
   | { type: "chat.abort"; chatId: string }
   | { type: "chat.sync"; chatId: string }
@@ -331,6 +338,7 @@ export type ServerEvent =
   /** 本轮生成开始 */
   | { type: "chat.started"; chatId: string; message: ChatMessageDto }
   | { type: "chat.regenerating"; chatId: string }
+  | { type: "chat.speaker"; chatId: string; character: string; stagedMessages: ChatMessageDto[] }
   /** Absolute persisted activity state; safe to replay after reconnect. */
   | { type: "chat.activity"; chatId: string; activity: ChatActivityDto }
   | { type: "chat.snapshot"; chatId: string; snapshot: ChatSnapshotDto; append?: boolean }
@@ -366,12 +374,12 @@ export type ServerEvent =
       details?: { summary?: string; [key: string]: unknown };
     };
 
-export type LibraryKind = "world" | "global-regex" | "preset-regex" | "character-regex";
+export type LibraryKind = "world" | "character-world" | "global-regex" | "preset-regex" | "character-regex";
 export interface LibraryResourceDto { id: string; kind: LibraryKind; label: string }
 export interface LibraryDocumentDto {
   resource: LibraryResourceDto;
   revision: string;
-  /** Whole world file, or a scripts array; unknown fields are round-tripped. */
+  /** Whole world file, character_book, or scripts array; unknown fields are round-tripped. */
   data: Record<string, unknown> | import("./regex.ts").RegexScript[];
 }
 export interface LibraryBackupPreviewDto {

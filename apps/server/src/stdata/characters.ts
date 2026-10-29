@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseCardFromPng } from "./png.ts";
+import { importedAvatar } from "./card-import.ts";
 import { normalizeCard, type CharacterCard } from "./types.ts";
 
 interface CacheEntry {
@@ -53,6 +54,7 @@ export class CharacterStore {
     if (!parsed || typeof (parsed.data as { name?: unknown })?.name !== "string") return undefined;
 
     const card = normalizeCard(parsed.spec, parsed.data as Record<string, unknown>, avatarFile);
+    if (!card.avatarFile) card.avatarFile = importedAvatar(path.dirname(this.charactersDir), card.extensions);
     this.cache.set(file, { card, mtimeMs: stat.mtimeMs });
     return card;
   }

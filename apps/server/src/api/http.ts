@@ -1,3 +1,4 @@
+import { readGroup } from "../stdata/groups.ts";
 import fs from "node:fs";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
@@ -18,6 +19,7 @@ import { validateAuthorNote } from "../context/author-note.ts";
 import { normalizeInstruct } from "../context/instruct.ts";
 import { embedTexts } from "../context/vectors.ts";
 import { parseCardFromPng } from "../stdata/png.ts";
+import { importCardArchive } from "../stdata/card-import.ts";
 import { providerDtoList, buildModels, resolveModel } from "../providers/models.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { CharacterStore } from "../stdata/characters.ts";
@@ -335,8 +337,9 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     res.json(characters.listCharacters().map(characterDto));
   });
 
-  /** 导入角色卡：PNG（tEXt 内嵌卡）或导出 JSON；同名文件覆盖 */
-  app.post("/api/import/character", express.raw({ type: "*/*", limit: "24mb" }), (req, res) => {
+  /** Import PNG/JSON or bounded CharX/BYAF archives; archives never overwrite existing cards. */
+  app.post("/api/import/character", express.raw({ type: "*/*", limit: "24mb" }), async (req, res) => {
+    let release: (() => void) | undefined;
     try {
       sessions.assertIdle();
       let fileName: string;
@@ -353,6 +356,11 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       }
       const isPng = body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
       const lower = fileName.toLowerCase();
+      if (/\.(charx|byaf)$/i.test(lower)) {
+        release = sessions.beginMaintenance("正在导入角色归档，请稍候");
+        const result = await importCardArchive(deps.stDataDir, fileName, body, new Set(characters.listCharacters().map((card) => card.name)), config.persona.name);
+        sessions.libraryChanged(); res.json({ ok: true, ...result }); return;
+      }
       let safeName: string;
       if (isPng && lower.endsWith(".png")) {
         if (!parseCardFromPng(body)) {
@@ -374,7 +382,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
         }
         safeName = fileName.replace(/[\\/:*?"<>|]/g, "_");
       } else {
-        res.status(400).json({ error: "仅支持 .png（内嵌卡）或 .json 角色卡" });
+        res.status(400).json({ error: "仅支持 .png、.json、.charx 或 .byaf 角色卡" });
         return;
       }
       const target = path.join(deps.stDataDir, "characters", safeName);
@@ -382,6 +390,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       sessions.libraryChanged();
       res.json({ ok: true, file: safeName });
     } catch (error) { res.status(400).json({ error: (error as Error).message }); }
+    finally { release?.(); }
   });
 
   /** 导入世界书：ST worlds JSON（entries 对象） */
@@ -411,7 +420,8 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       res.status(404).json({ error: "无头像" });
       return;
     }
-    res.sendFile(card.avatarFile);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(card.avatarFile, { dotfiles: "allow" });
   });
 
   app.get("/api/chat/author-note", (req, res) => {
@@ -496,6 +506,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     const list: ChatSummaryDto[] = chats.listChats(character).map((m) => ({
       id: m.id,
       character: m.character,
+      group: m.group,
       title: m.id.split("/").pop() ?? m.id,
       messageCount: m.messageCount,
       lastMessage: m.lastMessage,
@@ -504,7 +515,27 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     res.json(list);
   });
 
+  app.post("/api/chat/script", async (req, res) => {
+    try {
+      const { chatId, source, revision } = req.body ?? {};
+      if (typeof chatId !== "string" || typeof source !== "string" || typeof revision !== "string") throw new Error("脚本参数无效");
+      res.json(await sessions.runScript(chatId, source, revision));
+    } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/groups", (req, res) => {
+    try {
+      sessions.assertIdle();
+      const group = readGroup({ _pitavernGroup: req.body });
+      if (!group) throw new Error("缺少群聊配置");
+      for (const name of group.members) if (!characters.getCharacter(name)) throw new Error("角色不存在: " + name);
+      const meta = chats.createChat(group.members[0], null, config.persona.name, { _pitavernGroup: group });
+      res.json({ id: meta.id });
+    } catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+
   app.post("/api/chats", (req, res) => {
+    if (sessions.writeBlocked) { res.status(503).json({ error: sessions.writeBlocked }); return; }
     const { character, greeting } = req.body as { character?: string; greeting?: string };
     const card = character ? characters.getCharacter(character) : undefined;
     if (!card) {

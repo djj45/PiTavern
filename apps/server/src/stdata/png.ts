@@ -65,6 +65,14 @@ function crc32(buffer: Buffer): number {
 
 /** Update both card formats, preserving pixels, other chunks and unknown JSON fields. */
 export function rewritePngRegex(buffer: Buffer, scripts: unknown[]): Buffer {
+  return rewritePngCard(buffer, (card) => {
+    if (card.extensions != null && (typeof card.extensions !== "object" || Array.isArray(card.extensions))) throw new Error("卡片 extensions 不是对象");
+    card.extensions = { ...card.extensions as Record<string, unknown>, regex_scripts: scripts };
+  });
+}
+
+/** Rewrite card metadata in both V2/V3 chunks without changing image or unrelated metadata. */
+export function rewritePngCard(buffer: Buffer, update: (card: Record<string, unknown>) => void): Buffer {
   if (!parseCardFromPng(buffer)) throw new Error("PNG 没有有效角色卡");
   const result = [buffer.subarray(0, 8)];
   let offset = 8;
@@ -83,8 +91,7 @@ export function rewritePngRegex(buffer: Buffer, scripts: unknown[]): Buffer {
         const raw = JSON.parse(Buffer.from(data.subarray(zero + 1).toString("latin1"), "base64").toString("utf8"));
         const card = raw?.data && typeof raw.data === "object" ? raw.data : raw;
         if (!card || typeof card !== "object" || Array.isArray(card)) throw new Error("PNG 卡片结构无效");
-        if (card.extensions != null && (typeof card.extensions !== "object" || Array.isArray(card.extensions))) throw new Error("卡片 extensions 不是对象");
-        card.extensions = { ...card.extensions, regex_scripts: scripts };
+        update(card);
         const payload = Buffer.from(`${keyword}\0${Buffer.from(JSON.stringify(raw)).toString("base64")}`, "latin1");
         chunk = Buffer.alloc(payload.length + 12);
         chunk.writeUInt32BE(payload.length, 0);

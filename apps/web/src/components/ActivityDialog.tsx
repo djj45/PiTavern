@@ -6,7 +6,7 @@ import { TOOL_META } from "../chatItems.ts";
 export const GENERATION_STATUS: Record<GenerationRecordDto["status"], string> = {
   running: "生成中", succeeded: "成功", failed: "失败", aborted: "已停止", interrupted: "服务中断",
 };
-const KIND = { send: "发送", regenerate: "重新生成", retry: "重试" };
+const KIND = { send: "发送", regenerate: "重新生成", script: "脚本生成", retry: "重试" };
 const number = (value: number) => value.toLocaleString("zh-CN");
 
 export function ContextDiagnostics({ context }: { context: ContextDiagnosticsDto }) {

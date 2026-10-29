@@ -1,3 +1,6 @@
+import { executeScript, type ScriptResult } from "../script/interpreter.ts";
+import { readGroup, groupSpeakers } from "../stdata/groups.ts";
+import { withImportedScenario } from "../stdata/card-import.ts";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -41,6 +44,7 @@ class ChatSession {
   agent: Agent | null = null;
   character = "";
   running = false;
+  staged: StChatLine[] = [];
   streamingText = "";
   aborted = false;
   controller: AbortController | null = null;
@@ -172,6 +176,9 @@ export class SessionManager {
       ...(choices ? { replyChoices: choices } : {}),
       running: session?.running ?? false, streamingText: session?.streamingText ?? "",
       activity, activityError,
+      memberDisplays: Object.fromEntries((readGroup(document.metadata)?.members ?? []).map((name) => [name, this.displayConfig(name, document.metadata, document.lines)])),
+      group: readGroup(document.metadata), streamingCharacter: session?.character,
+      stagedMessages: chatMessages(session?.staged ?? []),
       display: this.displayConfig(document.character, document.metadata, document.lines),
       ...(projection ? { projection } : {}),
     };
@@ -243,8 +250,93 @@ export class SessionManager {
     this.changed(chatId);
   }
 
-  send(chatId: string, text: string): Promise<void> {
-    return this.generate(chatId, text);
+  async runScript(chatId: string, source: string, revision: string): Promise<ScriptResult> {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成或脚本");
+    const session = this.ensureSession(chatId, "");
+    const document = this.chats.readDocument(chatId);
+    if (!document) throw new Error("聊天不存在");
+    const transaction = this.chats.prepareScript(chatId, revision);
+    const variables = transaction.metadata.variables && typeof transaction.metadata.variables === "object" && !Array.isArray(transaction.metadata.variables)
+      ? transaction.metadata.variables as Record<string, unknown> : {};
+    transaction.metadata.variables = variables;
+    const group = readGroup(transaction.metadata), config = structuredClone(this.config);
+    session.running = true; session.aborted = false; session.streamingText = ""; session.staged = [];
+    session.controller = new AbortController();
+    const controller = session.controller;
+    let scriptCommitted = false;
+    const timer = setTimeout(() => { session.aborted = true; controller.abort(new Error("脚本执行超过 60 秒")); session.agent?.abort(); }, 60_000);
+    try {
+      this.changed(chatId);
+      const result = await executeScript(source, {
+        char: document.character, user: config.persona.name, personaDescription: config.persona.description,
+        members: group?.members, variables, lines: transaction.lines, signal: controller.signal,
+        generate: async (prompt, raw, name) => {
+          controller.signal.throwIfAborted();
+          const base = this.characters.getCharacter(name); if (!base) throw new Error("角色不存在: " + name);
+          const actor = withImportedScenario(base, transaction.metadata), models = this.models(), model = resolveModel(models, config);
+          const generation = session.generation ?? {
+            id: this.activity.createId(chatId), version: 0, userMessageId: "script-" + randomUUID(), kind: "script" as const,
+            provider: model.provider, model: model.id, startedAt: new Date().toISOString(), status: "running" as const, usage: emptyUsage(), tools: [],
+          };
+          session.generation = generation; this.saveActivity(chatId, generation);
+          const provider = config.providers.find((item) => item.id === model.provider);
+          const hooks: ContextHooks = { tokenCounter: createTokenCounter(model.id, provider?.models.find((m) => m.id === model.id)?.tokenizer), instruct: provider?.instruct, onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); } };
+          const env: MacroEnv = { char: name, user: config.persona.name, personaDescription: config.persona.description, variables,
+            lastUserMessage: transaction.lines.findLast((line) => line.is_user)?.mes };
+          const lines = transaction.lines.map((line) => group && !line.is_system ? { ...line, mes: "[" + line.name + "]: " + line.mes } : line);
+          if (prompt !== undefined) lines.push({ name: config.persona.name, mes: prompt, is_user: true, is_system: false, send_date: new Date().toISOString() });
+          if (prompt === undefined) lines.push({ name: config.persona.name, mes: "请 " + name + " 接着发言。", is_user: true, is_system: false, send_date: new Date().toISOString() });
+          const character = group ? { ...actor, description: actor.description + "\n本次只扮演 " + name + "，其他群聊成员：" + group.members.join("、") } : actor;
+          const toolCtx: ToolContext = { chatId, lines, worldEntries: this.collectWorldEntries(character, config), variables,
+            skillsDir: path.join(this.stDataDir, "skills"), substitute: (s) => substituteMacros(s, env),
+            enforcement: structuredClone(session.enforcement), maxRecallsPerTurn: 0, recallCooldownTurns: 0 };
+          const agent = !raw && config.contextMode === "bridge"
+            ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, [], false, config, hooks, undefined, undefined, transaction.metadata, controller.signal)
+            : !raw && config.contextMode === "takeover"
+              ? this.buildTakeoverAgent(model, models, toolCtx, [], false, config, transaction.metadata, character, hooks)
+              : createTavernAgent({ models, model, chatId, templateNames: { char: name, user: config.persona.name },
+                  systemPrompt: raw ? "" : substituteMacros(buildSystemPrompt(character, config.persona), env),
+                  history: raw ? [] : historyToAgentMessages(lines.map((line) => ({ ...line, mes: substituteMacros(line.mes, env) }))),
+                  thinkingLevel: config.thinkingLevel, outputProtocol: "native", protocolStrict: false, ...hooks });
+          session.agent = agent; session.character = name;
+          agent.subscribe((event) => {
+            if (event.type !== "message_end" || event.message.role !== "assistant") return;
+            const usage = event.message.usage, amount = (n: number) => Number.isFinite(n) && n >= 0 ? n : 0;
+            for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) generation.usage[key] += amount(usage[key]);
+            generation.usage.costTotal += amount(usage.cost.total); generation.usage.responses++;
+            if (usage.totalTokens > 0 || usage.input > 0 || usage.output > 0) generation.usage.responsesWithUsage++;
+            this.saveActivity(chatId, generation);
+          });
+          if (raw) await agent.prompt(substituteMacros(prompt ?? "", env)); else await agent.continue();
+          controller.signal.throwIfAborted();
+          if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+          const answer = agent.state.messages.findLast((message) => message.role === "assistant");
+          const output = answer?.role === "assistant" ? answer.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("") : "";
+          if (!output.trim()) throw new Error("脚本模型未返回正文");
+          return output;
+        },
+      });
+      controller.signal.throwIfAborted();
+      transaction.commit(); scriptCommitted = true; return result;
+    } catch (cause) {
+      const error = controller.signal.aborted ? new Error("脚本已停止，所有更改已撤回") : cause;
+      if (session.generation) session.generation.error = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      if (session.generation) {
+        const run = session.generation;
+        run.status = scriptCommitted ? "succeeded" : controller.signal.aborted ? "aborted" : "failed"; run.finishedAt = new Date().toISOString();
+        try { this.saveActivity(chatId, run); } catch (cause) { session.activityError = "脚本生成记录保存失败: " + (cause as Error).message; }
+        session.generation = null;
+      }
+      clearTimeout(timer); session.running = false; session.agent = null; session.controller = null;
+      this.changed(chatId); this.emit({ type: "chat.finished", chatId });
+    }
+  }
+
+  send(chatId: string, text: string, speakers?: string[]): Promise<void> {
+    return this.generate(chatId, text, undefined, speakers);
   }
 
   regenerate(chatId: string, messageId: string, expectedText: string): Promise<void> {
@@ -252,7 +344,7 @@ export class SessionManager {
   }
 
   /** Both normal sends and regeneration stage state and replies until the entire turn succeeds. */
-  private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }): Promise<void> {
+  private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }, requestedSpeakers?: string[]): Promise<void> {
     if (this.writeBlocked) {
       this.emit({ type: "chat.error", chatId, message: this.writeBlocked });
       return;
@@ -265,6 +357,7 @@ export class SessionManager {
     session.running = true;
     session.aborted = false;
     session.streamingText = "";
+    session.staged = [];
     session.controller = new AbortController();
     session.generation = null;
     const previousEnforcement = structuredClone(session.enforcement);
@@ -278,9 +371,14 @@ export class SessionManager {
       const generated: StChatLine[] = [];
       const pendingMetadata = structuredClone(document.metadata);
       const writeMetadata = (patch: Record<string, unknown>) => { Object.assign(pendingMetadata, patch); };
-      const character = this.characters.getCharacter(document.character);
-      if (!character) throw new Error(`找不到角色卡: ${document.character}`);
-      session.character = character.name;
+      const speakers = groupSpeakers(document.metadata, document.character,
+        regeneration ? regeneration.user.extra?._pitavernSpeakers as string[] | undefined : requestedSpeakers);
+      const actors = speakers.map((name) => {
+        const card = this.characters.getCharacter(name);
+        if (!card) throw new Error("找不到群聊角色卡: " + name);
+        return withImportedScenario(card, document.metadata);
+      });
+      const group = readGroup(document.metadata);
       const models = this.models();
       const model = resolveModel(models, config);
       const textCompletion = model.api === "openai-text-completions";
@@ -294,7 +392,7 @@ export class SessionManager {
       };
       const userLine = regeneration?.user ?? this.chats.appendMessage(chatId, {
         name: config.persona.name, is_user: true, is_system: false, mes: text,
-        extra: { _pitavernBeforeTurn: beforeTurn },
+        extra: { _pitavernBeforeTurn: beforeTurn, ...(group ? { _pitavernSpeakers: speakers } : {}) },
       });
       const transaction = regeneration ?? this.chats.prepareRegeneration(chatId, String(userLine.extra!.messageId), userLine.mes, false);
       const generation: GenerationRecordDto = {
@@ -320,72 +418,87 @@ export class SessionManager {
       session.enforcement.usedThisTurn = 0;
       if (regeneration) this.emit({ type: "chat.regenerating", chatId });
       else this.emit({ type: "chat.started", chatId, message: chatMessages([userLine])[0] });
-      const macroEnv: MacroEnv = {
-        char: character.name, user: config.persona.name,
-        personaDescription: config.persona.description,
-        variables,
-        lastUserMessage: text,
-      };
-      const toolCtx: ToolContext = {
-        chatId,
-        lines: [...document.lines, userLine],
-        worldEntries: this.collectWorldEntries(character, config),
-        variables,
-        skillsDir: path.join(this.stDataDir, "skills"),
-        substitute: (s) => substituteMacros(s, { ...macroEnv, variables: structuredClone(variables) }),
-        enforcement: session.enforcement,
-        maxRecallsPerTurn: 6,
-        recallCooldownTurns: 10,
-      };
-      let tools = config.toolsEnabled && !textCompletion ? createTavernTools(toolCtx) : [];
-      const useProtocol = config.outputProtocol === "game_tool";
-      if (config.contextMode === "takeover" && config.takeover.stateProjection) {
-        // 状态投影：工具写 chat_metadata.projection，下一轮组装回注 system section
-        toolCtx.setState = (projection: string) => {
-          writeMetadata({ projection });
-          if (!regeneration) this.emit({ type: "chat.projection", chatId, projection });
+      const sharedTimedState = config.contextMode === "bridge" ? normalizeTimedState(document.metadata.timedWorldInfo) : undefined;
+      for (const originalActor of actors) {
+        session.controller.signal.throwIfAborted();
+        const character = group ? { ...originalActor, description: originalActor.description +
+          "\n群聊成员：" + group.members.join("、") + "。历史消息以发言者名字标记。你本次只扮演 " + originalActor.name + "，不要替其他成员或用户发言。" } : originalActor;
+        session.character = character.name;
+        session.streamingText = "";
+        session.staged = generated;
+        this.emit({ type: "chat.speaker", chatId, character: character.name, stagedMessages: chatMessages(generated) });
+        const history = [...document.lines, userLine, ...generated].map((line) => group && !line.is_system
+          ? { ...line, mes: "[" + line.name + "]: " + line.mes } : line);
+        const generatedBefore = generated.length;
+        const macroEnv: MacroEnv = {
+          char: character.name, user: config.persona.name,
+          personaDescription: config.persona.description,
+          variables,
+          lastUserMessage: text,
         };
-        tools = [...tools, createSetStateTool(toolCtx)];
+        const toolCtx: ToolContext = {
+          chatId,
+          lines: history,
+          worldEntries: this.collectWorldEntries(character, config),
+          variables,
+          skillsDir: path.join(this.stDataDir, "skills"),
+          substitute: (s) => substituteMacros(s, { ...macroEnv, variables: structuredClone(variables) }),
+          enforcement: session.enforcement,
+          maxRecallsPerTurn: 6,
+          recallCooldownTurns: 10,
+        };
+        let tools = config.toolsEnabled && !textCompletion ? createTavernTools(toolCtx) : [];
+        const useProtocol = config.outputProtocol === "game_tool";
+        if (config.contextMode === "takeover" && config.takeover.stateProjection) {
+          // 状态投影：工具写 chat_metadata.projection，下一轮组装回注 system section
+          toolCtx.setState = (projection: string) => {
+            writeMetadata({ projection });
+            if (!regeneration) this.emit({ type: "chat.projection", chatId, projection });
+          };
+          tools = [...tools, createSetStateTool(toolCtx)];
+        }
+        const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
+        // 计时效果状态（sticky/cooldown）：从元数据恢复，扫描内更新，组装后回写
+        const timedState = sharedTimedState;
+        const previewEnv = { ...macroEnv, variables: structuredClone(variables) };
+        const vectorMatches = config.contextMode === "bridge" ? await retrieveVectorEntries(
+          config, toolCtx.worldEntries,
+          toolCtx.lines.filter((line) => !line.is_system).map((line) => substituteMacros(line.mes, previewEnv)),
+          this.stDataDir, session.controller.signal,
+        ) : undefined;
+        session.controller.signal.throwIfAborted();
+        const agent = config.contextMode === "bridge"
+          ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, pendingMetadata, session.controller.signal)
+          : config.contextMode === "takeover"
+            ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...pendingMetadata, variables }, character, contextHooks)
+            : createTavernAgent({
+                models, model, chatId, thinkingLevel: config.thinkingLevel,
+                templateNames: { char: character.name, user: config.persona.name },
+                systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0) +
+                  (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
+                history: historyToAgentMessages((group ? history : document.lines).map((line) => ({ ...line, mes: substituteMacros(line.mes, macroEnv) }))), tools: allTools,
+                outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
+                compression: config.compression,
+                ...contextHooks,
+                contextAssembly: { mode: "simple", historyMessages: toolCtx.lines.filter((line) => !line.is_system && line.mes.trim()).length,
+                  omittedHistoryMessages: 0, worldInfoTotal: toolCtx.worldEntries.length,
+                  worldInfo: toolCtx.worldEntries.slice(0, 200).map((entry) => ({ uid: entry.uid, world: entry.world,
+                    label: entry.key.join("、").slice(0, 80) || entry.uid, status: "skipped", reason: "简洁模式不自动注入世界书" })) },
+              });
+        session.agent = agent;
+        this.wireAgent(agent, chatId, useProtocol, generated);
+        writeMetadata({ variables, ...(timedState ? { timedWorldInfo: timedState } : {}) });
+        if (group) await agent.prompt("请 " + character.name + " 接着发言。");
+        else if (config.contextMode === "simple") {
+          const prompt = substituteMacros(text, macroEnv);
+          writeMetadata({ variables });
+          await agent.prompt(prompt);
+        }
+        else await agent.continue();
+        if (agent.state.errorMessage && !session.aborted) throw new Error(agent.state.errorMessage);
+        if (!session.aborted && !generated.slice(generatedBefore).some((line) => line.mes.trim())) throw new Error(character.name + " 未返回正文，本轮全部回复已撤回");
+        if (session.aborted) break;
       }
-      const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
-      // 计时效果状态（sticky/cooldown）：从元数据恢复，扫描内更新，组装后回写
-      const timedState =
-        config.contextMode === "bridge" ? normalizeTimedState(document.metadata.timedWorldInfo) : undefined;
-      const previewEnv = { ...macroEnv, variables: structuredClone(variables) };
-      const vectorMatches = config.contextMode === "bridge" ? await retrieveVectorEntries(
-        config, toolCtx.worldEntries,
-        toolCtx.lines.filter((line) => !line.is_system).map((line) => substituteMacros(line.mes, previewEnv)),
-        this.stDataDir, session.controller.signal,
-      ) : undefined;
-      session.controller.signal.throwIfAborted();
-      const agent = config.contextMode === "bridge"
-        ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, document.metadata, session.controller.signal)
-        : config.contextMode === "takeover"
-          ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...document.metadata, variables }, character, contextHooks)
-          : createTavernAgent({
-              models, model, chatId, thinkingLevel: config.thinkingLevel,
-              templateNames: { char: character.name, user: config.persona.name },
-              systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0) +
-                (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
-              history: historyToAgentMessages(document.lines.map((line) => ({ ...line, mes: substituteMacros(line.mes, macroEnv) }))), tools: allTools,
-              outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
-              compression: config.compression,
-              ...contextHooks,
-              contextAssembly: { mode: "simple", historyMessages: toolCtx.lines.filter((line) => !line.is_system && line.mes.trim()).length,
-                omittedHistoryMessages: 0, worldInfoTotal: toolCtx.worldEntries.length,
-                worldInfo: toolCtx.worldEntries.slice(0, 200).map((entry) => ({ uid: entry.uid, world: entry.world,
-                  label: entry.key.join("、").slice(0, 80) || entry.uid, status: "skipped", reason: "简洁模式不自动注入世界书" })) },
-            });
-      session.agent = agent;
-      this.wireAgent(agent, chatId, useProtocol, generated);
-      writeMetadata({ variables, ...(timedState ? { timedWorldInfo: timedState } : {}) });
-      if (config.contextMode === "simple") {
-        const prompt = substituteMacros(text, macroEnv);
-        writeMetadata({ variables });
-        await agent.prompt(prompt);
-      }
-      else await agent.continue();
-      if (agent.state.errorMessage && !session.aborted) throw new Error(agent.state.errorMessage);
       if (!session.aborted) {
         if (!generated.some((line) => line.mes.trim())) throw new Error(regeneration ? "模型未返回正文，已保留原回复" : "模型未返回正文，状态未改变，可重试本轮");
         pendingMetadata._pitavernEnforcement = structuredClone(session.enforcement);
@@ -397,6 +510,8 @@ export class SessionManager {
       if (session.generation && !session.aborted) session.generation.error = error instanceof Error ? error.message : String(error);
       if (!session.aborted) this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
     } finally {
+      session.staged = [];
+      session.streamingText = "";
       session.running = false;
       session.agent = null;
       session.controller = null;

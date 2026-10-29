@@ -4,10 +4,35 @@ import { createHash, randomUUID } from "node:crypto";
 import type { LibraryDocumentDto, LibraryKind, LibraryResourceDto, LibraryHistoryDto, LibraryHistoryPageDto, LibraryHistoryPreviewDto } from "@pitavern/shared";
 import { normalizeRegexScripts, parseFindRegex, type RegexScript } from "@pitavern/shared/regex";
 import { atomicWrite, object } from "./files.ts";
-import { parseCardFromPng, rewritePngRegex } from "./png.ts";
+import { parseCardFromPng, rewritePngRegex, rewritePngCard } from "./png.ts";
 
 const hash = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
-const dirs = { world: "worlds", "preset-regex": "OpenAI Settings", "character-regex": "characters", "global-regex": ".pitavern" };
+const dirs = { world: "worlds", "character-world": "characters", "preset-regex": "OpenAI Settings", "character-regex": "characters", "global-regex": ".pitavern" };
+const isCharacter = (kind: LibraryKind) => kind === "character-regex" || kind === "character-world";
+
+function validateCardBook(data: unknown): asserts data is Record<string, unknown> {
+  if (!object(data) || !Array.isArray(data.entries) || data.entries.length > 10000) throw new Error("卡内世界书需要 entries 数组，最多 10000 条");
+  for (const entry of data.entries) {
+    if (!object(entry) || typeof entry.content !== "string" || (entry.extensions != null && !object(entry.extensions))) throw new Error("卡内世界书条目结构无效");
+    for (const key of ["keys", "secondary_keys"]) {
+      if (entry[key] !== undefined && (!Array.isArray(entry[key]) || (entry[key] as unknown[]).some((value) => typeof value !== "string"))) throw new Error("关键词需要字符串数组");
+    }
+    for (const key of ["enabled", "constant", "selective", "case_sensitive"]) {
+      if (entry[key] != null && typeof entry[key] !== "boolean") throw new Error(key + " 必须为开关");
+    }
+    const numeric = ["insertion_order", "probability", "sticky", "cooldown", "delay"];
+    for (const key of numeric) if (entry[key] != null && (typeof entry[key] !== "number" || !Number.isFinite(entry[key]))) throw new Error(key + " 必须为有限数值");
+    if (object(entry.extensions)) {
+      for (const key of ["position", "order", "depth", "probability", "sticky", "cooldown", "delay", "group_weight", "groupWeight", "scan_depth", "scanDepth", "selectiveLogic"]) {
+        const value = entry.extensions[key];
+        if (value != null && (typeof value !== "number" || !Number.isFinite(value))) throw new Error(key + " 必须为有限数值");
+      }
+      for (const key of ["vectorized", "useProbability", "case_sensitive", "caseSensitive", "match_whole_words", "matchWholeWords", "exclude_recursion", "excludeRecursion", "prevent_recursion", "preventRecursion", "group_override", "groupOverride", "use_group_scoring", "useGroupScoring"]) {
+        if (entry.extensions[key] != null && typeof entry.extensions[key] !== "boolean") throw new Error(key + " 必须为开关");
+      }
+    }
+  }
+}
 const globalFile = "regex.json";
 const safeFile = (name: string) => name.length > 0 && name !== "." && name !== ".." && !/[\\/\x00-\x1f]/.test(name) && path.basename(name) === name;
 
@@ -57,11 +82,11 @@ export class LibraryStore {
 
   list(): LibraryResourceDto[] {
     const result: LibraryResourceDto[] = [{ id: "global-regex:regex.json", kind: "global-regex", label: "全局正则" }];
-    for (const kind of ["world", "preset-regex", "character-regex"] as const) {
+    for (const kind of ["world", "character-world", "preset-regex", "character-regex"] as const) {
       const dir = path.join(this.root, dirs[kind]);
       if (!fs.existsSync(dir)) continue;
       for (const file of fs.readdirSync(dir).sort()) {
-        if (!/\.json$/i.test(file) && !(kind === "character-regex" && /\.png$/i.test(file))) continue;
+        if (!/\.json$/i.test(file) && !(isCharacter(kind) && /\.png$/i.test(file))) continue;
         if (!fs.lstatSync(path.join(dir, file)).isFile()) continue;
         result.push({ id: `${kind}:${file}`, kind, label: file });
       }
@@ -74,7 +99,7 @@ export class LibraryStore {
     const kind = id.slice(0, colon) as LibraryKind;
     const name = id.slice(colon + 1);
     if (!Object.hasOwn(dirs, kind) || !safeFile(name) || (kind === "global-regex" && name !== globalFile) ||
-      (kind !== "global-regex" && !/\.json$/i.test(name) && !(kind === "character-regex" && /\.png$/i.test(name)))) throw new Error("资料标识无效");
+      (kind !== "global-regex" && !/\.json$/i.test(name) && !(isCharacter(kind) && /\.png$/i.test(name)))) throw new Error("资料标识无效");
     const file = path.join(this.root, dirs[kind], name);
     if (fs.existsSync(file) && !fs.lstatSync(file).isFile()) throw new Error("资料不是普通文件");
     return { file, resource: { id, kind, label: kind === "global-regex" ? "全局正则" : name } };
@@ -98,13 +123,18 @@ export class LibraryStore {
   private document(resource: LibraryResourceDto, buffer: Buffer, raw: Record<string, unknown>): LibraryDocumentDto {
     let data: LibraryDocumentDto["data"];
     if (resource.kind === "world") { validateWorld(raw); data = raw; }
+    else if (resource.kind === "character-world") {
+      const body = !/\.png$/i.test(resource.label) && object(raw.data) ? raw.data : raw;
+      data = body.character_book == null ? { entries: [] } : body.character_book as Record<string, unknown>;
+      validateCardBook(data);
+    }
     else if (resource.kind === "global-regex") data = (raw.scripts ?? []) as RegexScript[];
     else {
       const body = resource.kind === "character-regex" && !/\.png$/i.test(resource.label) && object(raw.data) ? raw.data : raw;
       data = (object(body.extensions) ? body.extensions.regex_scripts ?? [] : []) as RegexScript[];
     }
-    if (resource.kind !== "world" && !Array.isArray(data)) throw new Error("正则列表不是数组");
-    if (resource.kind !== "world" && (data as unknown[]).some((s) => !object(s) || typeof s.findRegex !== "string" || typeof s.replaceString !== "string" || !Array.isArray(s.placement) ||
+    if (resource.kind !== "world" && resource.kind !== "character-world" && !Array.isArray(data)) throw new Error("正则列表不是数组");
+    if (resource.kind !== "world" && resource.kind !== "character-world" && (data as unknown[]).some((s) => !object(s) || typeof s.findRegex !== "string" || typeof s.replaceString !== "string" || !Array.isArray(s.placement) ||
       (s.trimStrings != null && (!Array.isArray(s.trimStrings) || s.trimStrings.some((item) => typeof item !== "string"))))) throw new Error("正则脚本结构损坏，请先修正源文件");
     return { resource, revision: hash(buffer), data };
   }
@@ -118,6 +148,15 @@ export class LibraryStore {
     if (revision !== hash(buffer)) throw new Error("资料已被其他窗口修改；草稿已保留，请重新载入后合并");
     let output: Buffer | string;
     if (resource.kind === "world") { validateWorld(data); output = JSON.stringify(data, null, 2) + "\n"; }
+    else if (resource.kind === "character-world") {
+      validateCardBook(data);
+      if (/\.png$/i.test(file)) output = rewritePngCard(buffer, (card) => { card.character_book = data; });
+      else {
+        const body = object(raw.data) ? raw.data : raw;
+        body.character_book = data;
+        output = JSON.stringify(raw, null, 2) + "\n";
+      }
+    }
     else {
       validateScripts(data);
       if (/\.png$/i.test(file)) output = rewritePngRegex(buffer, data);

@@ -10,6 +10,7 @@ interface SidebarProps {
   activeChatId: string | null;
   onOpenChat: (chatId: string) => void;
   onNewChat: () => void;
+  onNewGroup: (name: string, members: string[]) => Promise<boolean>;
   onDeleteChat: (chatId: string) => void;
   onCharactersChanged: () => void;
   onNotice: (message: string) => void;
@@ -26,6 +27,7 @@ export function Sidebar({
   activeChatId,
   onOpenChat,
   onNewChat,
+  onNewGroup,
   onDeleteChat,
   onCharactersChanged,
   onNotice,
@@ -34,6 +36,10 @@ export function Sidebar({
 }: SidebarProps) {
   const [chatToDelete, setChatToDelete] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState("新群聊");
+  const [members, setMembers] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const importCards = async (files: FileList) => {
@@ -42,7 +48,7 @@ export function Sidebar({
       for (const file of files) {
         try {
           const result = await api.importCharacter(file);
-          onNotice(`已导入 ${result.file}`);
+          onNotice("已导入 " + result.file + (result.warnings?.length ? "；" + result.warnings.join("；") : ""));
         } catch (e) {
           onNotice(`${file.name} 导入失败: ${(e as Error).message}`);
         }
@@ -77,6 +83,16 @@ export function Sidebar({
         >
           ＋ 开始新对话
         </button>
+        <button type="button" className="mt-2 w-full rounded border border-tavern-border px-3 py-1.5 text-sm" onClick={() => setGroupOpen((value) => !value)}>＋ 新建群聊</button>
+        {groupOpen && <form aria-label="新建群聊" onSubmit={(event) => {
+          event.preventDefault(); if (creating) return; setCreating(true);
+          void onNewGroup(groupName, members).then((ok) => { if (ok) { setGroupOpen(false); setMembers([]); onClose(); } }).finally(() => setCreating(false));
+        }} className="mt-2 flex flex-col gap-2 text-xs">
+          <input aria-label="群聊名称" value={groupName} maxLength={100} onChange={(e) => setGroupName(e.target.value)} className="rounded border border-tavern-border bg-tavern-bg p-2" />
+          <p>按勾选顺序发言（2–12 位）：</p>
+          {characters.map((c) => <label key={c.name} className="flex gap-2"><input type="checkbox" checked={members.includes(c.name)} disabled={creating || (!members.includes(c.name) && members.length >= 12)} onChange={(e) => setMembers((old) => e.target.checked ? [...old, c.name] : old.filter((name) => name !== c.name))} />{c.name}{members.includes(c.name) ? " · " + (members.indexOf(c.name) + 1) : ""}</label>)}
+          <button type="submit" disabled={creating || members.length < 2 || !groupName.trim()} className="rounded bg-tavern-accent p-2 text-tavern-bg disabled:opacity-40">{creating ? "创建中…" : "创建群聊"}</button>
+        </form>}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -94,7 +110,7 @@ export function Sidebar({
             <input
               ref={fileRef}
               type="file"
-              accept=".png,.json"
+              accept=".png,.json,.charx,.byaf"
               multiple
               hidden
               onChange={(e) => e.target.files?.length && void importCards(e.target.files)}
@@ -102,7 +118,7 @@ export function Sidebar({
           </h3>
           {characters.length === 0 && (
             <p className="px-2 py-1 text-xs leading-5 text-tavern-dim">
-              点「＋导入」上传角色卡 PNG / JSON，或放入数据目录的 characters/
+              点「＋导入」上传角色卡 PNG / JSON / CharX / BYAF，或放入数据目录的 characters/
             </p>
           )}
           <div className="flex flex-wrap gap-1.5 p-1">
@@ -146,7 +162,7 @@ export function Sidebar({
                     chat.id === activeChatId ? "bg-tavern-raised" : "hover:bg-tavern-raised/60"
                   }`}
                 >
-                  <div className="truncate pr-6 text-sm text-tavern-text">{chat.character}</div>
+                  <div className="truncate pr-6 text-sm text-tavern-text">{chat.group?.name ?? chat.character}</div>
                   <div className="truncate pr-6 text-xs text-tavern-dim">
                     {chat.lastMessage || "(空)"} · {chat.messageCount} 条
                   </div>

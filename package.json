@@ -1,7 +1,7 @@
 {
   "name": "pitavern",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "description": "PiTavern — 基于 pi 运行时的 agent 化酒馆",
   "workspaces": [
     "apps/*",
@@ -29,7 +29,12 @@
     "verify:ci": "node scripts/verify-ci.mjs",
     "verify:browser": "playwright test",
     "verify:regex-isolation": "npm run verify:regex-isolation -w apps/server",
-    "verify:library-maintenance": "npm run verify:library-maintenance -w apps/server"
+    "verify:library-maintenance": "npm run verify:library-maintenance -w apps/server",
+    "verify:card-compat": "npm run verify:card-compat -w apps/server",
+    "verify:local": "npm run verify:local -w apps/server --",
+    "verify:group-script": "npm run verify:group-script -w apps/server",
+    "release:pack": "node scripts/release.mjs",
+    "verify:release": "node scripts/release-verify.mjs"
   },
   "engines": {
     "node": ">=22.19"

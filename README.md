@@ -1,5 +1,7 @@
 # PiTavern（π 酒馆）
 
+当前版本：**0.2.0-rc.1**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
+
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
 ## 一键启动
@@ -37,9 +39,9 @@ npm run verify:compat # 变量持久化/向量索引/最少激活数/instruct/�
 npm run verify:library # 世界书/正则编辑、PNG 保留、全局执行顺序、整库备份迁移
 npm run verify:regex-isolation # 提示词正则隔离、超时与取消回滚
 npm run verify:library-maintenance # 便携设置、任务进度、取消和归档管理
-npm run verify:ci     # 12 组独立合成数据回归，不需要本机资料库或真实 API Key
+npm run verify:ci     # 14 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
-npm run build && npm run verify:browser # 8 项真实界面验收，独立合成库与本地 mock
+npm run build && npm run verify:browser # 13 项真实界面验收，独立合成库与本地 mock
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。
@@ -70,7 +72,7 @@ npm run build && npm run verify:browser # 8 项真实界面验收，独立合成
 - **M4 输出协议 + 历史压缩** ✅ game_tool 模式：`game_content`（正文，MANDATORY）+ `tavern_think`（思维链）双工具原生 function calling 取代伪 JSON 预填；consumeToolCalls 还原落库（mes 正文 + extra.thinking/summary）；参数流式宽松提取（toolcall_delta 实时渲染正文）；`tool_choice=required` 可透传；历史压缩 transformContext（超预算时旧轮 summary 优先折叠为 |用户|/|游戏剧情| 块，UI/落库永远全文）（`npm run verify:m4`）
 - **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史只带近 N 轮（更早靠召回）——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，📊 面板实时显示（`npm run verify:takeover`）
 - **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，🎨 切换）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
-- **后置** 多角色群聊；charx/byaf 卡格式；完整 STscript
+- **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。
 
 ## 聊天操作与显示
 
@@ -136,10 +138,10 @@ npm run build && npm run verify:browser # 8 项真实界面验收，独立合成
 - **Outlet**：条目设置 `position: 7` 和 `outletName`（卡内书 `extensions.outlet_name`），在预设或作者注释中使用 `{{outlet::名称}}`。同名内容按 Order 从高到低合并；未知名称展开为空，缺少名称的条目跳过。世界书内容和 Outlet 内不能嵌套出口。出口仍参与世界书预算、递归与计时；未被引用时不会自动塞入其他位置，诊断标记为未引用。最终请求预算会计入实际展开内容及重复引用。
 - **显示正则**：ST 桥接模式按「全局 → 预设 → 角色卡」顺序执行；其他模式按「全局 → 角色卡」执行显示脚本。`markdownOnly` 用于显示、`promptOnly` 用于提示词，两者都勾选时两侧生效。未标记 only 的脚本在桥接模式分别处理提示词和显示副本，**不复刻 ST 直接修改原始消息的行为**。支持 `$0`/`{{match}}`、编号/命名捕获组、`trimStrings`、基础宏及 `substituteRegex`；显示宏只读，不写变量。替换后仍经过 Markdown 和 HTML 过滤；编辑与 MD/JSONL 导出保留原文。全局正则存放于 `.pitavern/regex.json`，不自动读取原版全局 settings.json 正则库或执行 STscript。
 - **作者注释**：聊天顶部「作者注释」编辑当前聊天的 `note_prompt/note_interval/note_depth/note_position/note_role`。间隔 0 关闭、1 每轮，其他值按用户轮数取模；深度 0 表示最新消息之后。保存会自动备份，保留未知字段，生成中禁止保存，过期版本提示冲突并保留草稿。注释在 ST 桥接模式生效；尚不导入原版全局/角色注释配置。
-- **变量**：预设、角色描述、世界书和历史文本组装时可用 `{{setvar::金币::100}}` 写入，随后用 `{{getvar::金币}}` 读取。变量按聊天隔离，每轮组装执行宏，原始聊天文本保持不变；扫描预览、预算估算和工具检索使用副本，不额外写入。变量暂存在本轮内存中，成功后与回复一起提交；失败或停止不保存本轮宏写入。`setglobalvar`、`addvar/incvar` 和完整 STscript 解释器不在此次范围内。
+- **变量**：预设、角色描述、世界书和历史文本组装时可用 `{{setvar::金币::100}}` 写入，随后用 `{{getvar::金币}}` 读取。变量按聊天隔离，每轮组装执行宏，原始聊天文本保持不变；扫描预览、预算估算和工具检索使用副本，不额外写入。变量暂存在本轮内存中，成功后与回复一起提交；失败或停止不保存本轮宏写入。支持 addvar/incvar/decvar 宏；STscript 核心解释器与界面已提供，全局变量和完整扩展命令生态仍不支持。
 - **最少激活数**：设置 → 世界书检索，填写目标条目数及最大扫描深度。目标为 0 时关闭扩展扫描；最大深度为 0 时允许扫描到历史末尾。条目独立扫描深度、计时效果、概率和预算仍生效，因此不能保证一定达到目标。世界书预算与上下文使用同一模型计数器；未知模型采用估算，诊断面板会显示计数方式和过滤原因。
 - **向量世界书**：在世界书检索中启用，选择已配置的连接并填写 embedding 模型 ID。所选服务须提供 `/embeddings`；只有 ST 条目中的 `vectorized: true`（卡内书为 `extensions.vectorized`）参与语义召回，也保留关键词匹配。候选条目正文和最近对话会发送到所选服务。本地索引保存在 `<stDataDir>/.pitavern/vectors/`，按地址、模型、维度和内容区分；修改内容、切换模型或删除条目后不会继续使用失效候选。向量检索目前用于桥接模式，接管模式保留原来的工具检索方式。
-- **文本补全与 instruct**：在连接上选择「文本补全（OpenAI 兼容）」，baseUrl 填到 `/v1` 等接口前缀，模型 ID 按服务实际配置。选择 ChatML/Alpaca，或导入 ST 导出的 instruct JSON；此文件不同于 OpenAI Settings 预设和 context/story-string 的 Handlebars 模板。支持单人普通生成，不覆盖群聊、用户代写和 quiet 等 ST 特殊生成模式。模板须匹配模型，不会自动探测。
+- **文本补全与 instruct**：在连接上选择「文本补全（OpenAI 兼容）」，baseUrl 填到 `/v1` 等接口前缀，模型 ID 按服务实际配置。选择 ChatML/Alpaca，或导入 ST 导出的 instruct JSON；此文件不同于 OpenAI Settings 预设和 context/story-string 的 Handlebars 模板。支持普通生成与顺序群聊；不覆盖用户代写和 quiet 等 ST 特殊生成模式。群聊仍需在实际文本补全供应商上验收。模板须匹配模型，不会自动探测。
 - **文本补全能力限制**：可使用简洁或 ST 桥接模式，输出协议须为原生文本，运行时不发送工具声明；Agent 接管与 `game_tool` 不可用。切换接口时界面会切换到兼容选项，服务端也会拒绝不兼容的配置。原有聊天补全接口及工具循环保持可用。
 
 `npm run verify:compat` 使用独立合成数据和本地模拟服务，验证实际请求格式、中文流式输出、停止、变量落库、索引更新与设置保存；不调用真实供应商。每次测试的请求记录保留在 `data/test-runs/compatibility-*/`。不同供应商的模型和采样参数支持仍需使用自己的服务确认。
@@ -150,8 +152,8 @@ npm run build && npm run verify:browser # 8 项真实界面验收，独立合成
 
 顶部「资料库」提供三个页签：
 
-- **世界书**：创建外部世界书、搜索／复制／增删条目、关键词和正文、启停、常驻／向量、辅助逻辑、注入位置／角色／深度、Outlet、包含组、概率与时序。启用哪些世界书以及全局扫描和预算仍在设置中选择；卡内世界书暂不提供可视化编辑。
-- **正则脚本**：编辑全局、预设和 JSON／PNG 角色卡来源的脚本，支持搜索／复制、排序、启停、作用位置／层、深度、捕获裁剪和查找宏替换。预览使用独立线程、只读变量和执行超时，只测试当前来源。斜杠命令位置作为兼容字段保留，应用尚未实现命令执行。
+- **世界书**：创建外部世界书、搜索／复制／增删条目、关键词和正文、启停、常驻／向量、辅助逻辑、注入位置／角色／深度、Outlet、包含组、概率与时序。启用哪些世界书以及全局扫描和预算仍在设置中选择；可从同一列表选择 JSON/PNG 角色的「卡内世界书」，编辑后保留未知字段与原图。
+- **正则脚本**：编辑全局、预设和 JSON／PNG 角色卡来源的脚本，支持搜索／复制、排序、启停、作用位置／层、深度、捕获裁剪和查找宏替换。预览使用独立线程、只读变量和执行超时，只测试当前来源。斜杠命令正则位置仍只作为兼容字段保留，不会自动处理脚本源码；STscript 从聊天输入框或独立编辑器执行。
 - **备份与迁移**：导出 `.pitavern.gz` 整库文件，或上传后预览文件数、分类、展开大小与时间，再恢复到同级新目录。上传、校验、导出和恢复均有阶段进度与取消入口；最终原子提交不可取消。
 
 编辑使用内容版本校验，其他窗口或外部程序改过文件时拒绝覆盖。草稿按资料库和文件保存在浏览器本地，刷新后重新选择文件可恢复；存储空间不足时明确提示。恢复旧草稿不会跳过文件版本冲突检查。关闭或切换资料时，明确放弃会移除对应草稿。保存前把原文件备份到 `.pitavern/editor-backups/`，然后原子替换；未知字段保留。编辑 PNG 卡片只改 `chara`／`ccv3` 文本块，保留图片、其他块和未知 JSON 字段。保存后通知已连接窗口同步显示。修改资料前需停止全部聊天生成。「编辑历史与恢复」支持分页查看、并排对比和恢复旧版本；恢复前备份当前完整文件，保留 PNG 原始字节，过期版本拒绝恢复。
@@ -166,7 +168,7 @@ npm run build && npm run verify:browser # 8 项真实界面验收，独立合成
 
 ## 持续集成
 
-GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括 M4、接管、M6、会话回归、兼容、聊天操作、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离与迁移事务 12 组测试，全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消和 390px 手机布局；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
+GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括 M4、接管、M6、会话回归、兼容、聊天操作、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容与群聊脚本共 14 组测试，全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消和 390px 手机布局；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
 
 ## 架构
 
@@ -176,3 +178,11 @@ apps/server   pi-agent-core 引擎 · 每聊天一个 Agent（finishTurn 单回�
 apps/web      Vite + React + TS + Tailwind · 聊天流（流式渲染/工具卡片） · 面板 · 设置
 packages/shared  前后端 WS 事件协议契约
 ```
+
+
+## 群聊与 STscript
+
+- 侧栏「新建群聊」选择 2–12 张角色卡，按勾选顺序发言；输入框上方可选全员或指定成员。共享历史，每位使用自己的设定、卡内书和显示正则。整轮成功才提交全部回复；失败/停止回滚，候选随 JSONL 持久化。
+- 顶部「STscript」打开编辑器，也可在聊天输入框输入以 / 开头的脚本。支持管道、闭包、变量、循环、消息和模型命令，详见 [兼容说明](docs/COMPATIBILITY.md)。未知命令明确报错，失败或停止时整次撤回。模型请求已产生的用量仍保留。
+- npm run verify:local 在当前资料库副本上执行备份/恢复逐文件校验；加 -- --provider 明确启用一次真实默认模型请求。未配模型时报告待验并退出 2；本机样本规模如实统计。
+- npm run release:pack 仅打包当前已提交 Git 源码并输出 SHA256；npm run verify:release -- /绝对路径/源码包.tar.gz 在独立空目录运行首次安装和一键启动验收。源码包不含资料库、配置、密钥或依赖。

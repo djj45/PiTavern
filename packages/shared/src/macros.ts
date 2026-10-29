@@ -109,6 +109,16 @@ export function substituteMacros(text: string, env: MacroEnv): string {
         }
         return "";
       }
+      case "addvar": case "incvar": case "decvar": {
+        const key = args[0] ?? "";
+        if (!key || env.readOnly) return "";
+        env.variables ??= {};
+        const previous = Object.hasOwn(env.variables, key) ? env.variables[key] : "";
+        const amount = name === "incvar" ? "1" : name === "decvar" ? "-1" : args.slice(1).join("::");
+        const value = Number.isFinite(Number(previous)) && Number.isFinite(Number(amount)) ? Number(previous) + Number(amount) : varToString(previous) + amount;
+        Object.defineProperty(env.variables, key, { value: String(value), writable: true, enumerable: true, configurable: true });
+        return name === "addvar" ? "" : String(value);
+      }
       case "time":
         return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
       case "date":
