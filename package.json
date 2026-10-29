@@ -1,7 +1,7 @@
 {
   "name": "pitavern",
   "private": true,
-  "version": "0.2.0-rc.1",
+  "version": "0.2.1",
   "description": "PiTavern — 基于 pi 运行时的 agent 化酒馆",
   "workspaces": [
     "apps/*",
@@ -21,6 +21,8 @@
     "verify:m6": "npm run verify:m6 -w apps/server",
     "verify:regression": "npm run verify:regression -w apps/server",
     "verify:compat": "npm run verify:compat -w apps/server",
+    "verify:models": "npm run verify:models -w apps/server",
+    "verify:greetings": "npm run verify:greetings -w apps/server",
     "verify:chat-ux": "npm run verify:chat-ux -w apps/server",
     "verify:rendering": "npm run verify:rendering -w apps/web",
     "verify:activity": "npm run verify:activity -w apps/server",
@@ -33,6 +35,7 @@
     "verify:card-compat": "npm run verify:card-compat -w apps/server",
     "verify:local": "npm run verify:local -w apps/server --",
     "verify:group-script": "npm run verify:group-script -w apps/server",
+    "verify:branches": "npm run verify:branches -w apps/server",
     "release:pack": "node scripts/release.mjs",
     "verify:release": "node scripts/release-verify.mjs"
   },

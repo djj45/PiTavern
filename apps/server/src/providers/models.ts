@@ -40,7 +40,7 @@ export function buildModels(config: TavernConfig): Models {
           api: p.apiType === "text" ? "openai-text-completions" : "openai-completions",
           provider: p.id,
           baseUrl: p.baseUrl,
-          reasoning: p.apiType !== "text" && (m.reasoning ?? false),
+          reasoning: p.apiType !== "text" && (m.thinkingLevel !== undefined ? m.thinkingLevel !== "off" : (m.reasoning ?? false)),
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: m.contextWindow ?? 1_000_000,
@@ -89,6 +89,7 @@ export function providerDtoList(config: TavernConfig) {
       contextWindow: m.contextWindow ?? 1_000_000,
       maxTokens: m.maxTokens ?? 16_384,
       tokenizer: m.tokenizer ?? "auto",
+      ...(m.thinkingLevel ? { thinkingLevel: m.thinkingLevel } : {}),
     })),
   }));
 }

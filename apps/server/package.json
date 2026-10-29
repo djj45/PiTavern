@@ -1,7 +1,7 @@
 {
   "name": "@pitavern/server",
   "private": true,
-  "version": "0.2.0-rc.1",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -15,6 +15,8 @@
     "e2e": "node scripts/e2e-smoke.mjs",
     "verify:regression": "tsx scripts/regression-verify.ts",
     "verify:compat": "tsx scripts/compatibility-verify.ts",
+    "verify:models": "tsx scripts/model-discovery-verify.ts",
+    "verify:greetings": "tsx scripts/greetings-verify.ts",
     "verify:chat-ux": "tsx scripts/chat-ux-verify.ts",
     "verify:activity": "tsx scripts/activity-context-verify.ts",
     "verify:world-display": "tsx scripts/world-display-verify.ts",
@@ -23,7 +25,8 @@
     "verify:library-maintenance": "tsx scripts/library-maintenance-verify.ts",
     "verify:card-compat": "tsx scripts/card-compat-verify.ts",
     "verify:local": "tsx scripts/local-verify.ts",
-    "verify:group-script": "tsx scripts/group-script-verify.ts"
+    "verify:group-script": "tsx scripts/group-script-verify.ts",
+    "verify:branches": "tsx scripts/branch-tree-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

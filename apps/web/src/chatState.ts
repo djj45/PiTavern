@@ -1,4 +1,4 @@
-import type { GroupChatDto, ChatMessageDto, ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, ServerEvent } from "@pitavern/shared";
+import type { GroupChatDto, ChatMessageDto, ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, GreetingChoicesDto, BranchPointDto, ServerEvent } from "@pitavern/shared";
 import { isToolItem, type ChatItem } from "./chatItems.ts";
 export interface UsageStats {
   input: number;
@@ -19,12 +19,17 @@ export interface ChatState {
   stagedMessages?: ChatMessageDto[];
   items: ChatItem[];
   streamingText: string | null;
+  /** 当前生成的服务端开始时间；用于流式气泡计时。 */
+  generationStartedAt?: string;
   pending: boolean;
   usage: UsageStats;
   /** 接管模式的状态投影 */
   projection?: string;
   page?: Omit<ChatPageDto, "messages">;
   replyChoices?: ReplyChoicesDto;
+  /** 沿当前活动路径可来回切换的历史分支点。 */
+  branchChoices?: BranchPointDto[];
+  greetingChoices?: GreetingChoicesDto;
   activity?: ChatActivityDto;
   activityError?: string;
   display?: ChatDisplayDto;
@@ -62,8 +67,9 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       ...(preserve && previous.page ? { before: previous.page.before } : {}),
     };
     return { ...state, [event.chatId]: {
-      id: snapshot.id, character: snapshot.character, group: snapshot.group, memberDisplays: snapshot.memberDisplays, streamingCharacter: snapshot.streamingCharacter, stagedMessages: snapshot.stagedMessages, items, page, replyChoices: snapshot.replyChoices,
+      id: snapshot.id, character: snapshot.character, group: snapshot.group, memberDisplays: snapshot.memberDisplays, streamingCharacter: snapshot.streamingCharacter, stagedMessages: snapshot.stagedMessages, items, page, replyChoices: snapshot.replyChoices, branchChoices: snapshot.branchChoices, greetingChoices: snapshot.greetingChoices,
       streamingText: snapshot.running ? snapshot.streamingText : null,
+      generationStartedAt: snapshot.running ? snapshot.generationStartedAt : undefined,
       pending: false, activity, activityError: snapshot.activityError, display: snapshot.display,
       usage: activity ? { ...activity.usage, turns: activity.turns } : previous?.usage ?? EMPTY_USAGE,
       ...(snapshot.projection ? { projection: snapshot.projection } : {}),
@@ -87,15 +93,15 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       chat = { ...chat, projection: event.projection };
       break;
     case "pending":
-      chat = { ...chat, pending: true };
+      chat = { ...chat, pending: true, generationStartedAt: chat.generationStartedAt ?? new Date().toISOString() };
       break;
     case "chat.regenerating":
-      chat = { ...chat, pending: false, streamingText: "" };
+      chat = { ...chat, pending: false, streamingText: "", generationStartedAt: event.startedAt };
       break;
     case "chat.started":
-      chat = { ...chat, pending: false, streamingText: "", stagedMessages: [], items: [...chat.items, event.message],
+      chat = { ...chat, pending: false, streamingText: "", generationStartedAt: event.startedAt, stagedMessages: [], items: [...chat.items, event.message],
         display: chat.display && { ...chat.display, lastUserMessage: event.message.text },
-        page: chat.page && { ...chat.page, total: chat.page.total + 1 }, replyChoices: undefined,
+        page: chat.page && { ...chat.page, total: chat.page.total + 1 }, replyChoices: undefined, greetingChoices: undefined,
         usage: chat.activity ? chat.usage : { ...chat.usage, turns: chat.usage.turns + 1 } };
       break;
     case "chat.speaker":
@@ -108,7 +114,7 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       chat = { ...chat, streamingText: "", stagedMessages: [], items: [...chat.items, event.message] };
       break;
     case "chat.finished":
-      chat = { ...chat, pending: false, streamingText: null, stagedMessages: [], items: chat.items.map((item) =>
+      chat = { ...chat, pending: false, streamingText: null, generationStartedAt: undefined, stagedMessages: [], items: chat.items.map((item) =>
         isToolItem(item) && item.status === "running" ? { ...item, status: "error", summary: "本轮已结束" } : item) };
       break;
     case "chat.error":

@@ -156,7 +156,7 @@ try {
   assert.equal(displayMessage(snapshot.messages[0].text, 2, 0, snapshot.display), "**欢迎来到旅馆**");
   const state = chatReducer({}, { type: "chat.snapshot", chatId: chat.id, snapshot });
   assert.deepEqual(state[chat.id].display, snapshot.display);
-  const streaming = chatReducer(state, { type: "chat.started", chatId: chat.id,
+  const streaming = chatReducer(state, { type: "chat.started", chatId: chat.id, startedAt: new Date().toISOString(),
     message: { id: "synthetic-new", role: "user", name: "旅人", text: "新问题", sendDate: "" } });
   assert.equal(streaming[chat.id].display!.lastUserMessage, "新问题", "流式显示宏应看到本轮问题");
   await manager.send(chat.id, "旅馆");

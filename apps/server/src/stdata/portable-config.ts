@@ -1,7 +1,7 @@
 import type { TavernConfig } from '../config.ts';
 import { object } from './files.ts';
-export type PortableSettings = Pick<TavernConfig, 'persona' | 'thinkingLevel' | 'contextMode' | 'activePreset' | 'activeWorlds' | 'worldInfo' | 'toolsEnabled' | 'outputProtocol' | 'protocolStrict' | 'compression' | 'takeover'>;
-const keys = ['persona', 'thinkingLevel', 'contextMode', 'activePreset', 'activeWorlds', 'worldInfo', 'toolsEnabled', 'outputProtocol', 'protocolStrict', 'compression', 'takeover'] as const;
+export type PortableSettings = Pick<TavernConfig, 'persona' | 'thinkingLevel' | 'contextMode' | 'activePreset' | 'activeWorlds' | 'worldInfo' | 'toolsEnabled' | 'outputProtocol' | 'protocolStrict' | 'compression' | 'takeover' | 'branches'>;
+const keys = ['persona', 'thinkingLevel', 'contextMode', 'activePreset', 'activeWorlds', 'worldInfo', 'toolsEnabled', 'outputProtocol', 'protocolStrict', 'compression', 'takeover', 'branches'] as const;
 export function portableSettings(config: TavernConfig): PortableSettings {
   // Deliberately never spread the full config; URLs, keys, paths, providers and model IDs stay local.
   return parsePortableSettings(Object.fromEntries(keys.map((key) => [key, config[key]])));
@@ -21,9 +21,10 @@ function fileName(value: unknown): void {
 }
 export function parsePortableSettings(value: unknown): PortableSettings {
   shape(value, [...keys]);
-  if (keys.some((key) => !Object.hasOwn(value, key))) throw new Error('便携设置缺少必要字段');
+  // branches 是 0.2.0 之后新增的可选段；旧归档没有它时按关闭处理。
+  if (keys.some((key) => key !== 'branches' && !Object.hasOwn(value, key))) throw new Error('便携设置缺少必要字段');
   shape(value.persona, ['name', 'description']); text(value.persona.name, 1000); text(value.persona.description, 200000);
-  if (!['off', 'low', 'medium', 'high'].includes(String(value.thinkingLevel)) || !['simple', 'bridge', 'takeover'].includes(String(value.contextMode)) || !['native', 'game_tool'].includes(String(value.outputProtocol))) throw new Error('便携设置模式无效');
+  if (!['off', 'minimal', 'low', 'medium', 'high'].includes(String(value.thinkingLevel)) || !['simple', 'bridge', 'takeover'].includes(String(value.contextMode)) || !['native', 'game_tool'].includes(String(value.outputProtocol))) throw new Error('便携设置模式无效');
   fileName(value.activePreset);
   if (!Array.isArray(value.activeWorlds) || value.activeWorlds.length > 1000) throw new Error('便携设置世界书列表无效');
   value.activeWorlds.forEach(fileName);
@@ -35,6 +36,8 @@ export function parsePortableSettings(value: unknown): PortableSettings {
   for (const key of ['minActivations', 'minActivationsDepthMax', 'budgetTokens']) if (value.worldInfo[key] !== undefined) integer(value.worldInfo[key], 0, key === 'budgetTokens' ? 1000000 : 1000);
   shape(value.compression, ['enabled', 'keepFullTurns']); bool(value.compression.enabled); integer(value.compression.keepFullTurns, 1, 100);
   shape(value.takeover, ['recentTurns', 'stateProjection']); bool(value.takeover.stateProjection); integer(value.takeover.recentTurns, 1, 50);
+  if (value.branches === undefined) value.branches = { autoGenerate: 0 };
+  shape(value.branches, ['autoGenerate']); integer(value.branches.autoGenerate, 0, 4);
   return structuredClone(value) as unknown as PortableSettings;
 }
 export function applyPortableSettings(config: TavernConfig, value: PortableSettings): TavernConfig {

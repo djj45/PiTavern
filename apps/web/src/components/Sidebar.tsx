@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { ChatSummaryDto, CharacterDto } from "@pitavern/shared";
 import { api } from "../api.ts";
+import { ChatItemMenu } from "./ChatItemMenu.tsx";
 
 interface SidebarProps {
   characters: CharacterDto[];
@@ -12,6 +13,8 @@ interface SidebarProps {
   onNewChat: () => void;
   onNewGroup: (name: string, members: string[]) => Promise<boolean>;
   onDeleteChat: (chatId: string) => void;
+  /** 置顶/重命名/归档成功后刷新对话列表。 */
+  onChatsChanged: () => void | Promise<void>;
   onCharactersChanged: () => void;
   onNotice: (message: string) => void;
   /** 移动端抽屉开合（md 以上恒开） */
@@ -29,12 +32,13 @@ export function Sidebar({
   onNewChat,
   onNewGroup,
   onDeleteChat,
+  onChatsChanged,
   onCharactersChanged,
   onNotice,
   mobileOpen,
   onClose,
 }: SidebarProps) {
-  const [chatToDelete, setChatToDelete] = useState<string | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
   const [groupName, setGroupName] = useState("新群聊");
@@ -58,6 +62,40 @@ export function Sidebar({
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  };
+
+  const orderedChats = [...chats].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+  const visibleChats = orderedChats.filter((chat) => !chat.archived);
+  const archivedChats = orderedChats.filter((chat) => chat.archived);
+
+  const renderChatItem = (chat: ChatSummaryDto) => {
+    const displayName = chat.displayName?.trim() || chat.group?.name || chat.character;
+    return (
+      <li key={chat.id} className="group relative">
+        <button
+          type="button"
+          onClick={() => { onOpenChat(chat.id); onClose(); }}
+          className={`w-full rounded-md px-2 py-1.5 pr-8 text-left ${
+            chat.id === activeChatId ? "bg-tavern-raised" : "hover:bg-tavern-raised/60"
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-1 text-sm text-tavern-text">
+            {chat.pinned && <span aria-hidden="true" className="shrink-0">📌</span>}
+            <span className="truncate">{displayName}</span>
+          </div>
+          <div className="truncate text-xs text-tavern-dim">
+            {chat.lastMessage || "(空)"} · {chat.messageCount} 条
+          </div>
+        </button>
+        <ChatItemMenu
+          chat={chat}
+          displayName={displayName}
+          onChatsChanged={onChatsChanged}
+          onDeleteChat={onDeleteChat}
+          onNotice={onNotice}
+        />
+      </li>
+    );
   };
 
   return (
@@ -150,45 +188,29 @@ export function Sidebar({
         </section>
 
         <section className="p-2">
-          <h3 className="px-2 pb-1 text-xs font-medium text-tavern-dim">对话 ({chats.length})</h3>
-          {chats.length === 0 && <p className="px-2 py-1 text-xs text-tavern-dim">暂无对话</p>}
-          <ul>
-            {chats.map((chat) => (
-              <li key={chat.id} className="group relative">
-                <button
-                  type="button"
-                  onClick={() => { onOpenChat(chat.id); onClose(); }}
-                  className={`w-full rounded-md px-2 py-1.5 text-left ${
-                    chat.id === activeChatId ? "bg-tavern-raised" : "hover:bg-tavern-raised/60"
-                  }`}
-                >
-                  <div className="truncate pr-6 text-sm text-tavern-text">{chat.group?.name ?? chat.character}</div>
-                  <div className="truncate pr-6 text-xs text-tavern-dim">
-                    {chat.lastMessage || "(空)"} · {chat.messageCount} 条
-                  </div>
-                </button>
-                {chatToDelete === chat.id ? (
-                  <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded bg-tavern-panel p-0.5 text-xs">
-                    <button type="button" className="px-1 text-red-400" onClick={() => onDeleteChat(chat.id)}>
-                      删
-                    </button>
-                    <button type="button" className="px-1 text-tavern-dim" onClick={() => setChatToDelete(null)}>
-                      取
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    aria-label="删除对话"
-                    onClick={() => setChatToDelete(chat.id)}
-                    className="absolute right-1 top-1/2 hidden -translate-y-1/2 rounded px-1 text-xs text-tavern-dim hover:text-red-400 group-hover:block"
-                  >
-                    ✕
-                  </button>
-                )}
-              </li>
-            ))}
+          <h3 className="px-2 pb-1 text-xs font-medium text-tavern-dim">对话 ({visibleChats.length})</h3>
+          {visibleChats.length === 0 && <p className="px-2 py-1 text-xs text-tavern-dim">暂无对话</p>}
+          <ul aria-label="对话列表">
+            {visibleChats.map(renderChatItem)}
           </ul>
+          {archivedChats.length > 0 && (
+            <div className="mt-1 border-t border-tavern-border pt-1">
+              <button
+                type="button"
+                aria-expanded={archivedOpen}
+                onClick={() => setArchivedOpen((value) => !value)}
+                className="flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-left text-xs text-tavern-dim hover:bg-tavern-raised/60 hover:text-tavern-text"
+              >
+                <span>已归档 ({archivedChats.length})</span>
+                <span aria-hidden="true" className="ml-auto">{archivedOpen ? "▾" : "▸"}</span>
+              </button>
+              {archivedOpen && (
+                <ul aria-label="已归档对话" className="mt-1">
+                  {archivedChats.map(renderChatItem)}
+                </ul>
+              )}
+            </div>
+          )}
         </section>
       </div>
       </aside>

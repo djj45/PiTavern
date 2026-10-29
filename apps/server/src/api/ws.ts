@@ -42,8 +42,10 @@ export function attachWebSocket(server: http.Server, sessions: SessionManager): 
           else ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: "消息不能为空且不能超过 100 万字符" }));
           break;
         case "chat.regenerate":
-          if (typeof message.messageId === "string" && typeof message.expectedText === "string") {
-            void sessions.regenerate(message.chatId, message.messageId, message.expectedText);
+          if (typeof message.messageId === "string" && typeof message.expectedText === "string" &&
+              (message.instruction === undefined || (typeof message.instruction === "string" && message.instruction.length <= 4000))) {
+            const instruction = typeof message.instruction === "string" && message.instruction.trim() ? message.instruction.trim() : undefined;
+            void sessions.regenerate(message.chatId, message.messageId, message.expectedText, instruction);
           } else ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: "重生成参数无效" }));
           break;
         case "chat.abort":

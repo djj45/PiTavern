@@ -5,7 +5,7 @@ import type { BridgeSampling } from "../context/bridge.ts";
 import type { CompressionConfig } from "../context/compression.ts";
 import { compressHistory } from "../context/compression.ts";
 import { createTokenCounter, inputBudget, measureContext, type TokenCounter } from "../context/tokens.ts";
-import { INSTRUCT_TEMPLATES, type ContextAssemblyDto, type ContextDiagnosticsDto, type InstructTemplate } from "@pitavern/shared";
+import { INSTRUCT_TEMPLATES, type ContextAssemblyDto, type ContextDiagnosticsDto, type InstructTemplate, type ReasoningLevel } from "@pitavern/shared";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { GAME_TOOL_NAME } from "./protocol/game-content.ts";
 import type { CharacterCard, StChatLine } from "../stdata/types.ts";
@@ -71,7 +71,7 @@ export interface TavernAgentOptions {
   model: Model<Api>;
   templateNames?: { char: string; user: string };
   chatId: string;
-  thinkingLevel: "off" | "low" | "medium" | "high";
+  thinkingLevel: ReasoningLevel;
   /** simple 模式：系统提示词 + 历史（不含本轮用户消息，配合 prompt()） */
   systemPrompt?: string;
   history?: Message[];

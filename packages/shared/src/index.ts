@@ -5,7 +5,7 @@
  * 两端 TS 会同时报错，避免契约漂移。
  */
 
-export const PITAVERN_VERSION = "0.2.0-rc.1";
+export const PITAVERN_VERSION = "0.2.1";
 
 /** SillyTavern instruct 预设的单人对话字段。 */
 export interface InstructTemplate {
@@ -77,6 +77,20 @@ export interface ProviderModelDto {
   contextWindow: number;
   maxTokens: number;
   tokenizer?: TokenizerSetting;
+  /** 该模型默认思考强度；未设置时回退到全局 thinkingLevel。 */
+  thinkingLevel?: ReasoningLevel;
+}
+
+/** Discovery returns identity only; capability limits remain user-configured. */
+export interface DiscoveredModelDto {
+  id: string;
+  name: string;
+}
+
+export interface ModelDiscoveryRequest {
+  providerId?: string;
+  baseUrl: string;
+  apiKey?: string;
 }
 
 export type TokenizerSetting = "auto" | "cl100k_base" | "o200k_base" | "estimate";
@@ -179,6 +193,33 @@ export interface ProviderDto {
 }
 
 /** 连接设置（apiKey 永不下发到前端，只回传 hasApiKey） */
+/** 推理模型的思考强度；off 关闭，其余对应 pi 的 thinking level。 */
+export type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high";
+
+export interface DialoguePairDto {
+  /** 对白起始符号，例如「、“。 */
+  open: string;
+  /** 对白结束符号，例如」、”。 */
+  close: string;
+  /** 该组符号的颜色；留空时使用聊天配色里的默认对白颜色。 */
+  color?: string;
+}
+
+/** 默认把中文直角引号和弯引号内的文字标成对白色。 */
+export const DEFAULT_DIALOGUE_PAIRS: DialoguePairDto[] = [
+  { open: "「", close: "」" },
+  { open: "“", close: "”" },
+];
+
+export interface ChatAppearanceDto {
+  /** 角色回复文字颜色；空串表示跟随主题。 */
+  speechColor: string;
+  /** 对白文字颜色；空串表示跟随主题强调色。 */
+  dialogueColor: string;
+  /** 参与对白着色的成对符号。 */
+  dialoguePairs: DialoguePairDto[];
+}
+
 export interface ConnectionDto {
   providers: ProviderDto[];
   defaultProvider: string;
@@ -191,12 +232,18 @@ export interface ConnectionDto {
   activeWorlds: string[];
   worldInfo: WorldInfoSettings;
   vectors: VectorSettings;
+  /** 官方 API / 推理模型使用的思考强度；只有 model.reasoning 为真时生效 */
+  thinkingLevel: ReasoningLevel;
   /** native=纯文本流式；game_tool=强制工具调用防截断 */
   outputProtocol: "native" | "game_tool";
   protocolStrict: boolean;
   compression: { enabled: boolean; keepFullTurns: number };
   /** 接管模式：历史保留轮数与状态投影开关 */
   takeover: { recentTurns: number; stateProjection: boolean };
+  /** 多分支：正常回复成功后自动追加的额外候选数（0 关闭，最多 4） */
+  branches: { autoGenerate: number };
+  /** 聊天文字配色；空串跟随主题。 */
+  appearance: ChatAppearanceDto;
 }
 
 export interface PresetSummaryDto {
@@ -234,6 +281,12 @@ export interface ChatSummaryDto {
   messageCount: number;
   lastMessage: string;
   updatedAt: string;
+  /** 用户重命名后的显示名（聊天 JSONL 的 chat_metadata._pitavernTitle）。 */
+  displayName?: string;
+  /** 置顶排序（chat_metadata._pitavernPinned）。 */
+  pinned?: boolean;
+  /** 归档后从主对话列表隐藏（chat_metadata._pitavernArchived）。 */
+  archived?: boolean;
 }
 
 export type ChatRole = "user" | "assistant";
@@ -263,6 +316,32 @@ export interface ReplyChoicesDto {
   count: number;
 }
 
+/** 多分支树中的一个候选回复。 */
+export interface BranchCandidateDto {
+  index: number;
+  /** 第一条回复正文的开头，用于选择器。 */
+  preview: string;
+  /** 该候选之后是否还保存着后续剧情。 */
+  hasContinuation: boolean;
+}
+
+/** 沿当前活动分支列出的一个分叉回合（仅列出拥有多个候选的回合）。 */
+export interface BranchPointDto {
+  userMessageId: string;
+  /** 第几个用户回合（从 1 开始）。 */
+  turn: number;
+  /** 用户消息预览。 */
+  userPreview: string;
+  selected: number;
+  count: number;
+  candidates: BranchCandidateDto[];
+}
+
+export interface GreetingChoicesDto {
+  selected: number;
+  labels: string[];
+}
+
 export interface ChatBackupDto {
   id: string;
   createdAt: string;
@@ -283,6 +362,8 @@ export interface ChatSnapshotDto {
   messages: ChatMessageDto[];
   running: boolean;
   streamingText: string;
+  /** 当前生成请求的服务端开始时间；用于刷新/重连后继续计时。 */
+  generationStartedAt?: string;
   group?: GroupChatDto;
   memberDisplays?: Record<string, ChatDisplayDto>;
   streamingCharacter?: string;
@@ -291,6 +372,10 @@ export interface ChatSnapshotDto {
   projection?: string;
   page?: Omit<ChatPageDto, "messages">;
   replyChoices?: ReplyChoicesDto;
+  /** 可来回切换的历史分支点（按回合顺序）。 */
+  branchChoices?: BranchPointDto[];
+  /** Card openings are selectable only before the first user turn. */
+  greetingChoices?: GreetingChoicesDto;
   activity?: ChatActivityDto;
   activityError?: string;
   /** 渲染只读副本；不改变消息正文。 */
@@ -325,7 +410,7 @@ export interface AuthorNoteSnapshotDto {
 
 export type ClientMessage =
   | { type: "chat.send"; chatId: string; text: string; speakers?: string[] }
-  | { type: "chat.regenerate"; chatId: string; messageId: string; expectedText: string }
+  | { type: "chat.regenerate"; chatId: string; messageId: string; expectedText: string; instruction?: string }
   | { type: "chat.abort"; chatId: string }
   | { type: "chat.sync"; chatId: string }
   | { type: "ping" };
@@ -336,8 +421,8 @@ export type ServerEvent =
   | { type: "hello"; version: string; maintenance?: string }
   | { type: "pong" }
   /** 本轮生成开始 */
-  | { type: "chat.started"; chatId: string; message: ChatMessageDto }
-  | { type: "chat.regenerating"; chatId: string }
+  | { type: "chat.started"; chatId: string; message: ChatMessageDto; startedAt: string }
+  | { type: "chat.regenerating"; chatId: string; startedAt: string }
   | { type: "chat.speaker"; chatId: string; character: string; stagedMessages: ChatMessageDto[] }
   /** Absolute persisted activity state; safe to replay after reconnect. */
   | { type: "chat.activity"; chatId: string; activity: ChatActivityDto }
@@ -388,7 +473,7 @@ export interface LibraryBackupPreviewDto {
   files: number;
   bytes: number;
   counts: Record<string, number>;
-  settings?: Pick<ConnectionDto, "persona" | "contextMode" | "activePreset" | "activeWorlds" | "worldInfo" | "outputProtocol" | "protocolStrict" | "compression" | "takeover"> & { thinkingLevel: string; toolsEnabled: boolean };
+  settings?: Pick<ConnectionDto, "persona" | "contextMode" | "activePreset" | "activeWorlds" | "worldInfo" | "outputProtocol" | "protocolStrict" | "compression" | "takeover" | "branches"> & { thinkingLevel: string; toolsEnabled: boolean };
 }
 
 export interface LibraryHistoryDto { id: string; createdAt: string; bytes: number; revision: string }

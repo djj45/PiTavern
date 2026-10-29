@@ -432,7 +432,7 @@ try {
   sockets[0].send("null"); sockets[0].send(JSON.stringify({ type: "ping" }));
   await until(() => wsEvents[0].some((event) => event.type === "pong"));
   const state = chatReducer({}, { type: "chat.snapshot", chatId: imported.id, snapshot: manager.snapshot(imported.id)! });
-  const running = chatReducer(state, { type: "chat.regenerating", chatId: imported.id });
+  const running = chatReducer(state, { type: "chat.regenerating", chatId: imported.id, startedAt: new Date().toISOString() });
   assert.equal(running[imported.id].items.length, state[imported.id].items.length);
   assert.equal(running[imported.id].streamingText, "");
   const connectionResponse = await fetch(base + "/api/connection", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ worldInfo: { scanDepth: 0 } }) });

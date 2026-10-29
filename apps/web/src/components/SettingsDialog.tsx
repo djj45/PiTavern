@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import type { ConnectionDto, PresetSummaryDto, ProviderDto, WorldSummaryDto } from "@pitavern/shared";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DEFAULT_DIALOGUE_PAIRS, type ConnectionDto, type DialoguePairDto, type PresetSummaryDto, type ProviderDto, type ReasoningLevel, type WorldSummaryDto } from "@pitavern/shared";
 import { INSTRUCT_TEMPLATES } from "@pitavern/shared";
 import { api } from "../api.ts";
+import { ModelDiscovery } from "./ModelDiscovery.tsx";
 
 interface SettingsDialogProps {
   connection: ConnectionDto | null;
   onClose: () => void;
-  onSaved: (restartRequired?: boolean) => void;
+  onSaved: (restartRequired?: boolean, silent?: boolean) => void;
   onError: (message: string) => void;
   onNotice?: (message: string) => void;
 }
@@ -21,17 +22,36 @@ interface TestState {
   result: string | null;
 }
 
+/** 没有模型、没有密钥、地址仍是占位符的连接只是“添加”后的空白草稿，不默认占用界面。 */
+function isBlankProvider(provider: ProviderDto & { apiKeyInput?: string }): boolean {
+  const url = provider.baseUrl.trim().toLowerCase();
+  return provider.models.length === 0 && !provider.hasApiKey && !provider.apiKeyInput?.trim() &&
+    ["", "https:", "https://", "http:", "http://"].includes(url);
+}
+
 export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice }: SettingsDialogProps) {
   const [providers, setProviders] = useState<EditableProvider[]>(() =>
-    (connection?.providers ?? []).map((p) => ({ ...p, apiKeyInput: "", newModelId: "" })),
+    (connection?.providers ?? []).filter((provider) => !isBlankProvider(provider)).map((p) => ({
+      ...p, apiKeyInput: "", newModelId: "",
+      models: p.models.map((model) => ({
+        ...model,
+        // 旧配置只有 reasoning 布尔值；这里把等价的思考等级显式落到表格里。
+        thinkingLevel: model.thinkingLevel ?? (model.reasoning ? (connection?.thinkingLevel && connection.thinkingLevel !== "off" ? connection.thinkingLevel : "high") : "off"),
+      })),
+    })),
   );
   const [defaultProvider, setDefaultProvider] = useState(connection?.defaultProvider ?? "");
   const [defaultModel, setDefaultModel] = useState(connection?.defaultModel ?? "");
   const [stDataDir, setStDataDir] = useState(connection?.stDataDir ?? "");
   const [personaName, setPersonaName] = useState(connection?.persona.name ?? "");
   const [personaDescription, setPersonaDescription] = useState(connection?.persona.description ?? "");
-  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [dirty, setDirty] = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const saving = saveState === "saving";
   const [test, setTest] = useState<TestState>({ running: false, result: null });
+  const [modelTests, setModelTests] = useState<Record<string, { state: "running" | "ok" | "error"; error?: string }>>({});
   const [presets, setPresets] = useState<PresetSummaryDto[]>([]);
   const [worlds, setWorlds] = useState<WorldSummaryDto[]>([]);
   const [contextMode, setContextMode] = useState<"simple" | "bridge" | "takeover">(connection?.contextMode ?? "simple");
@@ -45,12 +65,19 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
   const [keepFullTurns, setKeepFullTurns] = useState(connection?.compression?.keepFullTurns ?? 6);
   const [recentTurns, setRecentTurns] = useState(connection?.takeover?.recentTurns ?? 3);
   const [stateProjection, setStateProjection] = useState(connection?.takeover?.stateProjection ?? true);
+  const [autoGenerate, setAutoGenerate] = useState(connection?.branches?.autoGenerate ?? 0);
+  const [speechColor, setSpeechColor] = useState(connection?.appearance?.speechColor ?? "");
+  const [dialogueColor, setDialogueColor] = useState(connection?.appearance?.dialogueColor ?? "");
+  const [dialoguePairs, setDialoguePairs] = useState<DialoguePairDto[]>(() =>
+    (connection?.appearance?.dialoguePairs ?? DEFAULT_DIALOGUE_PAIRS).map((pair) => ({ ...pair })));
   const [minActivations, setMinActivations] = useState(connection?.worldInfo?.minActivations ?? 0);
   const [minActivationsDepthMax, setMinActivationsDepthMax] = useState(connection?.worldInfo?.minActivationsDepthMax ?? 0);
   const [budgetTokens, setBudgetTokens] = useState(connection?.worldInfo?.budgetTokens ?? 0);
   const [useGroupScoring, setUseGroupScoring] = useState(connection?.worldInfo?.useGroupScoring ?? false);
   const [vectors, setVectors] = useState(connection?.vectors ?? { enabled: false, providerId: "", model: "", queryMessages: 2, maxEntries: 5, scoreThreshold: 0.3 });
   const [vectorTest, setVectorTest] = useState<TestState>({ running: false, result: null });
+  const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
+  const [manualFor, setManualFor] = useState<string | null>(null);
   const textCompletion = providers.find((p) => p.id === defaultProvider)?.apiType === "text";
 
   useEffect(() => {
@@ -83,6 +110,26 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
     setProviders((list) => list.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   };
 
+  const updateModel = (providerId: string, modelId: string, patch: Partial<ProviderDto["models"][number]>) => {
+    setProviders((list) => list.map((p) => p.id !== providerId ? p : {
+      ...p, models: p.models.map((model) => model.id === modelId ? { ...model, ...patch } : model),
+    }));
+  };
+
+  const removeModel = (providerId: string, modelId: string) => {
+    const provider = providers.find((p) => p.id === providerId);
+    const next = provider?.models.find((model) => model.id !== modelId);
+    setProviders((list) => list.map((p) => p.id !== providerId ? p : { ...p, models: p.models.filter((model) => model.id !== modelId) }));
+    if (defaultProvider === providerId && defaultModel === modelId) {
+      setDefaultProvider(next ? providerId : "");
+      setDefaultModel(next?.id ?? "");
+    }
+  };
+
+  const setModelThinkingLevel = (providerId: string, modelId: string, thinkingLevel: ReasoningLevel) => {
+    updateModel(providerId, modelId, { thinkingLevel, reasoning: thinkingLevel !== "off" });
+  };
+
   const addProvider = () => {
     const id = `relay-${Date.now().toString(36)}`;
     setProviders((list) => [
@@ -91,23 +138,30 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
     ]);
   };
 
-  const addModel = (providerId: string) => {
+  const addModel = (providerId: string, discovered?: { id: string; name: string }) => {
     const provider = providers.find((p) => p.id === providerId);
-    const modelId = provider?.newModelId.trim();
-    if (!modelId) return;
-    updateProvider(providerId, {
-      models: [...provider!.models, { id: modelId, name: modelId, reasoning: false, contextWindow: 1_000_000, maxTokens: 16_384 }],
+    const modelId = discovered?.id ?? provider?.newModelId.trim();
+    if (!provider || !modelId) return;
+    setProviders((list) => list.map((p) => p.id !== providerId ? p : {
+      ...p,
+      models: p.models.some((model) => model.id === modelId) ? p.models : [
+        ...p.models, { id: modelId, name: discovered?.name ?? modelId, reasoning: false, thinkingLevel: "off" as ReasoningLevel, contextWindow: 1_000_000, maxTokens: 16_384 },
+      ],
       newModelId: "",
-    });
+    }));
     if (!defaultProvider || !defaultModel) {
       setDefaultProvider(providerId);
       setDefaultModel(modelId);
     }
   };
 
-  const persist = async () => {
+  const persist = async (silent = false) => {
+    // 未配置任何内容的“添加”草稿不落库，也不占默认模型。
+    const keptProviders = providers.filter((provider) => !isBlankProvider(provider));
+    const selectedProvider = keptProviders.find((provider) => provider.id === defaultProvider) ?? keptProviders[0];
+    const selectedModel = selectedProvider?.models.find((model) => model.id === defaultModel) ?? selectedProvider?.models[0];
     const payload = {
-      providers: providers.map((p) => ({
+      providers: keptProviders.map((p) => ({
         id: p.id,
         name: p.name,
         baseUrl: p.baseUrl,
@@ -118,8 +172,8 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         // 空串 = 服务端保持原 key 不变；填了新值 = 更新
         apiKey: p.apiKeyInput,
       })),
-      defaultProvider,
-      defaultModel,
+      defaultProvider: selectedProvider?.id ?? "",
+      defaultModel: selectedModel?.id ?? "",
       stDataDir,
       persona: { name: personaName || "旅人", description: personaDescription },
       contextMode,
@@ -140,28 +194,156 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
       protocolStrict,
       compression: { enabled: compressionEnabled, keepFullTurns },
       takeover: { recentTurns, stateProjection },
+      branches: { autoGenerate },
+      appearance: {
+        speechColor,
+        dialogueColor,
+        dialoguePairs: dialoguePairs.map((pair) => ({
+          open: pair.open.trim(), close: pair.close.trim(), ...(pair.color ? { color: pair.color } : {}),
+        })).filter((pair) => pair.open && pair.close),
+      },
     };
     const result = await api.saveConnection(payload);
-    onSaved(result.restartRequired);
+    onSaved(result.restartRequired, silent);
     return result;
   };
 
-  const save = async () => {
-    setSaving(true);
+  const initialConnection = useRef<ConnectionDto | null>(connection);
+  const initialized = useRef(false);
+  const closing = useRef(false);
+  const mounted = useRef(true);
+  const dirtyRef = useRef(false);
+  const changeSeq = useRef(0);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
+  const onSavedRef = useRef(onSaved); onSavedRef.current = onSaved;
+  const onErrorRef = useRef(onError); onErrorRef.current = onError;
+  const onNoticeRef = useRef(onNotice); onNoticeRef.current = onNotice;
+  const onCloseRef = useRef(onClose); onCloseRef.current = onClose;
+
+  useEffect(() => () => { mounted.current = false; clearTimeout(saveTimer.current); }, []);
+
+  const enqueueSave = useCallback((silent: boolean) => {
+    const sequence = changeSeq.current;
+    const run = saveQueue.current.then(async () => {
+      if (!mounted.current) return { restartRequired: false };
+      setSaveState("saving");
+      try {
+        const result = await persistRef.current(silent);
+        if (!mounted.current) return result;
+        if (changeSeq.current === sequence) {
+          dirtyRef.current = false;
+          setDirty(false);
+          setSaveState("saved");
+        } else {
+          setSaveState("idle");
+        }
+        if (result.restartRequired) setRestartRequired(true);
+        return result;
+      } catch (error) {
+        if (mounted.current) setSaveState("error");
+        if (silent) onErrorRef.current(`自动保存失败: ${(error as Error).message}`);
+        throw error;
+      }
+    });
+    saveQueue.current = run.then(() => undefined, () => undefined);
+    return run;
+  }, []);
+
+  const autoSaveKey = JSON.stringify({
+    providers, defaultProvider, defaultModel, stDataDir, personaName, personaDescription, contextMode, activePreset, activeWorlds,
+    scanDepth, recursionSteps, outputProtocol, protocolStrict, compressionEnabled, keepFullTurns, recentTurns, stateProjection,
+    autoGenerate, minActivations, minActivationsDepthMax, budgetTokens, useGroupScoring, vectors, speechColor, dialogueColor, dialoguePairs,
+  });
+  useEffect(() => {
+    if (!initialized.current) { initialized.current = true; return; }
+    if (closing.current) return;
+    changeSeq.current += 1;
+    dirtyRef.current = true;
+    setDirty(true);
+    setSaveState("idle");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { void enqueueSave(true).catch(() => undefined); }, 700);
+    return () => clearTimeout(saveTimer.current);
+  }, [autoSaveKey, enqueueSave]);
+
+  const flushAndClose = async () => {
+    if (closing.current) return;
+    closing.current = true;
+    clearTimeout(saveTimer.current);
     try {
-      await persist();
-      onClose();
+      while (dirtyRef.current) await enqueueSave(true);
+      onCloseRef.current();
+    } catch {
+      closing.current = false;
+    }
+  };
+
+  const snapshotPayload = (value: ConnectionDto) => ({
+    providers: value.providers.map((p) => ({
+      id: p.id, name: p.name, baseUrl: p.baseUrl, hasApiKey: p.hasApiKey, apiType: p.apiType,
+      ...(p.instruct ? { instruct: p.instruct } : {}), models: p.models.map((model) => ({ ...model })),
+    })),
+    defaultProvider: value.defaultProvider,
+    defaultModel: value.defaultModel,
+    stDataDir: value.stDataDir,
+    persona: value.persona,
+    contextMode: value.contextMode,
+    activePreset: value.activePreset,
+    activeWorlds: value.activeWorlds,
+    worldInfo: value.worldInfo,
+    vectors: value.vectors,
+    outputProtocol: value.outputProtocol,
+    protocolStrict: value.protocolStrict,
+    compression: value.compression,
+    takeover: value.takeover,
+    branches: value.branches,
+    appearance: value.appearance,
+  });
+
+  const discardChanges = async () => {
+    if (closing.current) return;
+    closing.current = true;
+    setEnding(true);
+    clearTimeout(saveTimer.current);
+    try {
+      await saveQueue.current;
+      const initial = initialConnection.current;
+      const result = initial ? await api.saveConnection(snapshotPayload(initial)) : { restartRequired: false };
+      onSavedRef.current(result.restartRequired, true);
+      onNoticeRef.current?.("已放弃本次更改");
+      onCloseRef.current();
     } catch (e) {
-      onError(`保存失败: ${(e as Error).message}`);
-    } finally {
-      setSaving(false);
+      closing.current = false;
+      setEnding(false);
+      onErrorRef.current(`放弃更改失败: ${(e as Error).message}`);
+    }
+  };
+
+  const resetDefaults = async () => {
+    if (closing.current) return;
+    closing.current = true;
+    setEnding(true);
+    clearTimeout(saveTimer.current);
+    try {
+      await saveQueue.current;
+      await api.resetConnectionDefaults();
+      onSavedRef.current(false, true);
+      onNoticeRef.current?.("已恢复默认配置（模型配置除外）");
+      onCloseRef.current();
+    } catch (e) {
+      closing.current = false;
+      setEnding(false);
+      onErrorRef.current(`恢复默认配置失败: ${(e as Error).message}`);
     }
   };
 
   const runTest = async () => {
     setTest({ running: true, result: null });
     try {
-      const saved = await persist();
+      const saved = await enqueueSave(false);
       if (saved.restartRequired) {
         setTest({ running: false, result: "数据目录已更改，请重启服务后再测试" });
         return;
@@ -176,73 +358,90 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
     }
   };
 
+  const testModel = async (providerId: string, modelId: string) => {
+    const key = providerId + "::" + modelId;
+    setModelTests((previous) => ({ ...previous, [key]: { state: "running" } }));
+    try {
+      await enqueueSave(true);
+      const result = await api.testConnection({ providerId, modelId });
+      setModelTests((previous) => ({ ...previous, [key]: result.ok ? { state: "ok" } : { state: "error", error: result.error } }));
+    } catch (e) {
+      setModelTests((previous) => ({ ...previous, [key]: { state: "error", error: (e as Error).message } }));
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={() => void flushAndClose()}>
       <div
-        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-tavern-border bg-tavern-panel p-5"
+        role="dialog" aria-label="设置" aria-modal="true"
+        className="max-h-[88vh] w-full max-w-5xl overflow-y-auto rounded-xl border border-tavern-border bg-tavern-panel p-5"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="mb-4 text-lg font-semibold text-tavern-accent">设置</h2>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-tavern-accent">设置</h2>
+          <button type="button" aria-label="关闭设置" onClick={() => void flushAndClose()}
+            className="rounded-md px-2 py-1 text-tavern-dim hover:text-tavern-text">✕</button>
+        </div>
 
         {/* 模型连接 */}
         <section className="mb-5">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-medium">模型连接（OpenAI 兼容中转 / API）</h3>
-            <button type="button" onClick={addProvider} className="rounded-md bg-tavern-raised px-2 py-0.5 text-xs text-tavern-accent hover:bg-tavern-raised/70">
-              ＋ 添加
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void runTest()} disabled={saving || test.running || vectorTest.running || !defaultProvider}
+                className="rounded-md border border-tavern-border px-3 py-1.5 text-xs text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40">
+                {test.running ? "测试中…" : "测试连通"}
+              </button>
+              <button type="button" onClick={addProvider} className="rounded-md bg-tavern-raised px-2 py-1.5 text-xs text-tavern-accent hover:bg-tavern-raised/70">
+                ＋ 添加
+              </button>
+            </div>
           </div>
+          {test.result && <p role="status" className={"mb-2 text-xs " + (test.result.startsWith("✓") ? "text-emerald-400" : "text-red-400")}>{test.result}</p>}
           {providers.length === 0 && (
             <p className="rounded-md border border-dashed border-tavern-border p-3 text-xs text-tavern-dim">
-              还没有连接。添加一个中转（填 baseUrl 与 API Key），再给它加模型（模型 id 需与中转上游一致，如 gemini-2.5-pro）。
+              还没有连接。添加中转并填写接口地址与 API Key，然后获取模型列表，或手动填写上游的模型 ID。
             </p>
           )}
           <div className="flex flex-col gap-3">
             {providers.map((p) => (
-              <div key={p.id} className="rounded-lg border border-tavern-border bg-tavern-bg p-3">
-                <div className="mb-2 grid grid-cols-2 gap-2">
-                  <input
-                    value={p.name}
-                    onChange={(e) => updateProvider(p.id, { name: e.target.value })}
-                    placeholder="名称"
-                    className="rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
-                  />
-                  <input
-                    value={p.baseUrl}
-                    onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })}
-                    placeholder="https://中转域名/v1"
-                    className="rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
-                  />
+              <div key={p.id} role="group" aria-label={"模型连接：" + p.name} className="min-w-0 rounded-xl border border-tavern-border bg-tavern-bg p-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="min-w-0 text-xs text-tavern-dim">名称 <span className="text-red-400">*</span>
+                    <input aria-label="连接名称" value={p.name} onChange={(e) => updateProvider(p.id, { name: e.target.value })} placeholder="例如：OpenAI 官方"
+                      className="mt-1 w-full rounded-md border border-tavern-border bg-tavern-raised px-2.5 py-2 text-sm text-tavern-text outline-none focus:border-tavern-accent-dim" />
+                  </label>
+                  <label className="min-w-0 text-xs text-tavern-dim">接口类型
+                    <select aria-label={p.name + "接口类型"} value={p.apiType ?? "chat"} onChange={(e) => updateProvider(p.id, { apiType: e.target.value as "chat" | "text" })}
+                      className="mt-1 w-full rounded-md border border-tavern-border bg-tavern-raised px-2.5 py-2 text-sm text-tavern-text outline-none">
+                      <option value="chat">聊天补全（支持工具）</option>
+                      <option value="text">文本补全（OpenAI 兼容）</option>
+                    </select>
+                  </label>
+                  <label className="min-w-0 text-xs text-tavern-dim sm:col-span-2">API Key <span className="text-red-400">*</span>
+                    <div className="relative mt-1">
+                      <input aria-label="API Key" type={visibleKeys[p.id] ? "text" : "password"} value={p.apiKeyInput}
+                        onChange={(e) => updateProvider(p.id, { apiKeyInput: e.target.value })}
+                        placeholder={p.hasApiKey ? "API Key 已保存（留空保持不变）" : "API Key"}
+                        className="w-full rounded-md border border-tavern-border bg-tavern-raised px-2.5 py-2 pr-10 text-sm text-tavern-text outline-none focus:border-tavern-accent-dim" />
+                      <button type="button" onClick={() => setVisibleKeys((old) => ({ ...old, [p.id]: !old[p.id] }))}
+                        aria-label={visibleKeys[p.id] ? "隐藏 API Key" : "显示 API Key"}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-sm text-tavern-dim hover:text-tavern-text">
+                        👁
+                      </button>
+                    </div>
+                  </label>
+                  <label className="min-w-0 text-xs text-tavern-dim sm:col-span-2">API 请求地址 <span className="text-red-400">*</span>
+                    <input aria-label="接口地址" value={p.baseUrl} onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })} placeholder="https://api.example.com/v1"
+                      className="mt-1 w-full rounded-md border border-tavern-border bg-tavern-raised px-2.5 py-2 text-sm text-tavern-text outline-none focus:border-tavern-accent-dim" />
+                    <span className="mt-1 block text-[11px] text-tavern-dim">OpenAI 兼容地址，例如 https://中转域名/v1；填到 /v1 为止。</span>
+                  </label>
                 </div>
-                {p.models.filter((model) => p.id === defaultProvider && model.id === defaultModel).map((model) => <div key={model.id} className="mb-3 grid grid-cols-2 gap-2 rounded border border-tavern-border p-2 text-xs">
-                  <label>上下文长度<input type="number" min={1} max={10000000} aria-label="模型上下文长度" value={model.contextWindow}
-                    onChange={(event) => updateProvider(p.id, { models: p.models.map((item) => item.id === model.id ? { ...item, contextWindow: Number(event.target.value) } : item) })}
-                    className="mt-1 w-full rounded border border-tavern-border bg-tavern-raised p-1.5" /></label>
-                  <label>最大输出 tokens<input type="number" min={1} max={10000000} aria-label="模型最大输出" value={model.maxTokens}
-                    onChange={(event) => updateProvider(p.id, { models: p.models.map((item) => item.id === model.id ? { ...item, maxTokens: Number(event.target.value) } : item) })}
-                    className="mt-1 w-full rounded border border-tavern-border bg-tavern-raised p-1.5" /></label>
-                  <label className="col-span-2">Token 计数方式<select aria-label="Token 计数方式" value={model.tokenizer ?? "auto"}
-                    onChange={(event) => updateProvider(p.id, { models: p.models.map((item) => item.id === model.id ? { ...item, tokenizer: event.target.value as NonNullable<typeof model.tokenizer> } : item) })}
-                    className="ml-2 rounded border border-tavern-border bg-tavern-raised p-1.5">
-                    <option value="auto">自动识别，未知模型估算</option><option value="o200k_base">o200k_base</option>
-                    <option value="cl100k_base">cl100k_base</option><option value="estimate">字符估算</option>
-                  </select></label>
-                  <p className="col-span-2 text-tavern-dim">按模型实际能力填写；中转别名可手动选择对应编码器。桥接预设可覆盖最大输出。</p>
-                </div>)}
-                <label className="mb-2 flex items-center gap-2 text-xs text-tavern-dim">
-                  接口类型
-                  <select aria-label={`${p.name}接口类型`} value={p.apiType ?? "chat"}
-                    onChange={(e) => updateProvider(p.id, { apiType: e.target.value as "chat" | "text" })}
-                    className="rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-tavern-text">
-                    <option value="chat">聊天补全（支持工具）</option>
-                    <option value="text">文本补全（OpenAI 兼容）</option>
-                  </select>
-                </label>
                 {p.apiType === "text" && (
-                  <div className="mb-3 rounded border border-tavern-border p-2 text-xs">
+                  <div className="mt-3 rounded-lg border border-tavern-border bg-tavern-panel/40 p-3 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
                       <label>Instruct 模板
-                        <select aria-label={`${p.name}Instruct 模板`} value={Object.entries(INSTRUCT_TEMPLATES).find(([, value]) => JSON.stringify(value) === JSON.stringify(p.instruct ?? INSTRUCT_TEMPLATES.ChatML))?.[0] ?? "custom"}
+                        <select aria-label={p.name + "Instruct 模板"} value={Object.entries(INSTRUCT_TEMPLATES).find(([, value]) => JSON.stringify(value) === JSON.stringify(p.instruct ?? INSTRUCT_TEMPLATES.ChatML))?.[0] ?? "custom"}
                           onChange={(e) => { if (INSTRUCT_TEMPLATES[e.target.value]) updateProvider(p.id, { instruct: INSTRUCT_TEMPLATES[e.target.value] }); }}
                           className="ml-2 rounded border border-tavern-border bg-tavern-raised px-2 py-1">
                           {Object.keys(INSTRUCT_TEMPLATES).map((name) => <option key={name}>{name}</option>)}
@@ -267,47 +466,118 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
                     </details>
                   </div>
                 )}
-                <input
-                  type="password"
-                  value={p.apiKeyInput}
-                  onChange={(e) => updateProvider(p.id, { apiKeyInput: e.target.value })}
-                  placeholder={p.hasApiKey ? "API Key 已保存（留空保持不变）" : "API Key"}
-                  className="mb-2 w-full rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-sm outline-none"
-                />
-                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                  {p.models.map((m) => {
-                    const selected = defaultProvider === p.id && defaultModel === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => {
-                          setDefaultProvider(p.id);
-                          setDefaultModel(m.id);
-                        }}
-                        onDoubleClick={() => updateProvider(p.id, { models: p.models.filter((x) => x.id !== m.id) })}
-                        title="单击设为默认；双击移除"
-                        className={`rounded-full px-2.5 py-0.5 text-xs ${
-                          selected ? "bg-tavern-accent text-tavern-bg" : "bg-tavern-raised text-tavern-dim hover:text-tavern-text"
-                        }`}
-                      >
-                        {m.id}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    value={p.newModelId}
-                    onChange={(e) => updateProvider(p.id, { newModelId: e.target.value })}
-                    onKeyDown={(e) => e.key === "Enter" && addModel(p.id)}
-                    placeholder="模型 id，如 gemini-2.5-pro"
-                    className="flex-1 rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-xs outline-none"
-                  />
-                  <button type="button" onClick={() => addModel(p.id)} className="rounded-md bg-tavern-raised px-2 py-1.5 text-xs text-tavern-accent">
-                    加模型
+
+                <div className="mt-4 flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-medium">模型列表</h4>
+                    <p className="mt-0.5 text-[11px] leading-5 text-tavern-dim">思考等级保持「关闭」按普通模型使用；官方 API 的推理模型可选低/中/高。中转站通常保持关闭。</p>
+                  </div>
+                  <button type="button" onClick={() => setManualFor((old) => old === p.id ? null : p.id)}
+                    className="rounded-md border border-tavern-border px-3 py-1.5 text-xs text-tavern-accent hover:border-tavern-accent-dim">
+                    ＋ 手动添加
                   </button>
                 </div>
+
+                {manualFor === p.id && (
+                  <div className="mt-2 flex flex-wrap gap-2 rounded-lg border border-dashed border-tavern-border p-2">
+                    <input aria-label="手动模型 ID" value={p.newModelId} onChange={(e) => updateProvider(p.id, { newModelId: e.target.value })}
+                      onKeyDown={(e) => e.key === "Enter" && addModel(p.id)} placeholder="输入上游模型 ID，如 gpt-6.1-sol-max"
+                      className="min-w-0 flex-1 rounded-md border border-tavern-border bg-tavern-raised px-2 py-1.5 text-xs outline-none" />
+                    <button type="button" onClick={() => { addModel(p.id); setManualFor(null); }}
+                      className="rounded-md bg-tavern-raised px-3 py-1.5 text-xs text-tavern-accent">添加模型</button>
+                  </div>
+                )}
+
+                <ModelDiscovery provider={p} onAdd={(model) => addModel(p.id, model)} />
+                {p.models.length === 0 ? (
+                  <p className="mt-2 rounded-lg border border-dashed border-tavern-border px-3 py-4 text-xs text-tavern-dim">还没有模型。点上方「获取模型列表」，或使用「手动添加」。</p>
+                ) : (
+                  <div className="mt-2 overflow-x-auto rounded-lg border border-tavern-border">
+                    <table className="w-full min-w-[900px] border-collapse text-xs">
+                      <thead className="bg-tavern-raised/60 text-tavern-dim">
+                        <tr>
+                          <th className="w-12 px-2 py-2 text-left font-medium">默认</th>
+                          <th className="px-2 py-2 text-left font-medium">菜单显示名</th>
+                          <th className="px-2 py-2 text-left font-medium">实际请求模型</th>
+                          <th className="w-28 px-2 py-2 text-left font-medium">上下文窗口</th>
+                          <th className="w-24 px-2 py-2 text-left font-medium">最大输出</th>
+                          <th className="w-24 px-2 py-2 text-left font-medium">思考等级</th>
+                          <th className="w-28 px-2 py-2 text-left font-medium">Token 计数</th>
+                          <th className="w-14 px-2 py-2 text-center font-medium">测试</th>
+                          <th className="w-10 px-2 py-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {p.models.map((model) => {
+                          const isDefault = defaultProvider === p.id && defaultModel === model.id;
+                          const testState = modelTests[p.id + "::" + model.id];
+                          return (
+                            <tr key={model.id} className="border-t border-tavern-border/70 align-top">
+                              <td className="px-2 py-2 align-middle">
+                                <input type="radio" name={"default-model-" + p.id} aria-label={"设为默认模型：" + model.id} checked={isDefault}
+                                  onChange={() => { setDefaultProvider(p.id); setDefaultModel(model.id); }} className="accent-tavern-accent" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input aria-label={"模型显示名：" + model.id} value={model.name}
+                                  onChange={(e) => updateModel(p.id, model.id, { name: e.target.value })}
+                                  className="w-full rounded border border-tavern-border bg-tavern-raised px-1.5 py-1 text-xs text-tavern-text" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input aria-label={"请求模型 ID：" + model.id} value={model.id}
+                                  onChange={(e) => { const next = e.target.value; const wasDefault = defaultProvider === p.id && defaultModel === model.id; updateModel(p.id, model.id, { id: next }); if (wasDefault) setDefaultModel(next); }}
+                                  className="w-full rounded border border-tavern-border bg-tavern-raised px-1.5 py-1 font-mono text-xs text-tavern-text" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input type="number" min={1} max={10000000} aria-label={"模型上下文长度：" + model.id} value={model.contextWindow}
+                                  onChange={(e) => updateModel(p.id, model.id, { contextWindow: Number(e.target.value) })}
+                                  className="w-full rounded border border-tavern-border bg-tavern-raised px-1.5 py-1 text-xs text-tavern-text" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input type="number" min={1} max={10000000} aria-label={"模型最大输出：" + model.id} value={model.maxTokens}
+                                  onChange={(e) => updateModel(p.id, model.id, { maxTokens: Number(e.target.value) })}
+                                  className="w-full rounded border border-tavern-border bg-tavern-raised px-1.5 py-1 text-xs text-tavern-text" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <select aria-label={"思考等级：" + model.id} value={model.thinkingLevel ?? "off"}
+                                  onChange={(e) => setModelThinkingLevel(p.id, model.id, e.target.value as ReasoningLevel)}
+                                  className="w-full rounded border border-tavern-border bg-tavern-raised px-1 py-1 text-xs text-tavern-text">
+                                  <option value="off">关闭</option><option value="minimal">最低</option><option value="low">低</option>
+                                  <option value="medium">中</option><option value="high">高</option>
+                                </select>
+                              </td>
+                              <td className="px-2 py-2">
+                                <select aria-label={"Token 计数方式：" + model.id} value={model.tokenizer ?? "auto"}
+                                  onChange={(e) => updateModel(p.id, model.id, { tokenizer: e.target.value as NonNullable<typeof model.tokenizer> })}
+                                  className="w-full rounded border border-tavern-border bg-tavern-raised px-1 py-1 text-xs text-tavern-text">
+                                  <option value="auto">自动</option><option value="o200k_base">o200k</option>
+                                  <option value="cl100k_base">cl100k</option><option value="estimate">估算</option>
+                                </select>
+                              </td>
+                              <td className="px-2 py-2 text-center align-middle">
+                                <button type="button" disabled={testState?.state === "running"}
+                                  aria-label={"测试模型：" + model.id + (testState?.state === "error" && testState.error ? "，失败：" + testState.error : "")}
+                                  onClick={() => void testModel(p.id, model.id)}
+                                  className={"rounded px-1.5 py-1 text-sm leading-none transition-colors disabled:opacity-50 " + (testState?.state === "ok"
+                                    ? "text-emerald-400"
+                                    : testState?.state === "error"
+                                      ? "text-red-400"
+                                      : "text-tavern-dim hover:text-tavern-accent")}>
+                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden="true">
+                                    <path d="M13 2 4.5 13H11l-1 9L19 11h-6.5L13 2Z" />
+                                  </svg>
+                                </button>
+                              </td>
+                              <td className="px-2 py-2 text-right">
+                                <button type="button" aria-label={"删除模型：" + model.id} onClick={() => removeModel(p.id, model.id)}
+                                  className="rounded px-1.5 py-1 text-tavern-dim hover:bg-red-500/10 hover:text-red-400">🗑</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -487,7 +757,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
             <button type="button" disabled={saving || test.running || vectorTest.running} className="rounded border border-tavern-border px-2 py-1 text-xs disabled:opacity-40" onClick={async () => {
               setVectorTest({ running: true, result: null });
               try {
-                await persist(); const result = await api.testVectors();
+                await enqueueSave(false); const result = await api.testVectors();
                 setVectorTest({ running: false, result: `✓ 连接成功（${result.dimensions} 维）` });
               } catch (error) { setVectorTest({ running: false, result: `✗ ${(error as Error).message}` }); }
             }}>{vectorTest.running ? "测试中…" : "保存并测试向量连接"}</button>
@@ -545,11 +815,83 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
           </div>
         </section>
 
+        {/* 多分支 */}
+        <section className="mb-5 rounded-lg border border-tavern-border bg-tavern-bg p-3">
+          <h3 className="mb-2 text-sm font-medium">剧情分支与自动候选</h3>
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            每次正常回复后自动追加
+            <select aria-label="自动候选分支数" value={autoGenerate}
+              onChange={(e) => setAutoGenerate(Number(e.target.value))}
+              className="rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-tavern-text">
+              <option value={0}>关闭</option>
+              {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count} 个额外候选</option>)}
+            </select>
+          </label>
+          <p className="mt-2 text-xs leading-5 text-tavern-dim">
+            开启后，每次回复成功会自动再生成指定数量的替代走向，并保留为可切换的分支；每多一个候选就多一次模型调用，会额外消耗 token/费用。
+            生成过程中可以随时停止。历史分支会保留后续剧情，可以回到任意分叉点切换到另一条路线继续写。
+          </p>
+        </section>
+
+        {/* 聊天配色 */}
+        <section className="mb-5 rounded-lg border border-tavern-border bg-tavern-bg p-3">
+          <h3 className="mb-2 text-sm font-medium">聊天配色</h3>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="w-24">角色回复</span>
+              <input type="color" aria-label="角色回复颜色" value={speechColor || "#e8e2f0"} onChange={(event) => setSpeechColor(event.target.value)}
+                className="h-8 w-12 cursor-pointer rounded border border-tavern-border bg-tavern-raised" />
+              <span className="text-xs text-tavern-dim">{speechColor || "未自定义"}</span>
+              <button type="button" onClick={() => setSpeechColor("")} className="rounded border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-tavern-text">跟随主题</button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="w-24">默认对白</span>
+              <input type="color" aria-label="对白颜色" value={dialogueColor || "#d4a24e"} onChange={(event) => setDialogueColor(event.target.value)}
+                className="h-8 w-12 cursor-pointer rounded border border-tavern-border bg-tavern-raised" />
+              <span className="text-xs text-tavern-dim">{dialogueColor || "未自定义"}</span>
+              <button type="button" onClick={() => setDialogueColor("")} className="rounded border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-tavern-text">跟随强调色</button>
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm">对白符号</span>
+              <button type="button" onClick={() => setDialoguePairs((pairs) => [...pairs, { open: "『", close: "』" }])}
+                className="rounded border border-tavern-border px-2 py-1 text-xs text-tavern-accent hover:border-tavern-accent-dim">＋ 添加符号</button>
+            </div>
+            <div className="mt-1.5 flex flex-col gap-1.5">
+              {dialoguePairs.map((pair, index) => (
+                <div key={index} className="flex flex-wrap items-center gap-2">
+                  <input aria-label={"对白起始符号 " + (index + 1)} value={pair.open} maxLength={8}
+                    onChange={(event) => setDialoguePairs((pairs) => pairs.map((item, itemIndex) => itemIndex === index ? { ...item, open: event.target.value } : item))}
+                    className="w-16 rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-sm text-tavern-text" />
+                  <span className="text-xs text-tavern-dim">至</span>
+                  <input aria-label={"对白结束符号 " + (index + 1)} value={pair.close} maxLength={8}
+                    onChange={(event) => setDialoguePairs((pairs) => pairs.map((item, itemIndex) => itemIndex === index ? { ...item, close: event.target.value } : item))}
+                    className="w-16 rounded border border-tavern-border bg-tavern-raised px-2 py-1 text-sm text-tavern-text" />
+                  <input type="color" aria-label={"对白符号颜色 " + (index + 1)} value={pair.color || dialogueColor || "#d4a24e"}
+                    onChange={(event) => setDialoguePairs((pairs) => pairs.map((item, itemIndex) => itemIndex === index ? { ...item, color: event.target.value } : item))}
+                    className="h-8 w-12 cursor-pointer rounded border border-tavern-border bg-tavern-raised" />
+                  <button type="button" aria-label={"清除对白符号颜色 " + (index + 1)} title="跟随默认对白颜色"
+                    onClick={() => setDialoguePairs((pairs) => pairs.map((item, itemIndex) => itemIndex === index ? { ...item, color: undefined } : item))}
+                    className="rounded border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-tavern-text">默认</button>
+                  <button type="button" aria-label={"删除对白符号 " + (index + 1)} onClick={() => setDialoguePairs((pairs) => pairs.filter((_, itemIndex) => itemIndex !== index))}
+                    className="rounded border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-red-400">删除</button>
+                </div>
+              ))}
+              {dialoguePairs.length === 0 && <p className="text-xs text-tavern-dim">还没有符号对；添加后才会给对白上色。</p>}
+            </div>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-tavern-dim">
+            默认「」和“”；两个符号之间（含符号）使用对白颜色。每组符号可单独设色，点「默认」跟随默认对白颜色/强调色。符号支持自定义，最多 20 组。思考文字不再单独设色。
+          </p>
+        </section>
+
         {/* persona 与数据目录 */}
         <section className="mb-5 grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-sm">用户名（persona）</label>
             <input
+              aria-label="用户名"
               value={personaName}
               onChange={(e) => setPersonaName(e.target.value)}
               className="w-full rounded-md border border-tavern-border bg-tavern-bg px-2 py-1.5 text-sm outline-none"
@@ -558,6 +900,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
           <div>
             <label className="mb-1 block text-sm">用户人设</label>
             <input
+              aria-label="用户人设"
               value={personaDescription}
               onChange={(e) => setPersonaDescription(e.target.value)}
               placeholder="一句话人设，可选"
@@ -569,6 +912,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
               ST 数据目录 <span className="text-xs text-tavern-dim">（可指向现有 SillyTavern 的 data/default-user，改后需重启）</span>
             </label>
             <input
+              aria-label="ST 数据目录"
               value={stDataDir}
               onChange={(e) => setStDataDir(e.target.value)}
               className="w-full rounded-md border border-tavern-border bg-tavern-bg px-2 py-1.5 text-sm outline-none"
@@ -576,22 +920,21 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
           </div>
         </section>
 
-        <div className="flex items-center gap-3 border-t border-tavern-border pt-4">
-          <button
-            type="button"
-            onClick={runTest}
-            disabled={saving || test.running || vectorTest.running || !defaultProvider}
-            className="rounded-md border border-tavern-border px-3 py-1.5 text-sm text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40"
-          >
-            {test.running ? "测试中…" : "保存并测试连通"}
-          </button>
-          {test.result && <span className={`text-sm ${test.result.startsWith("✓") ? "text-emerald-400" : "text-red-400"}`}>{test.result}</span>}
-          <div className="ml-auto flex gap-2">
-            <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-tavern-dim hover:text-tavern-text">
-              取消
+        <div className="flex flex-wrap items-center gap-3 border-t border-tavern-border pt-4">
+          <p role="status" className="text-xs text-tavern-dim">
+            {saveState === "saving" ? "正在自动保存…" : saveState === "error" ? "自动保存失败，请检查错误提示"
+              : dirty ? "等待自动保存…" : restartRequired ? "已自动保存；数据目录更改需重启服务后生效"
+                : saveState === "saved" ? "已自动保存" : "更改会自动保存"}
+          </p>
+          <div className="ml-auto flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => void resetDefaults()} disabled={ending || test.running || vectorTest.running}
+              title="保留模型连接、API Key、默认模型和数据目录"
+              className="rounded-md border border-tavern-border px-3 py-1.5 text-sm text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40">
+              恢复默认配置（模型配置除外）
             </button>
-            <button type="button" onClick={save} disabled={saving || test.running || vectorTest.running} className="rounded-md bg-tavern-accent px-4 py-1.5 text-sm font-medium text-tavern-bg">
-              {saving ? "保存中…" : "保存"}
+            <button type="button" onClick={() => void discardChanges()} disabled={ending || test.running || vectorTest.running}
+              className="rounded-md border border-tavern-border px-3 py-1.5 text-sm text-tavern-dim hover:border-red-400 hover:text-red-400 disabled:opacity-40">
+              放弃本次更改
             </button>
           </div>
         </div>

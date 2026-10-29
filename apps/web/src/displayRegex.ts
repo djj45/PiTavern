@@ -1,4 +1,22 @@
 import type { ChatDisplayDto } from "@pitavern/shared";
+import { substituteMacros } from "@pitavern/shared/macros";
+
+/** 只读展开显示层宏；失败时退回原文，不阻断消息渲染。 */
+function displayMacros(text: string, display?: ChatDisplayDto): string {
+  if (!display || !text.includes("{{")) return text;
+  try {
+    return substituteMacros(text, {
+      char: display.char,
+      user: display.user,
+      personaDescription: display.personaDescription,
+      variables: display.variables ? { ...display.variables } : undefined,
+      lastUserMessage: display.lastUserMessage,
+      readOnly: true,
+    });
+  } catch {
+    return text;
+  }
+}
 
 interface Job {
   text: string; placement: number; depth: number; display: ChatDisplayDto;
@@ -33,15 +51,17 @@ function pump() {
       if (current === job && worker === activeWorker) finish(new Error("显示正则执行失败，已显示原文"));
     };
     timer = setTimeout(() => finish(new Error("显示正则超时，已显示原文；请简化表达式")), 1500);
-    worker.postMessage({ text: job.text, scripts: job.display.scripts, context: { placement: job.placement, depth: job.depth,
-      layer: "display", env: { ...job.display, readOnly: true } } });
+    worker.postMessage({ text: displayMacros(job.text, job.display), scripts: job.display.scripts, context: { placement: job.placement, depth: job.depth,
+      layer: "display", env: { ...job.display, variables: job.display.variables ? { ...job.display.variables } : undefined, readOnly: true } } });
   } catch { finish(new Error("无法启动显示正则线程，已显示原文")); }
 }
 
 /** Only the worker executes user regex. Cancelling a stream update also terminates a stuck task. */
 export function displayMessageIsolated(text: string, placement: number, depth: number, display?: ChatDisplayDto, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) return Promise.reject(new Error("显示任务已取消"));
-  if (!text || !display?.scripts.length) return Promise.resolve(text);
+  if (!text) return Promise.resolve(text);
+  const rendered = displayMacros(text, display);
+  if (!display?.scripts.length) return Promise.resolve(rendered);
   if (queue.length >= 128) return Promise.reject(new Error("显示正则任务过多，已显示原文"));
   return new Promise((resolve, reject) => {
     const job: Job = { text, placement, depth, display, signal, resolve, reject, abort: () => {

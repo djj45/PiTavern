@@ -12,7 +12,7 @@ import type {
 } from "@pitavern/shared";
 import { PITAVERN_VERSION } from "@pitavern/shared";
 import type { TavernConfig } from "../config.ts";
-import { saveConfig, seedDataDirs } from "../config.ts";
+import { defaultConfig, saveConfig, seedDataDirs } from "../config.ts";
 import { listPresets, presetsDir } from "../context/preset.ts";
 import { normalizeWorldFile } from "../context/worldinfo.ts";
 import { validateAuthorNote } from "../context/author-note.ts";
@@ -21,6 +21,7 @@ import { embedTexts } from "../context/vectors.ts";
 import { parseCardFromPng } from "../stdata/png.ts";
 import { importCardArchive } from "../stdata/card-import.ts";
 import { providerDtoList, buildModels, resolveModel } from "../providers/models.ts";
+import { discoverModels, ModelDiscoveryError } from "../providers/discovery.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { CharacterStore } from "../stdata/characters.ts";
 import type { ChatStore } from "../stdata/chats.ts";
@@ -39,6 +40,8 @@ export interface HttpDeps {
   webDistDir: string | null;
   stDataDir: string;
 }
+
+const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 
 function boundedNumber(value: unknown, label: string, min: number, max: number, integer = false): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
@@ -173,10 +176,13 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       activeWorlds: config.activeWorlds,
       worldInfo: config.worldInfo,
       vectors: config.vectors,
+      thinkingLevel: config.thinkingLevel,
       outputProtocol: config.outputProtocol,
       protocolStrict: config.protocolStrict,
       compression: config.compression,
       takeover: config.takeover,
+      branches: config.branches,
+      appearance: config.appearance,
     };
     res.json(dto);
   });
@@ -220,15 +226,19 @@ export function createHttpApp(deps: HttpDeps): express.Express {
           apiKey,
           apiType: p.apiType === undefined ? old?.apiType ?? "chat" : p.apiType,
           instruct: p.instruct === undefined ? old?.instruct : normalizeInstruct(p.instruct),
-          models: p.models.map((m) => ({
-            id: m.id,
-            name: m.name || m.id,
-            reasoning: m.reasoning ?? false,
-            contextWindow: boundedNumber(m.contextWindow ?? 1_000_000, "上下文长度", 1, 10_000_000, true),
-            maxTokens: boundedNumber(m.maxTokens ?? 16_384, "最大输出", 1, 10_000_000, true),
-            tokenizer: ["auto", "cl100k_base", "o200k_base", "estimate"].includes(m.tokenizer ?? "auto") ? m.tokenizer ?? "auto"
-              : (() => { throw new Error("不支持的 token 计数方式"); })(),
-          })),
+          models: p.models.map((m) => {
+            if (m.thinkingLevel !== undefined && !REASONING_LEVELS.includes(m.thinkingLevel)) throw new Error("不支持的思考等级");
+            return {
+              id: m.id,
+              name: m.name || m.id,
+              reasoning: m.thinkingLevel !== undefined ? m.thinkingLevel !== "off" : (m.reasoning ?? false),
+              ...(m.thinkingLevel !== undefined ? { thinkingLevel: m.thinkingLevel } : {}),
+              contextWindow: boundedNumber(m.contextWindow ?? 1_000_000, "上下文长度", 1, 10_000_000, true),
+              maxTokens: boundedNumber(m.maxTokens ?? 16_384, "最大输出", 1, 10_000_000, true),
+              tokenizer: ["auto", "cl100k_base", "o200k_base", "estimate"].includes(m.tokenizer ?? "auto") ? m.tokenizer ?? "auto"
+                : (() => { throw new Error("不支持的 token 计数方式"); })(),
+            };
+          }),
         };
       });
       if (typeof body.defaultProvider === "string") next.defaultProvider = body.defaultProvider;
@@ -253,6 +263,10 @@ export function createHttpApp(deps: HttpDeps): express.Express {
           if (wi[key] !== undefined) next.worldInfo[key] = boundedNumber(wi[key], key, 0, key === "budgetTokens" ? 1000000 : 1000, true);
         }
       }
+      if (typeof body.thinkingLevel === "string") {
+        if (!REASONING_LEVELS.includes(body.thinkingLevel as typeof REASONING_LEVELS[number])) throw new Error("不支持的思考强度");
+        next.thinkingLevel = body.thinkingLevel as ConnectionDto["thinkingLevel"];
+      }
       if (body.outputProtocol === "native" || body.outputProtocol === "game_tool") next.outputProtocol = body.outputProtocol;
       if (typeof body.protocolStrict === "boolean") next.protocolStrict = body.protocolStrict;
       if (body.compression && typeof body.compression === "object") {
@@ -264,6 +278,31 @@ export function createHttpApp(deps: HttpDeps): express.Express {
         const t = body.takeover as Partial<ConnectionDto["takeover"]>;
         if (typeof t.recentTurns === "number") next.takeover.recentTurns = Math.max(1, Math.min(50, t.recentTurns));
         if (typeof t.stateProjection === "boolean") next.takeover.stateProjection = t.stateProjection;
+      }
+      if (body.branches && typeof body.branches === "object") {
+        const b = body.branches as Partial<ConnectionDto["branches"]>;
+        if (typeof b.autoGenerate === "number") next.branches.autoGenerate = boundedNumber(b.autoGenerate, "自动候选分支数", 0, 4, true);
+      }
+      if (body.appearance && typeof body.appearance === "object") {
+        const a = body.appearance as Partial<ConnectionDto["appearance"]>;
+        for (const key of ["speechColor", "dialogueColor"] as const) {
+          const value = a[key];
+          if (value === undefined) continue;
+          if (typeof value !== "string" || (value !== "" && !/^#[0-9a-f]{6}$/i.test(value))) throw new Error("文字颜色必须是 #RRGGBB 或留空");
+          next.appearance[key] = value;
+        }
+        if (a.dialoguePairs !== undefined) {
+          if (!Array.isArray(a.dialoguePairs) || a.dialoguePairs.length > 20) throw new Error("对白符号最多 20 组");
+          next.appearance.dialoguePairs = a.dialoguePairs.map((pair) => {
+            if (!pair || typeof pair.open !== "string" || typeof pair.close !== "string") throw new Error("对白符号参数无效");
+            const open = pair.open.trim(), close = pair.close.trim();
+            if (!open || !close || open.length > 8 || close.length > 8 || open === close) throw new Error("对白起始/结束符号需为 1–8 个字符且不能相同");
+            const color = typeof pair.color === "string" ? pair.color.trim() : "";
+            if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error("对白符号颜色必须是 #RRGGBB 或留空");
+            return { open, close, ...(color ? { color } : {}) };
+          });
+        }
+        delete (next.appearance as unknown as Record<string, unknown>).thinkingColor;
       }
       if (body.vectors && typeof body.vectors === "object") {
         const v = body.vectors;
@@ -304,10 +343,31 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     }
   });
 
-  /** 探活：用当前默认模型发 1 token 请求 */
-  app.post("/api/connection/test", async (_req, res) => {
+  app.post("/api/connection/models", async (req, res) => {
+    const abort = new AbortController();
+    const cancel = () => { if (!res.writableEnded) abort.abort(); };
+    res.on("close", cancel);
     try {
-      const model = resolveModel(modelsRef.current, config);
+      const models = await discoverModels(config.providers, req.body, { signal: abort.signal });
+      if (!res.destroyed) res.json({ models });
+    } catch (error) {
+      if (!res.destroyed) res.status(error instanceof ModelDiscoveryError ? error.status : 500)
+        .json({ error: error instanceof ModelDiscoveryError ? error.message : "获取模型列表失败" });
+    } finally { res.off("close", cancel); }
+  });
+
+  /** 探活：用默认模型或指定模型发 1 token 请求 */
+  app.post("/api/connection/test", async (req, res) => {
+    try {
+      const providerId = typeof req.body?.providerId === "string" ? req.body.providerId : "";
+      const modelId = typeof req.body?.modelId === "string" ? req.body.modelId : "";
+      let model;
+      if (providerId && modelId) {
+        model = modelsRef.current.getModel(providerId, modelId);
+        if (!model) throw new Error(`模型 ${providerId}/${modelId} 不存在`);
+      } else {
+        model = resolveModel(modelsRef.current, config);
+      }
       const stream = modelsRef.current.streamSimple(model, {
         systemPrompt: "You are a connectivity check. Reply with exactly: ok",
         messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
@@ -321,6 +381,54 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       res.json({ ok: sawText, provider: model.provider, model: model.id });
     } catch (error) {
       res.status(400).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** 恢复非模型默认配置；连接、密钥、默认模型和数据目录保持不变。 */
+  app.post("/api/connection/reset", (_req, res) => {
+    try {
+      const defaults = defaultConfig();
+      const next: TavernConfig = {
+        ...defaults,
+        port: config.port,
+        stDataDir: config.stDataDir,
+        providers: structuredClone(config.providers),
+        defaultProvider: config.defaultProvider,
+        defaultModel: config.defaultModel,
+      };
+      saveConfig(next);
+      Object.assign(config, next);
+      modelsRef.current = buildModels(next);
+      sessions.invalidateAll();
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** 输入框底部的思考等级：只更新指定模型的默认等级，避免整份 providers 回写。 */
+  app.patch("/api/connection/model", (req, res) => {
+    try {
+      const { providerId, modelId, thinkingLevel } = req.body ?? {};
+      if (typeof providerId !== "string" || typeof modelId !== "string" || !REASONING_LEVELS.includes(thinkingLevel)) {
+        res.status(400).json({ error: "模型思考等级参数无效" });
+        return;
+      }
+      const next = structuredClone(config);
+      const model = next.providers.find((p) => p.id === providerId)?.models.find((m) => m.id === modelId);
+      if (!model) {
+        res.status(404).json({ error: "模型不存在" });
+        return;
+      }
+      model.thinkingLevel = thinkingLevel;
+      model.reasoning = thinkingLevel !== "off";
+      saveConfig(next);
+      Object.assign(config, next);
+      modelsRef.current = buildModels(next);
+      sessions.invalidateAll();
+      res.json({ ok: true, thinkingLevel });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
@@ -441,6 +549,28 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     } catch (error) { res.status(409).json({ error: (error as Error).message }); }
   });
 
+  app.patch("/api/chat/meta", (req, res) => {
+    const { chatId, pinned, archived, displayName } = req.body ?? {};
+    if (typeof chatId !== "string" ||
+        (pinned !== undefined && typeof pinned !== "boolean") ||
+        (archived !== undefined && typeof archived !== "boolean") ||
+        (displayName !== undefined && displayName !== null && (typeof displayName !== "string" || displayName.trim().length > 100)) ||
+        (pinned === undefined && archived === undefined && displayName === undefined)) {
+      res.status(400).json({ error: "对话信息参数无效" });
+      return;
+    }
+    try {
+      sessions.updateChatMeta(chatId, {
+        ...(pinned !== undefined ? { pinned } : {}),
+        ...(archived !== undefined ? { archived } : {}),
+        ...(displayName !== undefined ? { displayName: typeof displayName === "string" ? displayName.trim() : null } : {}),
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.patch("/api/chat/message", (req, res) => {
     const { chatId, messageId, text, expectedText } = req.body ?? {};
     if ([chatId, messageId, text, expectedText].some((value) => typeof value !== "string") || !text.trim() || text.length > 1_000_000) {
@@ -469,6 +599,15 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       res.status(400).json({ error: "历史分页参数无效" }); return;
     }
     try { res.json(chats.page(chatId, Number(before), revision)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/chat/greeting", (req, res) => {
+    const { chatId, selected, revision } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof revision !== "string" || !Number.isInteger(selected)) {
+      res.status(400).json({ error: "开场白参数无效" }); return;
+    }
+    try { sessions.selectGreeting(chatId, selected, revision); res.json({ ok: true }); }
     catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
@@ -507,10 +646,13 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       id: m.id,
       character: m.character,
       group: m.group,
-      title: m.id.split("/").pop() ?? m.id,
+      title: m.displayName ?? m.id.split("/").pop() ?? m.id,
       messageCount: m.messageCount,
       lastMessage: m.lastMessage,
       updatedAt: m.updatedAt,
+      ...(m.displayName ? { displayName: m.displayName } : {}),
+      ...(m.pinned ? { pinned: true } : {}),
+      ...(m.archived ? { archived: true } : {}),
     }));
     res.json(list);
   });

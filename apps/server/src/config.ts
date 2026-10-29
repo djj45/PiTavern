@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { InstructTemplate, TokenizerSetting, VectorSettings, WorldInfoSettings } from "@pitavern/shared";
+import { DEFAULT_DIALOGUE_PAIRS, type ChatAppearanceDto, type InstructTemplate, type ReasoningLevel, type TokenizerSetting, type VectorSettings, type WorldInfoSettings } from "@pitavern/shared";
 import { atomicWrite } from "./stdata/files.ts";
 
 /** 单个中转/供应商下的模型条目（用户在设置里手填，M1 不做目录自动发现） */
@@ -12,6 +12,8 @@ export interface ProviderModelConfig {
   contextWindow?: number;
   maxTokens?: number;
   tokenizer?: TokenizerSetting;
+  /** 该模型默认思考强度；未设置时回退到全局 thinkingLevel。 */
+  thinkingLevel?: ReasoningLevel;
 }
 
 /** OpenAI 兼容中转或官方 API 的连接配置 */
@@ -48,6 +50,11 @@ export interface TakeoverConfig {
   stateProjection: boolean;
 }
 
+export interface BranchConfig {
+  /** 每次正常回复成功后自动追加的额外候选数；0 关闭，上限 4 */
+  autoGenerate: number;
+}
+
 export interface TavernConfig {
   port: number;
   /** SillyTavern 兼容数据目录（characters/ chats/ worlds/ OpenAI Settings/） */
@@ -56,8 +63,8 @@ export interface TavernConfig {
   defaultProvider: string;
   defaultModel: string;
   persona: { name: string; description: string };
-  /** off | low | medium | high（仅对 reasoning 模型生效） */
-  thinkingLevel: "off" | "low" | "medium" | "high";
+  /** 推理模型的思考强度（仅对 reasoning 模型生效） */
+  thinkingLevel: ReasoningLevel;
   /** simple=内置简洁组装；bridge=ST 预设桥接组装；takeover=agent 原生接管组装 */
   contextMode: "simple" | "bridge" | "takeover";
   /** 桥接模式使用的预设（文件名，OpenAI Settings/ 下） */
@@ -74,6 +81,8 @@ export interface TavernConfig {
   protocolStrict: boolean;
   compression: CompressionConfig;
   takeover: TakeoverConfig;
+  branches: BranchConfig;
+  appearance: ChatAppearanceDto;
 }
 
 export const CONFIG_PATH = process.env.PITAVERN_CONFIG ?? "data/config.json";
@@ -104,6 +113,8 @@ export function defaultConfig(): TavernConfig {
     protocolStrict: true,
     compression: { enabled: true, keepFullTurns: 6 },
     takeover: { recentTurns: 3, stateProjection: true },
+    branches: { autoGenerate: 0 },
+    appearance: { speechColor: "", dialogueColor: "", dialoguePairs: DEFAULT_DIALOGUE_PAIRS.map((pair) => ({ ...pair })) },
   };
 }
 
@@ -119,6 +130,18 @@ export function loadConfig(): TavernConfig {
     vectors: { ...defaults.vectors, ...raw.vectors },
     compression: { ...defaults.compression, ...raw.compression },
     takeover: { ...defaults.takeover, ...raw.takeover },
+    branches: { ...defaults.branches, ...raw.branches },
+    appearance: {
+      ...defaults.appearance,
+      ...(raw.appearance ?? {}),
+      dialoguePairs: Array.isArray(raw.appearance?.dialoguePairs)
+        ? raw.appearance.dialoguePairs.map((pair) => ({
+            open: String(pair?.open ?? ""),
+            close: String(pair?.close ?? ""),
+            ...(typeof pair?.color === "string" ? { color: pair.color } : {}),
+          }))
+        : defaults.appearance.dialoguePairs,
+    },
   };
 }
 

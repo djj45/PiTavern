@@ -1,4 +1,4 @@
-import type { ReplyChoicesDto } from "@pitavern/shared";
+import type { BranchPointDto, ReplyChoicesDto } from "@pitavern/shared";
 import type { StChatLine } from "./types.ts";
 
 export const STATE_KEYS = ["variables", "projection", "timedWorldInfo", "_pitavernEnforcement"] as const;
@@ -7,6 +7,11 @@ export interface ReplyVersion {
   messages: StChatLine[];
   state?: Record<string, unknown>;
   enforcement?: RecallState;
+  /**
+   * 该候选分支之后的原始 JSONL 行（含换行前的空行）。只有该候选不在当前活动路径上时才写入；
+   * 原样保存是为了让系统注释、损坏行和嵌套分支在来回切换时都不丢失。
+   */
+  continuation?: string[];
 }
 export interface ReplyVersions { selected: number; versions: ReplyVersion[] }
 
@@ -37,12 +42,11 @@ export function restoreState(metadata: Record<string, unknown>, state?: Record<s
 }
 
 export function validEnforcement(value: unknown): value is RecallState {
-  if (!value || typeof value !== "object") return false;
   const v = value as RecallState;
-  return [v.turn, v.usedThisTurn, v.cooldownUntilTurn].every((n) => Number.isInteger(n) && n >= 0);
+  return Boolean(v && typeof v === "object" && [v.turn, v.usedThisTurn, v.cooldownUntilTurn].every((n) => Number.isInteger(n) && n >= 0));
 }
 
-function validCatalog(value: unknown): value is ReplyVersions {
+export function validReplyCatalog(value: unknown): value is ReplyVersions {
   const saved = value as ReplyVersions | undefined;
   return Boolean(saved && Array.isArray(saved.versions) && saved.versions.length > 0 &&
     Number.isInteger(saved.selected) && saved.selected >= 0 && saved.selected < saved.versions.length &&
@@ -50,32 +54,46 @@ function validCatalog(value: unknown): value is ReplyVersions {
       m && typeof m.mes === "string" && typeof m.name === "string" && !m.is_user && !m.is_system)));
 }
 
-export function replyChoices(lines: StChatLine[]): ReplyChoicesDto | undefined {
-  const userIndex = lines.findLastIndex((line) => line.is_user && !line.is_system && line.mes.trim());
-  const user = lines[userIndex];
-  if (!user) return;
-  const saved = user.extra?._pitavernReplies;
-  const current = lines.slice(userIndex + 1).filter((line) => !line.is_user && !line.is_system);
-  const swipes = current.length === 1 && current[0].swipes?.every((s) => typeof s === "string") ? current[0].swipes : undefined;
-  const selected = swipes && Number.isInteger(current[0].swipe_id) && current[0].swipe_id! >= 0 && current[0].swipe_id! < swipes.length ? current[0].swipe_id! : 0;
-  return {
-    userMessageId: typeof user.extra?.messageId === "string" ? user.extra.messageId : `line-${userIndex}`,
-    selected: validCatalog(saved) ? saved.selected : selected,
-    count: validCatalog(saved) ? saved.versions.length : swipes?.length || (current.length ? 1 : 0),
-  };
+/** 一条用户消息之后、下一条用户消息之前的助手/系统行。 */
+function currentReplies(lines: StChatLine[], userIndex: number): StChatLine[] {
+  let end = lines.length;
+  for (let index = userIndex + 1; index < lines.length; index++) {
+    if (lines[index].is_user && !lines[index].is_system) { end = index; break; }
+  }
+  return lines.slice(userIndex + 1, end).filter((line) => !line.is_user && !line.is_system);
 }
 
-/** Only the latest user turn is selectable: later turns must never inherit a different reply's state. */
-export function lastReplies(lines: StChatLine[], metadata: Record<string, unknown>): {
+function lineId(line: StChatLine, index: number): string {
+  return typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + index;
+}
+
+function previewText(text: string, limit = 90): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function previewLine(lines: StChatLine[]): string {
+  const line = lines.find((message) => message.mes.trim()) ?? lines[0];
+  return line ? previewText(line.mes) : "";
+}
+
+function savedCatalog(line: StChatLine): ReplyVersions | undefined {
+  const saved = line.extra?._pitavernReplies;
+  return validReplyCatalog(saved) ? structuredClone(saved) : undefined;
+}
+
+/**
+ * 某个用户回合的候选回复目录。当前选中的版本始终以文件里的实际正文为准，
+ * 这样外部编辑或旧版 swipes 导入后依然可以正确切换。
+ */
+export function turnReplies(lines: StChatLine[], metadata: Record<string, unknown>, userIndex: number): {
   userIndex: number; choices?: ReplyChoicesDto; catalog: ReplyVersions;
 } {
-  const userIndex = lines.findLastIndex((line) => line.is_user && !line.is_system && line.mes.trim());
   const user = lines[userIndex];
-  const current = lines.slice(userIndex + 1).filter((line) => !line.is_user && !line.is_system);
+  const current = user ? currentReplies(lines, userIndex) : [];
   let catalog: ReplyVersions = { selected: 0, versions: [] };
   if (!user) return { userIndex, catalog };
   const saved = user.extra?._pitavernReplies as ReplyVersions | undefined;
-  if (validCatalog(saved)) {
+  if (validReplyCatalog(saved)) {
     catalog = structuredClone(saved);
   } else if (current.length === 1 && Array.isArray(current[0].swipes) && current[0].swipes.length > 1 && current[0].swipes.every((s) => typeof s === "string")) {
     const line = current[0];
@@ -92,8 +110,73 @@ export function lastReplies(lines: StChatLine[], metadata: Record<string, unknow
   return {
     userIndex, catalog,
     choices: {
-      userMessageId: typeof user.extra?.messageId === "string" ? user.extra.messageId : `line-${userIndex}`,
+      userMessageId: lineId(user, userIndex),
       selected: catalog.selected, count: catalog.versions.length,
     },
   };
+}
+
+export function replyChoices(lines: StChatLine[]): ReplyChoicesDto | undefined {
+  const userIndex = lines.findLastIndex((line) => line.is_user && !line.is_system && line.mes.trim());
+  const user = lines[userIndex];
+  if (!user) return;
+  const saved = user.extra?._pitavernReplies;
+  const current = currentReplies(lines, userIndex);
+  const swipes = current.length === 1 && current[0].swipes?.every((s) => typeof s === "string") ? current[0].swipes : undefined;
+  const selected = swipes && Number.isInteger(current[0].swipe_id) && current[0].swipe_id! >= 0 && current[0].swipe_id! < swipes.length ? current[0].swipe_id! : 0;
+  return {
+    userMessageId: lineId(user, userIndex),
+    selected: validReplyCatalog(saved) ? saved.selected : selected,
+    count: validReplyCatalog(saved) ? saved.versions.length : swipes?.length || (current.length ? 1 : 0),
+  };
+}
+
+/** Only the latest user turn is used for regeneration/retry decisions. */
+export function lastReplies(lines: StChatLine[], metadata: Record<string, unknown>): {
+  userIndex: number; choices?: ReplyChoicesDto; catalog: ReplyVersions;
+} {
+  const userIndex = lines.findLastIndex((line) => line.is_user && !line.is_system && line.mes.trim());
+  return turnReplies(lines, metadata, userIndex);
+}
+
+/**
+ * 沿当前文件（活动路径）列出所有拥有多个候选的回合。
+ * 更早回合的后续剧情保存在对应候选的 continuation 中；这里只统计当前路径上的分叉点。
+ */
+export function branchPoints(lines: StChatLine[]): BranchPointDto[] {
+  const points: BranchPointDto[] = [];
+  let turn = 0;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line.is_user || line.is_system || !line.mes.trim()) continue;
+    turn += 1;
+    const current = currentReplies(lines, index);
+    const saved = savedCatalog(line);
+    let previews: string[];
+    let continuations: boolean[];
+    let selected: number;
+    if (saved) {
+      selected = saved.selected;
+      previews = saved.versions.map((version) => previewLine(version.messages));
+      continuations = saved.versions.map((version, versionIndex) =>
+        versionIndex !== selected && Boolean(version.continuation?.some((raw) => raw.trim())));
+      if (current.length) previews[selected] = previewLine(current);
+    } else if (current.length === 1 && Array.isArray(current[0].swipes) && current[0].swipes.length > 1 && current[0].swipes.every((s) => typeof s === "string")) {
+      const swipes = current[0].swipes;
+      selected = Number.isInteger(current[0].swipe_id) && current[0].swipe_id! >= 0 && current[0].swipe_id! < swipes.length ? current[0].swipe_id! : 0;
+      previews = swipes.map((text) => previewText(text));
+      continuations = swipes.map(() => false);
+    } else {
+      continue;
+    }
+    if (previews.length < 2) continue;
+    points.push({
+      userMessageId: lineId(line, index), turn, userPreview: previewText(line.mes), selected,
+      count: previews.length,
+      candidates: previews.map((preview, candidateIndex) => ({
+        index: candidateIndex, preview, hasContinuation: continuations[candidateIndex] ?? false,
+      })),
+    });
+  }
+  return points;
 }

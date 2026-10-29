@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { AuthorNoteDto, AuthorNoteSnapshotDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ServerEvent } from "@pitavern/shared";
+import type { AuthorNoteDto, AuthorNoteSnapshotDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -32,7 +32,8 @@ import type { CharacterStore } from "../stdata/characters.ts";
 import { chatMessages, type ChatStore } from "../stdata/chats.ts";
 import { createSetStateTool } from "../agent/tools/set-state.ts";
 import { retrieveVectorEntries } from "../context/vectors.ts";
-import { replyChoices, stateFields, validEnforcement } from "../stdata/replies.ts";
+import { branchPoints, replyChoices, stateFields, validEnforcement } from "../stdata/replies.ts";
+import { greetingCatalog } from "../stdata/greetings.ts";
 import { ActivityStore, emptyUsage } from "../stdata/activity.ts";
 import { createTokenCounter } from "../context/tokens.ts";
 import { globalRegex } from "../stdata/library.ts";
@@ -50,6 +51,9 @@ class ChatSession {
   controller: AbortController | null = null;
   generation: GenerationRecordDto | null = null;
   activityError?: string;
+  /** 自动候选分支生成中（用于阻止用户在新回合和分支生成之间插队） */
+  autoBranching = false;
+  autoStop = false;
   enforcement: RecallEnforcement = { turn: 0, usedThisTurn: 0, cooldownUntilTurn: 0 };
 }
 
@@ -152,7 +156,9 @@ export class SessionManager {
 
   abort(chatId: string): boolean {
     const session = this.sessions.get(chatId);
-    if (!session?.running) return false;
+    if (!session) return false;
+    if (session.autoBranching) session.autoStop = true;
+    if (!session.running) return session.autoStop;
     session.aborted = true;
     session.controller?.abort();
     session.agent?.abort();
@@ -166,6 +172,8 @@ export class SessionManager {
     const projection = typeof document.metadata.projection === "string" ? document.metadata.projection : undefined;
     const { messages, ...page } = this.chats.page(chatId);
     const choices = replyChoices(document.lines);
+    const branches = branchPoints(document.lines);
+    const greetings = greetingCatalog(document.lines, this.characters.getCharacter(document.character), !!readGroup(document.metadata));
     let activity: ChatSnapshotDto["activity"];
     let activityError = session?.activityError;
     try { activity = this.activitySnapshot(chatId); }
@@ -174,7 +182,10 @@ export class SessionManager {
       id: chatId, character: document.character, messages: full ? chatMessages(document.lines) : messages,
       ...(!full ? { page } : {}),
       ...(choices ? { replyChoices: choices } : {}),
+      ...(branches.length ? { branchChoices: branches } : {}),
+      ...(greetings ? { greetingChoices: greetings.choices } : {}),
       running: session?.running ?? false, streamingText: session?.streamingText ?? "",
+      ...(session?.running && session.generation?.startedAt ? { generationStartedAt: session.generation.startedAt } : {}),
       activity, activityError,
       memberDisplays: Object.fromEntries((readGroup(document.metadata)?.members ?? []).map((name) => [name, this.displayConfig(name, document.metadata, document.lines)])),
       group: readGroup(document.metadata), streamingCharacter: session?.character,
@@ -236,9 +247,27 @@ export class SessionManager {
     if (snapshot) this.emit({ type: "chat.snapshot", chatId, snapshot });
   }
 
+  /** 侧栏菜单：置顶/归档/重命名；写入聊天元数据并刷新侧栏摘要。 */
+  updateChatMeta(chatId: string, patch: { pinned?: boolean; archived?: boolean; displayName?: string | null }): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再修改对话信息");
+    this.chats.updateChatMeta(chatId, patch);
+    this.changed(chatId);
+  }
+
+  selectGreeting(chatId: string, selected: number, revision: string): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再切换开场白");
+    const document = this.chats.readDocument(chatId);
+    if (!document) throw new Error("聊天不存在");
+    this.chats.selectGreeting(chatId, selected, revision, this.characters.getCharacter(document.character));
+    this.changed(chatId);
+  }
+
   selectReply(chatId: string, userMessageId: string, selected: number, revision: string): void {
     if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再切换候选回复");
+    if (this.sessions.get(chatId)?.autoBranching) throw new Error("正在自动生成候选分支，请稍候或点击停止");
     this.chats.selectReply(chatId, userMessageId, selected, revision);
     this.changed(chatId);
   }
@@ -298,7 +327,7 @@ export class SessionManager {
               : createTavernAgent({ models, model, chatId, templateNames: { char: name, user: config.persona.name },
                   systemPrompt: raw ? "" : substituteMacros(buildSystemPrompt(character, config.persona), env),
                   history: raw ? [] : historyToAgentMessages(lines.map((line) => ({ ...line, mes: substituteMacros(line.mes, env) }))),
-                  thinkingLevel: config.thinkingLevel, outputProtocol: "native", protocolStrict: false, ...hooks });
+                  thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id), outputProtocol: "native", protocolStrict: false, ...hooks });
           session.agent = agent; session.character = name;
           agent.subscribe((event) => {
             if (event.type !== "message_end" || event.message.role !== "assistant") return;
@@ -339,18 +368,22 @@ export class SessionManager {
     return this.generate(chatId, text, undefined, speakers);
   }
 
-  regenerate(chatId: string, messageId: string, expectedText: string): Promise<void> {
-    return this.generate(chatId, "", { messageId, expectedText });
+  regenerate(chatId: string, messageId: string, expectedText: string, instruction?: string): Promise<void> {
+    return this.generate(chatId, "", { messageId, expectedText }, undefined, instruction);
   }
 
   /** Both normal sends and regeneration stage state and replies until the entire turn succeeds. */
-  private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }, requestedSpeakers?: string[]): Promise<void> {
+  private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }, requestedSpeakers?: string[], instruction?: string): Promise<void> {
     if (this.writeBlocked) {
       this.emit({ type: "chat.error", chatId, message: this.writeBlocked });
       return;
     }
     if (this.isStreaming(chatId)) {
       this.emit({ type: "chat.error", chatId, message: "生成中，请先停止或等待完成" });
+      return;
+    }
+    if (this.sessions.get(chatId)?.autoBranching && !replacement) {
+      this.emit({ type: "chat.error", chatId, message: "正在自动生成候选分支，请稍候或点击停止" });
       return;
     }
     const session = this.ensureSession(chatId, "");
@@ -362,8 +395,10 @@ export class SessionManager {
     session.generation = null;
     const previousEnforcement = structuredClone(session.enforcement);
     let committed = false;
+    let autoCount = 0;
     try {
       const config = structuredClone(this.config);
+      if (!replacement) autoCount = config.branches.autoGenerate;
       const stored = this.chats.readDocument(chatId);
       if (!stored) throw new Error(`聊天不存在: ${chatId}`);
       const regeneration = replacement ? this.chats.prepareRegeneration(chatId, replacement.messageId, replacement.expectedText) : undefined;
@@ -416,8 +451,8 @@ export class SessionManager {
       }
       session.enforcement.turn += 1;
       session.enforcement.usedThisTurn = 0;
-      if (regeneration) this.emit({ type: "chat.regenerating", chatId });
-      else this.emit({ type: "chat.started", chatId, message: chatMessages([userLine])[0] });
+      if (regeneration) this.emit({ type: "chat.regenerating", chatId, startedAt: generation.startedAt });
+      else this.emit({ type: "chat.started", chatId, message: chatMessages([userLine])[0], startedAt: generation.startedAt });
       const sharedTimedState = config.contextMode === "bridge" ? normalizeTimedState(document.metadata.timedWorldInfo) : undefined;
       for (const originalActor of actors) {
         session.controller.signal.throwIfAborted();
@@ -468,14 +503,14 @@ export class SessionManager {
         ) : undefined;
         session.controller.signal.throwIfAborted();
         const agent = config.contextMode === "bridge"
-          ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, pendingMetadata, session.controller.signal)
+          ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, pendingMetadata, session.controller.signal, instruction)
           : config.contextMode === "takeover"
-            ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...pendingMetadata, variables }, character, contextHooks)
+            ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...pendingMetadata, variables }, character, contextHooks, instruction)
             : createTavernAgent({
-                models, model, chatId, thinkingLevel: config.thinkingLevel,
+                models, model, chatId, thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
                 templateNames: { char: character.name, user: config.persona.name },
                 systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0) +
-                  (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : ""),
+                  (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : "") + this.instructionBlock(instruction),
                 history: historyToAgentMessages((group ? history : document.lines).map((line) => ({ ...line, mes: substituteMacros(line.mes, macroEnv) }))), tools: allTools,
                 outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
                 compression: config.compression,
@@ -530,7 +565,48 @@ export class SessionManager {
       const snapshot = this.snapshot(chatId);
       if (snapshot) this.emit({ type: "chat.snapshot", chatId, snapshot, append: !replacement && committed });
       this.emit({ type: "chat.finished", chatId });
+      // 自动多分支：首条回复成功后，后台再生成若干候选；每次都是独立、可停止的生成。
+      if (autoCount > 0 && committed && !session.aborted && !this.writeBlocked) void this.autoAlternatives(chatId, autoCount);
     }
+  }
+
+  /** 成功回复后自动追加候选分支；用户点击停止会中止整个循环。 */
+  private async autoAlternatives(chatId: string, total: number): Promise<void> {
+    const session = this.sessions.get(chatId);
+    if (!session || session.running) return;
+    session.autoBranching = true;
+    session.autoStop = false;
+    try {
+      for (let done = 0; done < total; done++) {
+        if (this.writeBlocked || session.autoStop || this.sessions.get(chatId) !== session) break;
+        const snapshot = this.snapshot(chatId);
+        const last = snapshot?.messages.at(-1);
+        if (!snapshot || !last || last.role !== "assistant") break;
+        const before = snapshot.replyChoices?.count ?? 0;
+        await this.generate(chatId, "", { messageId: last.id, expectedText: last.text });
+        if (session.autoStop || session.aborted) break;
+        const after = this.snapshot(chatId)?.replyChoices?.count ?? 0;
+        if (after <= before) break;
+      }
+    } catch (error) {
+      this.emit({ type: "chat.error", chatId, message: "自动候选分支失败: " + (error instanceof Error ? error.message : String(error)) });
+    } finally {
+      session.autoBranching = false;
+      session.autoStop = false;
+      const snapshot = this.snapshot(chatId);
+      if (snapshot) this.emit({ type: "chat.snapshot", chatId, snapshot });
+    }
+  }
+
+  /** 仅本次生成生效的“换条路线”要求。 */
+  private instructionBlock(instruction?: string): string {
+    if (!instruction) return "";
+    return `\n\n### 本次生成的方向要求（仅本次生效，不要写进正文或解释）\n${instruction}`;
+  }
+
+  /** 单模型思考等级：模型级配置优先，未设置时回退到全局设置。 */
+  private thinkingLevelFor(config: TavernConfig, provider: string, modelId: string): ReasoningLevel {
+    return config.providers.find((p) => p.id === provider)?.models.find((m) => m.id === modelId)?.thinkingLevel ?? config.thinkingLevel;
   }
 
   /** simple 模式下给模型的工具使用指引（桥接模式由预设自行约定） */
@@ -560,6 +636,7 @@ export class SessionManager {
     vectorMatches?: ReadonlySet<string>,
     metadata?: Record<string, unknown>,
     signal?: AbortSignal,
+    instruction?: string,
   ): Promise<Agent> {
     const presetName = config.activePreset;
     const presetFile = presetName ? path.join(presetsDir(this.stDataDir), `${presetName}.json`) : "";
@@ -589,11 +666,13 @@ export class SessionManager {
       // 明确覆盖预设里的伪 JSON/预填充输出指令
       messages.push({ role: "system", content: OUTPUT_PROTOCOL_INSTRUCTION, timestamp: Date.now() });
     }
+    // 换条路线：只影响本次生成，不写进聊天记录，也不改变存档状态。
+    if (instruction) messages.push({ role: "system", content: this.instructionBlock(instruction).trim(), timestamp: Date.now() });
     return createTavernAgent({
       models,
       model,
       chatId,
-      thinkingLevel: config.thinkingLevel,
+      thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
       templateNames: { char: character.name, user: config.persona.name },
       messages,
       sampling: assembled.sampling,
@@ -619,6 +698,7 @@ export class SessionManager {
     metadata: Record<string, unknown>,
     character: CharacterCard,
     contextHooks: ContextHooks,
+    instruction?: string,
   ): Agent {
     const assembled = assembleTakeoverContext({
       card: character,
@@ -632,12 +712,15 @@ export class SessionManager {
         useProtocol,
       },
     });
+    const messages = instruction
+      ? [...assembled.messages, { role: "system" as const, content: this.instructionBlock(instruction).trim(), timestamp: Date.now() }]
+      : assembled.messages;
     return createTavernAgent({
       models,
       model,
       chatId: toolCtx.chatId,
-      thinkingLevel: config.thinkingLevel,
-      messages: assembled.messages,
+      thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
+      messages,
       tools,
       outputProtocol: config.outputProtocol,
       protocolStrict: config.protocolStrict,

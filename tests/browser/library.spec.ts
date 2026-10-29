@@ -31,10 +31,195 @@ const test = base.extend<{ app: { baseURL: string; runDir: string } }>({
 });
 const open = async (page: Page, url: string) => {
   await page.goto(url); await expect(page.getByText('在线', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('button', { name: '资料', exact: true }).click();
+};
+const openChatActions = async (page: Page) => {
+  await page.getByRole('button', { name: '聊天操作', exact: true }).click();
 };
 test.beforeEach(async ({ page }) => {
   page.on('pageerror', (error) => { throw error; });
+});
+
+test('八个备用开局可选择和翻页，刷新保留选中正文并用于模型对话', async ({ page, app, request }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const connection = await (await request.get(app.baseURL + '/api/connection')).json();
+  await page.goto(app.baseURL);
+  await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.locator('aside').getByRole('button', { name: '多开局向导', exact: true }).click();
+  await page.getByRole('button', { name: '＋ 开始新对话', exact: true }).click();
+  const greetingButton = page.getByRole('button', { name: '开场白', exact: true });
+  await expect(greetingButton).toBeVisible();
+  await greetingButton.click();
+  const picker = page.getByRole('dialog', { name: '选择开场白', exact: true });
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole('button')).toHaveCount(9);
+  await expect(picker.getByRole('button').first()).toHaveAttribute('aria-current', 'true');
+  await expect(picker.getByRole('button', { name: /开局 3/ })).toContainText('开局 3 · 合成场景3');
+  await picker.getByRole('button', { name: /开局 3/ }).click();
+  await expect(page.getByText(`合成开局3：${connection.persona.name}抵达地点3。`, { exact: true })).toBeVisible();
+  await greetingButton.click();
+  await picker.getByRole('button', { name: /开局 4/ }).click();
+  await expect(page.getByText(`合成开局4：${connection.persona.name}抵达地点4。`, { exact: true })).toBeVisible();
+  await greetingButton.click();
+  await expect(picker.getByRole('button', { name: /开局 4/ })).toHaveAttribute('aria-current', 'true');
+  await picker.getByRole('button', { name: /开局 8/ }).click();
+  await expect(page.getByText(`合成开局8：${connection.persona.name}抵达地点8。`, { exact: true })).toBeVisible();
+  await greetingButton.click();
+  await expect(picker.getByRole('button', { name: /开局 8/ })).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  await page.screenshot({ path: path.join(app.runDir, 'greetings-mobile.png') });
+  const list = await (await request.get(app.baseURL + '/api/chats')).json();
+  const chat = list.find((item: { character: string }) => item.character === '多开局向导');
+  const exported = await (await request.get(app.baseURL + '/api/chats/' + chat.id + '/export?format=jsonl')).text();
+  const opening = JSON.parse(exported.trim().split('\n')[1]);
+  expect(opening.swipe_id).toBe(8); expect(opening.mes).toBe('合成开局8：{{user}}抵达地点8。');
+  await page.reload();
+  await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.locator('aside li button').filter({ hasText: '多开局向导' }).first().click();
+  await expect(page.getByText(`合成开局8：${connection.persona.name}抵达地点8。`, { exact: true })).toBeVisible();
+  await greetingButton.click();
+  await expect(picker.getByRole('button', { name: /开局 8/ })).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('Escape');
+  await page.getByPlaceholder(/身份发言/).fill('继续这个开局');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByText('模型原文', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '开场白', exact: true })).toHaveCount(0);
+  const sent = fs.readFileSync(path.join(app.runDir, 'requests.ndjson'), 'utf8');
+  expect(sent).toContain(`合成开局8：${connection.persona.name}抵达地点8。`);
+  expect(sent).not.toContain('合成开局1：');
+});
+
+test('已有介绍页聊天可切换开局，其他窗口同步且过期选择被拒绝', async ({ page, app, request }) => {
+  const cards = await (await request.get(app.baseURL + '/api/characters')).json();
+  const card = cards.find((item: { name: string }) => item.name === '多开局向导');
+  const created = await request.post(app.baseURL + '/api/chats', { data: { character: card.name } });
+  const { id } = await created.json();
+  const initial = await (await request.get(app.baseURL + '/api/chats/' + id)).json();
+  const exported = await (await request.get(app.baseURL + '/api/chats/' + id + '/export?format=jsonl')).text();
+  expect(JSON.parse(exported.trim().split('\n')[1]).swipes).toBeUndefined();
+  const other = await page.context().newPage();
+  for (const window of [page, other]) {
+    await window.goto(app.baseURL);
+    await window.locator('aside li button').filter({ hasText: card.name }).first().click();
+    await window.getByRole('button', { name: '开场白', exact: true }).click();
+    const dialog = window.getByRole('dialog', { name: '选择开场白', exact: true });
+    await expect(dialog.getByRole('button')).toHaveCount(9);
+    await expect(dialog.getByRole('button').first()).toHaveAttribute('aria-current', 'true');
+    await window.keyboard.press('Escape');
+  }
+  await page.getByRole('button', { name: '开场白', exact: true }).click();
+  await page.getByRole('dialog', { name: '选择开场白', exact: true }).getByRole('button', { name: /开局 5/ }).click();
+  await other.getByRole('button', { name: '开场白', exact: true }).click();
+  await expect(other.getByRole('dialog', { name: '选择开场白', exact: true }).getByRole('button', { name: /开局 5/ })).toHaveAttribute('aria-current', 'true');
+  const rejected = await request.post(app.baseURL + '/api/chat/greeting', { data: { chatId: id, selected: 2, revision: initial.page.revision } });
+  expect(rejected.status()).toBe(409);
+  expect((await (await request.get(app.baseURL + '/api/chats/' + id)).json()).greetingChoices.selected).toBe(5);
+  await other.close();
+});
+
+test('模型列表搜索添加、去重、保存与已有参数保留，手机布局可操作', async ({ page, app, request }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(app.baseURL);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const provider = dialog.getByRole('group', { name: '模型连接：本地合成连接', exact: true });
+  await provider.getByLabel('模型上下文长度：fixture', { exact: true }).fill('9000');
+  await provider.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect(provider.getByRole('status')).toContainText('已获取 3 个模型');
+  await expect(provider.getByLabel('模型上下文长度：fixture', { exact: true })).toHaveValue('9000');
+  const list = provider.getByLabel('可用模型', { exact: true });
+  await expect(list.locator('option[value="fixture"]')).toBeDisabled();
+  await provider.getByLabel('搜索可用模型').fill('列表模型');
+  await list.selectOption('discovered-chat');
+  await provider.getByRole('button', { name: '添加所选模型', exact: true }).click();
+  await expect(provider.getByLabel('模型显示名：discovered-chat', { exact: true })).toHaveCount(1);
+  await expect(list.locator('option[value="discovered-chat"]')).toBeDisabled();
+  await provider.getByRole('button', { name: /手动添加/ }).click();
+  await provider.getByLabel('手动模型 ID').fill('discovered-chat');
+  await provider.getByRole('button', { name: '添加模型', exact: true }).click();
+  await expect(provider.getByLabel('模型显示名：discovered-chat', { exact: true })).toHaveCount(1);
+  await expect.poll(async () => (await (await request.get(app.baseURL + '/api/connection')).json()).providers[0].models.length, { timeout: 5000 }).toBe(2);
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBeTruthy();
+  const autoSaved = await (await request.get(app.baseURL + '/api/connection')).json();
+  expect(autoSaved.providers[0].models.map((model: { id: string }) => model.id)).toEqual(['fixture', 'discovered-chat']);
+  expect(autoSaved.providers[0].models[0].contextWindow).toBe(9000);
+  expect(autoSaved.providers[0].models[0].maxTokens).toBe(500);
+  expect(autoSaved.defaultModel).toBe('fixture');
+  await expect(dialog.getByText('已自动保存', { exact: true })).toBeVisible({ timeout: 5000 });
+  await dialog.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(provider.getByLabel('模型显示名：discovered-chat', { exact: true })).toBeVisible();
+});
+
+test('模型列表使用新连接草稿地址和密钥，放弃更改不落库', async ({ page, app, request }) => {
+  const initial = await (await request.get(app.baseURL + '/api/connection')).json();
+  const origin = new URL(initial.providers[0].baseUrl).origin;
+  await page.goto(app.baseURL);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: '＋ 添加', exact: true }).click();
+  const provider = dialog.getByRole('group', { name: '模型连接：新中转', exact: true });
+  await provider.getByLabel('接口地址').fill(origin + '/draft');
+  await provider.getByLabel('API Key', { exact: true }).fill('synthetic-draft');
+  await provider.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect(provider.getByRole('status')).toContainText('已获取 3 个模型');
+  await provider.getByLabel('可用模型', { exact: true }).selectOption('discovered-chat');
+  await provider.getByRole('button', { name: '添加所选模型', exact: true }).click();
+  await dialog.getByRole('button', { name: '放弃本次更改', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(await (await request.get(app.baseURL + '/api/connection')).json()).toEqual(initial);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(dialog.getByRole('group')).toHaveCount(1);
+  const saved = dialog.getByRole('group');
+  await saved.getByLabel('API Key', { exact: true }).fill('synthetic-draft');
+  await saved.getByLabel('接口地址').fill(origin + '/missing');
+  await saved.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect(saved.getByRole('alert')).toContainText('HTTP 404');
+  await saved.getByRole('button', { name: /手动添加/ }).click();
+  await saved.getByLabel('手动模型 ID').fill('manual-model');
+  await saved.getByRole('button', { name: '添加模型', exact: true }).click();
+  await expect(saved.getByLabel('模型显示名：manual-model', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '放弃本次更改', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(await (await request.get(app.baseURL + '/api/connection')).json()).toEqual(initial);
+});
+
+test('模型列表请求可取消，编辑地址清除旧结果并处理空列表', async ({ page, app, request }) => {
+  const initial = await (await request.get(app.baseURL + '/api/connection')).json();
+  const origin = new URL(initial.providers[0].baseUrl).origin;
+  await page.goto(app.baseURL);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const provider = page.getByRole('dialog', { name: '设置', exact: true }).getByRole('group');
+  await provider.getByLabel('接口地址').fill(origin + '/slow');
+  await provider.getByLabel('API Key', { exact: true }).fill('synthetic-draft');
+  const slowCount = () => {
+    const file = path.join(app.runDir, 'model-requests.ndjson');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.includes('/slow/models')).length : 0;
+  };
+  await provider.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect.poll(slowCount).toBe(1);
+  await provider.getByRole('button', { name: '取消获取', exact: true }).click();
+  await expect(provider.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled();
+  await expect(provider.getByRole('alert')).toHaveCount(0);
+  await provider.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect.poll(slowCount).toBe(2);
+  await provider.getByLabel('接口地址').fill(origin + '/empty');
+  await expect(provider.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled();
+  await provider.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect(provider.getByRole('status')).toContainText('模型列表为空');
+  await expect(provider.getByLabel('可用模型', { exact: true })).toHaveCount(0);
+  await provider.getByLabel('接口地址').fill(origin + '/v1');
+  await expect(provider.getByRole('status')).toHaveCount(0);
+  await provider.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect(provider.getByRole('status')).toContainText('已获取 3 个模型');
+  await provider.getByLabel('API Key', { exact: true }).fill('');
+  await expect(provider.getByRole('status')).toHaveCount(0);
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByRole('button', { name: '放弃本次更改', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+  expect(await (await request.get(app.baseURL + '/api/connection')).json()).toEqual(initial);
 });
 
 test('世界书保存、刷新和旧版本冲突保留草稿', async ({ page, app, request }) => {
@@ -43,7 +228,7 @@ test('世界书保存、刷新和旧版本冲突保留草稿', async ({ page, ap
   await page.getByLabel('条目内容', { exact: true }).fill('浏览器保存的内容');
   await page.getByRole('button', { name: '保存资料', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('已保存');
-  await page.reload(); await page.getByRole('button', { name: '资料库', exact: true }).click();
+  await page.reload(); await page.getByRole('button', { name: '资料', exact: true }).click();
   await page.getByLabel('资料文件').selectOption('world:browser.json');
   await expect(page.getByLabel('条目内容', { exact: true })).toHaveValue('浏览器保存的内容');
   await page.getByLabel('条目内容', { exact: true }).fill('保留这份草稿');
@@ -63,7 +248,7 @@ test('正则预览超时后界面可操作，聊天展示也在工作线程执�
   await page.locator('aside li button').filter({ hasText: '浏览器向导' }).first().click();
   await page.getByPlaceholder(/身份发言/).fill('你好'); await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByText('显示后的回复', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('button', { name: '资料', exact: true }).click();
   await page.getByRole('tab', { name: '正则脚本' }).click();
   await page.getByLabel('资料文件').selectOption('global-regex:regex.json');
   await page.getByRole('button', { name: '复制脚本', exact: true }).click();
@@ -111,7 +296,7 @@ test('刷新后恢复草稿、搜索复制并从历史恢复', async ({ page, ap
   await open(page, app.baseURL); await page.getByLabel('资料文件').selectOption('world:browser.json');
   await page.getByLabel('条目内容', { exact: true }).fill('刷新不能丢失的草稿');
   page.once('dialog', (dialog) => dialog.accept()); await page.reload();
-  await page.getByRole('button', { name: '资料库', exact: true }).click(); await page.getByLabel('资料文件').selectOption('world:browser.json');
+  await page.getByRole('button', { name: '资料', exact: true }).click(); await page.getByLabel('资料文件').selectOption('world:browser.json');
   await expect(page.getByRole('button', { name: '恢复本地草稿', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '恢复本地草稿', exact: true }).click();
   await expect(page.getByLabel('条目内容', { exact: true })).toHaveValue('刷新不能丢失的草稿');
@@ -148,7 +333,7 @@ test('真实聊天显示正则超时后仍可打开资料库', async ({ page, ap
   expect((await request.put(app.baseURL + '/api/library/document', { data: { id: repaired.resource.id, revision: repaired.revision, data: repaired.data } })).ok()).toBeTruthy();
   await expect(page.getByText('恢复后的显示!', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
-  await page.getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('button', { name: '资料', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '资料库' })).toBeVisible();
 });
 
@@ -164,7 +349,7 @@ test('便携设置可选迁移、预览刷新恢复以及备份占用展示', as
   await page.getByLabel('选择整库备份', { exact: true }).setInputFiles(archive);
   await expect(page.getByRole('heading', { name: '备份预览', exact: true })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: '同时应用归档中的便携设置' })).not.toBeChecked();
-  await page.reload(); await page.getByRole('button', { name: '资料库', exact: true }).click(); await page.getByRole('tab', { name: '备份与迁移' }).click();
+  await page.reload(); await page.getByRole('button', { name: '资料', exact: true }).click(); await page.getByRole('tab', { name: '备份与迁移' }).click();
   await expect(page.getByRole('heading', { name: '备份预览', exact: true })).toBeVisible();
   await page.getByText('查看归档中的便携设置', { exact: true }).click();
   await expect(page.getByLabel('便携设置预览')).toContainText('迁移 persona');
@@ -216,7 +401,7 @@ test('JSON 和 PNG 卡内世界书编辑保留原图与未知字段', async ({ p
   for (let offset = 8; offset + 12 <= current.length;) { const n = current.readUInt32BE(offset); if (current.toString('ascii', offset + 4, offset + 8) === 'IDAT') expect(original.includes(current.subarray(offset, offset + n + 12))).toBeTruthy(); offset += n + 12; }
   expect(await page.locator('dialog').evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBeTruthy();
   await page.screenshot({ path: path.join(app.runDir, 'mobile-card-world.png'), fullPage: true });
-  await page.reload(); await page.getByRole('button', { name: '资料库', exact: true }).click();
+  await page.reload(); await page.getByRole('button', { name: '资料', exact: true }).click();
   await page.getByLabel('资料文件').selectOption('character-world:browser.json');
   await expect(page.getByLabel('条目内容', { exact: true })).toHaveValue('JSON 卡内保存');
 });
@@ -228,7 +413,7 @@ test('侧栏导入 CharX 后头像可读且可编辑卡内世界书', async ({ p
   const cards = await (await request.get(app.baseURL + '/api/characters')).json();
   const imported = cards.find((card: { name: string }) => card.name === '界面归档向导'); expect(imported.avatarUrl).toBeTruthy();
   expect((await request.get(app.baseURL + imported.avatarUrl)).ok()).toBeTruthy();
-  await page.getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('button', { name: '资料', exact: true }).click();
   await page.getByLabel('资料文件').selectOption('character-world:archive.json');
   await page.getByLabel('条目内容', { exact: true }).fill('导入后修改');
   await page.getByRole('button', { name: '保存资料', exact: true }).click();
@@ -270,13 +455,19 @@ test('创建群聊、全员与指定角色发言、候选切换和重载', async
   await page.getByPlaceholder(/身份发言/).fill('只让图片向导回答'); await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByText('模型原文', { exact: true })).toHaveCount(3); await expect(page.getByRole('button', { name: '重新生成回复', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '重新生成回复', exact: true }).click();
-  await expect(page.getByText('候选 2 / 2', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '上一个候选回复' }).click(); await expect(page.getByText('候选 1 / 2', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/2');
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  const branchDialog = page.getByRole('dialog', { name: '分支选择' });
+  await expect(branchDialog.getByText('2 个候选', { exact: true })).toBeVisible();
+  await expect(branchDialog.locator('button[aria-pressed]')).toHaveCount(2);
+  await branchDialog.locator('button[aria-pressed]').first().click();
+  await expect(page.getByText('已切换剧情分支', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/2');
   await page.reload(); await page.locator('aside').first().getByRole('button').filter({ hasText: '浏览器群聊' }).click();
   await expect(page.getByLabel('本轮发言角色')).toBeVisible();
   stored = await (await request.get(app.baseURL + '/api/chats/' + group.id)).json(); expect(stored.group.members).toEqual(['浏览器向导', '图片向导']);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: '工具活动与用量面板', exact: true }).click();
+  await page.getByRole('button', { name: '统计', exact: true }).click();
   await expect.poll(async () => (await page.locator('aside').first().boundingBox())!.x + (await page.locator('aside').first().boundingBox())!.width).toBeLessThanOrEqual(1);
   await expect(page.getByLabel('本轮发言角色')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
@@ -285,7 +476,8 @@ test('创建群聊、全员与指定角色发言、候选切换和重载', async
 
 test('STscript 编辑器执行闭包、事务回滚和无需模型的聊天命令', async ({ page, app, request }) => {
   await page.goto(app.baseURL); await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
-  await page.getByRole('button', { name: 'STscript', exact: true }).click();
+  await openChatActions(page);
+  await page.getByRole('menuitem', { name: 'STscript', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'STscript 编辑器' });
   await dialog.getByLabel('STscript 源码').fill('/setvar key=n 0 | /times 3 {: /incvar n :} | /sendas name=图片向导 脚本计数{{getvar::n}} | /echo 已完成');
   await dialog.getByRole('button', { name: '执行脚本' }).click(); await expect(dialog.getByRole('status')).toContainText('已完成');
@@ -299,7 +491,260 @@ test('STscript 编辑器执行闭包、事务回滚和无需模型的聊天命�
   await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
   await page.getByPlaceholder(/身份发言/).fill('/sendas name=图片向导 无模型脚本'); await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '发送', exact: true }).click(); await expect(page.getByText('无模型脚本', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'STscript', exact: true }).click(); await dialog.getByLabel('STscript 源码').fill('/setvar key=n 100 | /delay 5000 | /send 不保存'); await dialog.getByRole('button', { name: '执行脚本' }).click();
+  await openChatActions(page); await page.getByRole('menuitem', { name: 'STscript', exact: true }).click(); await dialog.getByLabel('STscript 源码').fill('/setvar key=n 100 | /delay 5000 | /send 不保存'); await dialog.getByRole('button', { name: '执行脚本' }).click();
   await dialog.getByRole('button', { name: '停止脚本' }).click(); await expect(dialog.getByRole('alert')).toBeVisible(); await expect(dialog.getByRole('button', { name: '执行脚本' })).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy(); await page.screenshot({ path: path.join(app.runDir, 'mobile-script.png'), fullPage: true });
+});
+
+test('底部模型选择、加宽回复区、自动候选与历史分支弹窗', async ({ page, app }) => {
+  await page.setViewportSize({ width: 1806, height: 922 });
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await expect(page.getByLabel('当前模型')).toBeVisible();
+  expect(await page.locator('header select').count()).toBe(0);
+  await expect(page.getByText(/条消息/)).toHaveCount(0);
+  await openChatActions(page);
+  const chatMenu = page.getByRole('menu', { name: '聊天操作菜单' });
+  await expect(chatMenu).toBeVisible();
+  for (const name of ['STscript', '作者注释', '备份与恢复', '导出 MD', '导出 JSONL']) {
+    await expect(chatMenu.getByRole('menuitem', { name, exact: true })).toBeVisible();
+  }
+  await page.keyboard.press('Escape');
+  await expect(chatMenu).toHaveCount(0);
+  await page.getByRole('button', { name: '统计', exact: true }).click();
+  expect((await page.getByLabel('消息输入').boundingBox())!.width).toBeGreaterThan(1000);
+  await expect(page.getByText('最近一次生成的工具活动')).toHaveCount(0);
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByLabel('自动候选分支数').selectOption('2');
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+
+  await page.getByLabel('消息输入').fill('自动生成多条后续');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 3/3', { timeout: 20000 });
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  const dialog = page.getByRole('dialog', { name: '分支选择', exact: true });
+  await expect(dialog.getByText('3 个候选', { exact: true })).toBeVisible();
+  await expect(dialog.locator('button[aria-pressed]')).toHaveCount(3);
+  await dialog.locator('button[aria-pressed]').first().click();
+  await expect(page.getByText('已切换剧情分支', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/3');
+
+  // 关掉自动候选，在第二个候选的后续上继续写一段，再切回更早分支验证后续保留。
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await settings.getByLabel('自动候选分支数').selectOption('0');
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/3');
+  await page.getByLabel('消息输入').fill('沿着第二条分支继续');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  await expect(dialog.getByText('第 1 轮', { exact: false })).toBeVisible();
+  await dialog.locator('button[aria-pressed]').first().click();
+  await expect(page.getByText('沿着第二条分支继续', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 1/3');
+  await page.getByRole('button', { name: '剧情分支' }).click();
+  await dialog.locator('button[aria-pressed]').nth(1).click();
+  await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/3');
+
+  await page.reload();
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await expect(page.getByRole('button', { name: '剧情分支' })).toContainText('分支 2/3');
+  await expect(page.getByText('沿着第二条分支继续', { exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  await page.screenshot({ path: path.join(app.runDir, 'mobile-branches.png'), fullPage: true });
+});
+
+test('官方推理模型显示思考强度选择并持久化', async ({ page, app, request }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await expect(page.getByLabel('当前模型')).toBeVisible();
+  await expect(page.getByLabel('推理等级')).toHaveCount(0);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByLabel('思考等级：fixture', { exact: true }).selectOption('high');
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByLabel('推理等级')).toBeVisible();
+  await page.getByLabel('推理等级').selectOption('low');
+  await expect.poll(async () => {
+    const snapshot = await (await request.get(app.baseURL + '/api/connection')).json();
+    return snapshot.providers[0].models.find((model: { id: string }) => model.id === 'fixture').thinkingLevel;
+  }).toBe('low');
+  await page.reload();
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await expect(page.getByLabel('推理等级')).toHaveValue('low');
+});
+
+test('未配置的空白连接默认隐藏，点添加后才显示', async ({ page, app, request }) => {
+  const initial = await (await request.get(app.baseURL + '/api/connection')).json();
+  const updated = await request.put(app.baseURL + '/api/connection', { data: {
+    providers: [...initial.providers, { id: 'blank-draft', name: '新中转', baseUrl: 'https:', apiType: 'chat', models: [] }],
+  } });
+  expect(updated.ok()).toBeTruthy();
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await expect(dialog.getByRole('group')).toHaveCount(1);
+  await expect(dialog.getByText('新中转', { exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '＋ 添加', exact: true }).click();
+  await expect(dialog.getByRole('group')).toHaveCount(2);
+  await expect(dialog.getByRole('group', { name: '模型连接：新中转', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '放弃本次更改', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(dialog.getByRole('group')).toHaveCount(1);
+});
+
+test('发送后显示生成计时，完成后消失', async ({ page, app }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await page.getByPlaceholder(/身份发言/).fill('计时测试');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  const timer = page.getByRole('timer');
+  await expect(timer).toBeVisible({ timeout: 3000 });
+  await expect(page.getByText('思考中', { exact: true })).toBeVisible();
+  await expect.poll(async () => Number(((await timer.getAttribute('aria-label')) || '').match(/\d+/)?.[0] || 0), { timeout: 5000 })
+    .toBeGreaterThanOrEqual(1);
+  await expect(page.getByText('模型原文', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole('timer')).toHaveCount(0);
+});
+
+test('设置可标记对白颜色并支持自定义符号', async ({ page, app }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  const setColor = async (label: string, color: string) => {
+    await settings.getByLabel(label, { exact: true }).evaluate((element, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(element, value);
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    }, color);
+  };
+  await setColor('角色回复颜色', '#ff0000');
+  await setColor('对白颜色', '#0080ff');
+  await setColor('对白符号颜色 1', '#00ff00');
+  await settings.getByLabel('对白起始符号 1', { exact: true }).fill('【');
+  await settings.getByLabel('对白结束符号 1', { exact: true }).fill('】');
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(settings).toHaveCount(0);
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await expect(page.getByText('欢迎，旅行者。', { exact: true })).toBeVisible();
+  expect(await page.getByText('欢迎，旅行者。', { exact: true }).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(255, 0, 0)');
+
+  const chatDir = path.join(app.runDir, 'st', 'chats', '浏览器向导');
+  const file = fs.readdirSync(chatDir).find((name) => name.endsWith('.jsonl'))!;
+  fs.appendFileSync(path.join(chatDir, file), JSON.stringify({ name: '浏览器向导', is_user: false, is_system: false,
+    mes: '【自定义对白】和“引号对白”，普通叙述。', send_date: new Date().toISOString(), extra: { messageId: 'dialogue-color-test' } }) + '\n');
+  await page.reload();
+  await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
+  await expect(page.getByText('【自定义对白】和“引号对白”，普通叙述。', { exact: true })).toBeVisible();
+  const dialogue = page.locator('.tavern-dialogue');
+  await expect(dialogue).toHaveCount(2);
+  await expect(dialogue.nth(0)).toHaveText('【自定义对白】');
+  await expect(dialogue.nth(1)).toHaveText('“引号对白”');
+  expect(await dialogue.nth(0).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(0, 255, 0)');
+  expect(await dialogue.nth(1).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(0, 128, 255)');
+  expect(await page.locator('.tavern-markdown p').filter({ hasText: '普通叙述。' }).first().evaluate((element) => getComputedStyle(element).color)).toBe('rgb(255, 0, 0)');
+});
+
+test('主题按钮可自由选色并持久化', async ({ page, app }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '切换主题', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '主题与配色', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '主题与配色', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '夜琥珀', exact: true })).toBeVisible();
+  await dialog.getByLabel('强调色', { exact: true }).evaluate((element, value) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    setter.call(element, value);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, '#ff8800');
+  await expect.poll(async () => page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--color-tavern-accent').trim())).toBe('#ff8800');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await page.reload(); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--color-tavern-accent').trim())).toBe('#ff8800');
+  await page.getByRole('button', { name: '主题与配色', exact: true }).click();
+  await page.getByRole('dialog', { name: '主题与配色', exact: true }).getByRole('button', { name: '林间绿', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--color-tavern-accent').trim())).toBe('#7fbf8e');
+  expect(await page.evaluate(() => document.body.dataset.theme)).toBe('grove');
+  await page.reload(); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--color-tavern-accent').trim())).toBe('#7fbf8e');
+});
+
+test('设置自动保存，放弃更改与恢复默认（模型配置保留）', async ({ page, app, request }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const persona = dialog.getByLabel('用户名', { exact: true });
+  await persona.fill('自动保存测试');
+  await expect.poll(async () => (await (await request.get(app.baseURL + '/api/connection')).json()).persona.name, { timeout: 5000 }).toBe('自动保存测试');
+  await expect(dialog.getByText('已自动保存', { exact: true })).toBeVisible({ timeout: 5000 });
+  await dialog.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.reload(); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(dialog.getByLabel('用户名', { exact: true })).toHaveValue('自动保存测试');
+
+  await dialog.getByLabel('用户名', { exact: true }).fill('临时修改');
+  await expect.poll(async () => (await (await request.get(app.baseURL + '/api/connection')).json()).persona.name, { timeout: 5000 }).toBe('临时修改');
+  await dialog.getByRole('button', { name: '放弃本次更改', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(dialog.getByLabel('用户名', { exact: true })).toHaveValue('自动保存测试');
+
+  await dialog.getByLabel('自动候选分支数', { exact: true }).selectOption('2');
+  await dialog.getByRole('button', { name: '恢复默认配置（模型配置除外）', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(dialog.getByLabel('自动候选分支数', { exact: true })).toHaveValue('0');
+  await expect(dialog.getByLabel('用户名', { exact: true })).toHaveValue('旅人');
+  await expect(dialog.getByRole('group', { name: '模型连接：本地合成连接', exact: true })).toBeVisible();
+  const restored = await (await request.get(app.baseURL + '/api/connection')).json();
+  expect(restored.defaultModel).toBe('fixture');
+  expect(restored.providers[0].baseUrl).toContain('/v1');
+});
+
+test('顶栏悬停提示即时显示并覆盖设置按钮', async ({ page, app }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  const cases: Array<[string, string]> = [
+    ['主题与配色', '主题与配色'],
+    ['统计', '用量与工具调用统计'],
+    ['资料', '世界书、正则脚本、备份与迁移等'],
+    ['设置', '模型连接与运行设置'],
+  ];
+  for (const [button, text] of cases) {
+    await page.getByRole('button', { name: button, exact: true }).hover();
+    await expect(page.getByRole('tooltip')).toBeVisible({ timeout: 1500 });
+    await expect(page.getByRole('tooltip')).toHaveText(text);
+  }
+  await page.getByRole('button', { name: '统计', exact: true }).hover();
+  await page.screenshot({ path: path.join(app.runDir, 'topbar-tooltip.png') });
+});
+
+test('模型列表支持逐模型测试并显示成功或失败颜色', async ({ page, app }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const okButton = dialog.getByRole('button', { name: '测试模型：fixture', exact: true });
+  await okButton.click();
+  await expect(okButton).toHaveClass(/text-emerald-400/, { timeout: 5000 });
+
+  await dialog.getByLabel('请求模型 ID：fixture', { exact: true }).fill('broken-model');
+  const failButton = dialog.getByRole('button', { name: /测试模型：broken-model/ });
+  await failButton.click();
+  await expect(failButton).toHaveClass(/text-red-400/, { timeout: 5000 });
+  await expect(failButton).toHaveAttribute('aria-label', /合成失败/);
 });

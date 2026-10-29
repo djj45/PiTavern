@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { AuthorNoteDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
-import type { StChatLine } from "./types.ts";
-import { lastReplies, restoreState, selectedMessages, stateFields, type ReplyVersions } from "./replies.ts";
+import type { CharacterCard, StChatLine } from "./types.ts";
+import { greetingCatalog } from "./greetings.ts";
+import { lastReplies, restoreState, selectedMessages, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
 import { validateAuthorNote } from "../context/author-note.ts";
 
 export interface ChatMeta {
@@ -15,6 +16,10 @@ export interface ChatMeta {
   messageCount: number;
   lastMessage: string;
   updatedAt: string;
+  /** 侧栏可重命名的显示名，保存在 chat_metadata._pitavernTitle。 */
+  displayName?: string;
+  pinned?: boolean;
+  archived?: boolean;
 }
 
 export interface ChatDocument {
@@ -40,6 +45,10 @@ function stChatFileName(date = new Date()): string {
 
 function characterDirName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "_";
+}
+
+function messageIdOf(line: StChatLine, index: number): string {
+  return typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + index;
 }
 
 export function chatMessages(lines: StChatLine[]): ChatMessageDto[] {
@@ -85,6 +94,10 @@ export class ChatStore {
         messageCount: document.lines.length,
         lastMessage: document.lines.at(-1)?.mes.slice(0, 80) ?? "",
         updatedAt: new Date(stat.mtimeMs).toISOString(),
+        ...(typeof document.metadata._pitavernTitle === "string" && document.metadata._pitavernTitle.trim()
+          ? { displayName: document.metadata._pitavernTitle.trim().slice(0, 100) } : {}),
+        ...(document.metadata._pitavernPinned === true ? { pinned: true } : {}),
+        ...(document.metadata._pitavernArchived === true ? { archived: true } : {}),
       },
     });
   }
@@ -252,6 +265,30 @@ export class ChatStore {
     this.replaceSource(chatId, source, [JSON.stringify(header), ...lines].join("\n"), false);
     this.documents.delete(file);
     this.summaries.delete(file);
+  }
+
+  /** 侧栏菜单：置顶、归档、重命名只写 chat_metadata，不改变消息、候选和活动记录。 */
+  updateChatMeta(chatId: string, patch: { pinned?: boolean; archived?: boolean; displayName?: string | null }): void {
+    const rev = this.revision(chatId);
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    if (patch.pinned !== undefined) {
+      if (patch.pinned) metadata._pitavernPinned = true;
+      else delete metadata._pitavernPinned;
+    }
+    if (patch.archived !== undefined) {
+      if (patch.archived) metadata._pitavernArchived = true;
+      else delete metadata._pitavernArchived;
+    }
+    if (patch.displayName !== undefined) {
+      const name = patch.displayName?.trim();
+      if (name) metadata._pitavernTitle = name.slice(0, 100);
+      else delete metadata._pitavernTitle;
+    }
+    rev.header.chat_metadata = metadata;
+    if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);
+    else rev.raw.unshift(JSON.stringify(rev.header));
+    const next = rev.raw.join("\n");
+    this.replaceSource(chatId, rev.source, next.endsWith("\n") ? next : next + "\n", false);
   }
 
   appendMessage(chatId: string, line: Omit<StChatLine, "send_date"> & { send_date?: string }): StChatLine {
@@ -465,26 +502,83 @@ export class ChatStore {
     };
   }
 
+  selectGreeting(chatId: string, selected: number, expectedRevision: string, card?: CharacterCard): void {
+    if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请同步后重新选择开场白");
+    const rev = this.revision(chatId);
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    const catalog = greetingCatalog(rev.records.map((record) => record.line), card, !!readGroup(metadata));
+    if (!catalog) throw new Error("只能在单角色聊天尚未开始对话时切换开场白；已有对话请新建聊天选择开局");
+    if (!Number.isInteger(selected) || selected < 0 || selected >= catalog.options.length) throw new Error("开场白不存在");
+    if (selected === catalog.choices.selected) return;
+    const record = rev.records[catalog.lineIndex];
+    const line = record.line;
+    const extra = { ...line.extra };
+    const info = catalog.options.map((text, index) => {
+      const oldIndex = line.swipes?.[index] === text ? index : line.swipes?.indexOf(text) ?? -1;
+      return { ...line.swipe_info?.[oldIndex], extra: { ...line.swipe_info?.[oldIndex]?.extra } };
+    });
+    info[catalog.choices.selected] = { ...info[catalog.choices.selected], extra: { ...extra } };
+    delete extra.summary; delete extra.thinking; delete extra.protocol;
+    line.extra = { ...extra, ...info[selected].extra, messageId: typeof line.extra?.messageId === "string" ? line.extra.messageId : randomUUID() };
+    line.mes = catalog.options[selected];
+    line.swipes = catalog.options;
+    line.swipe_id = selected;
+    line.swipe_info = info;
+    rev.raw[record.rawIndex] = JSON.stringify(line);
+    delete metadata.projection; delete metadata.timedWorldInfo; delete metadata._pitavernEnforcement;
+    rev.header.chat_metadata = metadata;
+    if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header); else rev.raw.unshift(JSON.stringify(rev.header));
+    this.replaceSource(chatId, rev.source, rev.raw.join("\n"));
+  }
+
+  /**
+   * 切换任意历史回合的候选回复。活动路径保存在 JSONL 里，未选中的分支后续临时收进
+   * 该候选的 continuation；切回来时原样恢复，因此可以来回切换并继续向下写。
+   */
   selectReply(chatId: string, userMessageId: string, selected: number, expectedRevision: string): void {
     if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后切换候选回复");
     const rev = this.revision(chatId);
     const metadata = (rev.header.chat_metadata ?? {}) as Record<string, unknown>;
-    const { userIndex, choices, catalog } = lastReplies(rev.records.map((record) => record.line), metadata);
-    if (!choices || choices.userMessageId !== userMessageId) throw new Error("仅支持切换最后一轮的候选回复");
+    const lines = rev.records.map((record) => record.line);
+    const userIndex = rev.records.findIndex(({ line }, index) => line.is_user && !line.is_system && messageIdOf(line, index) === userMessageId);
+    if (userIndex < 0) throw new Error("找不到对应的用户回合，请刷新后重试");
+    const { catalog } = turnReplies(lines, metadata, userIndex);
     if (!Number.isInteger(selected) || selected < 0 || selected >= catalog.versions.length) throw new Error("候选回复不存在");
     if (selected === catalog.selected) return;
-    catalog.selected = selected;
-    const version = catalog.versions[selected];
-    const user = rev.records[userIndex];
-    user.line.extra = { ...user.line.extra, _pitavernReplies: catalog };
-    rev.raw[user.rawIndex] = JSON.stringify(user.line);
-    const removed = new Set(rev.records.slice(userIndex + 1).filter(({ line }) => !line.is_user && !line.is_system).map(({ rawIndex }) => rawIndex));
-    const raw = rev.raw.filter((_line, index) => !removed.has(index));
-    while (raw.at(-1) === "") raw.pop();
-    rev.header.chat_metadata = restoreState(metadata, version.state);
-    if (rev.hasHeader) raw[0] = JSON.stringify(rev.header);
-    else raw.unshift(JSON.stringify(rev.header));
-    this.replaceSource(chatId, rev.source, [...raw, ...selectedMessages(catalog).map((line) => JSON.stringify(line))].join("\n") + "\n");
+    const userRecord = rev.records[userIndex];
+    const nextUserPosition = rev.records.findIndex((record, index) => index > userIndex && record.line.is_user && !record.line.is_system);
+    const turnEnd = nextUserPosition >= 0 ? nextUserPosition : rev.records.length;
+    const turnEndRaw = nextUserPosition >= 0 ? rev.records[nextUserPosition].rawIndex : rev.raw.length;
+    const replies = rev.records.slice(userIndex + 1, turnEnd).filter(({ line }) => !line.is_user && !line.is_system);
+    const lastReply = replies.at(-1);
+    // 离开当前候选前，把它后面的所有行（后续回合、系统注释、损坏行）原样收好。
+    const continuation = lastReply ? rev.raw.slice(lastReply.rawIndex + 1).filter((line) => line.trim() !== "") : [];
+    const current = catalog.versions[catalog.selected];
+    catalog.versions[catalog.selected] = { ...current, messages: structuredClone(replies.map(({ line }) => line)), state: stateFields(metadata),
+      ...(continuation.length ? { continuation } : { continuation: undefined }) };
+    const fileCatalog = structuredClone(catalog);
+    fileCatalog.selected = selected;
+    // 即将生效的候选不再需要旧 continuation（写入文件后它就是活动路径）；先取出待恢复的原始行。
+    const target = fileCatalog.versions[selected];
+    const continuationRaw = (target.continuation ?? []).filter((line) => line.trim() !== "");
+    target.continuation = undefined;
+    const replyRaws = new Set(replies.map(({ rawIndex }) => rawIndex));
+    const extras: string[] = [];
+    for (let rawIndex = userRecord.rawIndex + 1; rawIndex < turnEndRaw; rawIndex++) {
+      const raw = rev.raw[rawIndex];
+      if (!replyRaws.has(rawIndex) && raw?.trim()) extras.push(raw);
+    }
+    const userLine = structuredClone(userRecord.line);
+    userLine.extra = { ...userLine.extra, _pitavernReplies: fileCatalog };
+    rev.header.chat_metadata = restoreState(metadata, target.state);
+    const prefix = rev.raw.slice(0, userRecord.rawIndex);
+    if (rev.hasHeader) prefix[0] = JSON.stringify(rev.header);
+    else prefix.unshift(JSON.stringify(rev.header));
+    const next = [
+      ...prefix, JSON.stringify(userLine), ...extras,
+      ...selectedMessages(fileCatalog).map((line) => JSON.stringify(line)), ...continuationRaw,
+    ].join("\n").replace(/\n+$/, "") + "\n";
+    this.replaceSource(chatId, rev.source, next);
   }
 
   deleteChat(chatId: string): boolean {

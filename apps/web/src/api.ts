@@ -9,6 +9,8 @@ import type {
   ChatSummaryDto,
   CharacterDto,
   ConnectionDto,
+  DiscoveredModelDto,
+  ModelDiscoveryRequest,
   PresetSummaryDto,
   WorldSummaryDto,
   LibraryResourceDto,
@@ -69,6 +71,14 @@ export const api = {
   activity: (chatId: string, before?: string) => fetch("/api/chat/activity?" + new URLSearchParams({ chatId, ...(before ? { before } : {}) }))
     .then((r) => json<GenerationPageDto>(r)),
   connection: () => fetch("/api/connection").then((r) => json<ConnectionDto>(r)),
+  discoverModels: (draft: ModelDiscoveryRequest, signal?: AbortSignal) => fetch("/api/connection/models", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft), signal,
+  }).then((r) => json<{ models: DiscoveredModelDto[] }>(r)),
+  setModelThinkingLevel: (providerId: string, modelId: string, thinkingLevel: NonNullable<ConnectionDto["thinkingLevel"]>) =>
+    fetch("/api/connection/model", { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId, modelId, thinkingLevel }) }).then((r) => json<{ ok: boolean; thinkingLevel: string }>(r)),
+  resetConnectionDefaults: () =>
+    fetch("/api/connection/reset", { method: "POST" }).then((r) => json<{ ok: boolean }>(r)),
   saveConnection: (patch: Partial<Omit<ConnectionDto, "providers">> & {
     providers?: Array<ConnectionDto["providers"][number] & { apiKey?: string }>;
   }) =>
@@ -77,10 +87,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<{ ok: boolean; restartRequired?: boolean }>(r)),
-  testConnection: () =>
-    fetch("/api/connection/test", { method: "POST" }).then((r) =>
-      json<{ ok: boolean; provider?: string; model?: string; error?: string }>(r),
-    ),
+  testConnection: (target?: { providerId: string; modelId: string }) =>
+    fetch("/api/connection/test", {
+      method: "POST",
+      ...(target ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(target) } : {}),
+    }).then((r) => json<{ ok: boolean; provider?: string; model?: string; error?: string }>(r)),
   testVectors: () => fetch("/api/vectors/test", { method: "POST" }).then((r) => json<{ ok: boolean; dimensions: number }>(r)),
   characters: () => fetch("/api/characters").then((r) => json<CharacterDto[]>(r)),
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
@@ -101,6 +112,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ character, greeting }),
     }).then((r) => json<{ id: string }>(r)),
+  selectGreeting: (chatId: string, selected: number, revision: string) => fetch("/api/chat/greeting", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, selected, revision }),
+  }).then((r) => json<{ ok: boolean }>(r)),
   chat: (id: string) =>
     fetch(`/api/chats/${id.split("/").map(encodeURIComponent).join("/")}`).then((r) =>
       json<ChatSnapshotDto>(r),
@@ -119,6 +133,10 @@ export const api = {
   selectReply: (chatId: string, userMessageId: string, selected: number, revision: string) =>
     fetch("/api/chat/reply", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, userMessageId, selected, revision }) }).then((r) => json<{ ok: boolean }>(r)),
+  /** 侧栏对话菜单：置顶 / 归档 / 重命名（服务端写入 chat_metadata）。 */
+  updateChatMeta: (chatId: string, patch: { pinned?: boolean; archived?: boolean; displayName?: string | null }) =>
+    fetch("/api/chat/meta", { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, ...patch }) }).then((r) => json<{ ok: boolean }>(r)),
   backups: (chatId: string, before?: string) => fetch("/api/chat/backups?" + new URLSearchParams({ chatId, ...(before ? { before } : {}) }))
     .then((r) => json<{ backups: ChatBackupDto[]; before: string | null }>(r)),
   previewBackup: (chatId: string, backupId: string) => fetch("/api/chat/backup?" + new URLSearchParams({ chatId, backupId }))

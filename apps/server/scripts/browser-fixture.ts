@@ -22,9 +22,33 @@ fs.writeFileSync(path.join(config.stDataDir, 'characters/browser.json'), JSON.st
 fs.writeFileSync(path.join(config.stDataDir, 'worlds/browser.json'), JSON.stringify({ entries: { '0': { uid: 0, comment: '初始条目', key: ['旅行者'], content: '初始内容', position: 0 } } }));
 fs.writeFileSync(path.join(config.stDataDir, 'OpenAI Settings/browser.json'), JSON.stringify({ prompts: [{ identifier: 'chatHistory', marker: true }], prompt_order: [{ character_id: 100001, order: [{ identifier: 'chatHistory', enabled: true }] }] }));
 fs.writeFileSync(path.join(config.stDataDir, 'characters/picture.png'), cardPng(fixtureCard('图片向导')));
+fs.writeFileSync(path.join(config.stDataDir, 'characters/greetings.json'), JSON.stringify({ name: '多开局向导',
+  first_mes: '请先选择开局。\n' + Array.from({ length: 8 }, (_, i) => `${i + 1}.合成场景${i + 1}`).join('\n'),
+  alternate_greetings: Array.from({ length: 8 }, (_, i) => `合成开局${i + 1}：{{user}}抵达地点${i + 1}。`) }));
 const mock = http.createServer(async (req, res) => {
+  if (req.method === 'GET' && req.url?.endsWith('/models')) {
+    fs.appendFileSync(path.join(runDir, 'model-requests.ndjson'), JSON.stringify({ method: req.method, url: req.url }) + '\n');
+    if (req.url === '/missing/models') { res.writeHead(404); res.end(); return; }
+    if (req.url === '/draft/models' && req.headers.authorization !== 'Bearer synthetic-draft') { res.writeHead(401); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const send = () => res.end(JSON.stringify({ data: req.url === '/empty/models' ? [] : [
+      { id: 'fixture', name: '本地模型' }, { id: 'a-embedding' }, { id: 'discovered-chat', name: '列表模型' }, { id: 'discovered-chat' },
+    ] }));
+    if (req.url === '/slow/models') {
+      res.flushHeaders(); const timer = setTimeout(send, 1500); res.on('close', () => clearTimeout(timer));
+    } else send();
+    return;
+  }
   let raw = ''; for await (const part of req) raw += part;
   fs.appendFileSync(path.join(runDir, 'requests.ndjson'), raw + '\n');
+  // 供逐模型连通测试验证失败态；其它请求一律返回成功。
+  if (raw.includes('"model":"broken-model"')) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: '合成失败' } }));
+    return;
+  }
+  // 只给计时验收用的合成提示增加延迟，其它浏览器用例保持即时响应。
+  if (raw.includes('计时测试')) await new Promise((resolve) => setTimeout(resolve, 4000));
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   const frame = (delta: object, finish_reason: string | null) => 'data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', model: 'fixture', choices: [{ index: 0, delta, finish_reason }] }) + '\n\n';
   res.end(frame({ role: 'assistant', content: '模型原文' }, null) + frame({}, 'stop') + 'data: [DONE]\n\n');

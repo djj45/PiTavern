@@ -99,10 +99,10 @@ try {
   let state: ChatsState = {};
   for (const id of ["a", "b"]) state = chatReducer(state, { type: "chat.snapshot", chatId: id, snapshot: snapshot(id) });
   state = chatReducer(state, { type: "pending", chatId: "a" });
-  state = chatReducer(state, { type: "chat.started", chatId: "a", message: dto });
+  state = chatReducer(state, { type: "chat.started", chatId: "a", startedAt: new Date().toISOString(), message: dto });
   state = chatReducer(state, { type: "chat.delta", chatId: "a", delta: "A 的正文" });
   assert.equal(state.b.streamingText, null);
-  state = chatReducer(state, { type: "chat.started", chatId: "b", message: dto });
+  state = chatReducer(state, { type: "chat.started", chatId: "b", startedAt: new Date().toISOString(), message: dto });
   state = chatReducer(state, { type: "chat.done", chatId: "a", message: { ...dto, id: "assistant-1", role: "assistant" } });
   assert.equal(state.a.streamingText, "", "中间助手消息不能提前结束整个工具回合");
   state = chatReducer(state, { type: "chat.finished", chatId: "a" });
