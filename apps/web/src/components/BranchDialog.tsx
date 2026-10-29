@@ -484,8 +484,12 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
       <div className="border-b border-tavern-border px-5 py-2">
         <input aria-label="搜索分支" value={query} onChange={(event) => {
           const value = event.target.value;
-          searchGeneration.current += 1;
-          searchQueryRef.current = value.trim().toLowerCase();
+          const normalized = value.trim().toLowerCase();
+          // 只改变尾随空格/大小写时规范化关键词没变，保留同一次搜索的生命周期。
+          if (normalized !== searchQueryRef.current) {
+            searchGeneration.current += 1;
+            searchQueryRef.current = normalized;
+          }
           setQuery(value);
         }}
           placeholder="搜索名称 / 剧情关键词 / 路径"
