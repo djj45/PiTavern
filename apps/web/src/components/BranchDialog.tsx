@@ -183,6 +183,8 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const treeRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
   const savedScroll = useRef(0);
+  const searchGeneration = useRef(0);
+  const searchQueryRef = useRef("");
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -273,13 +275,15 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const loadMoreSearch = async () => {
     if (!normalizedQuery || searchCursor === null || searchLoadingMore) return;
     const queryAtStart = normalizedQuery;
+    const generation = searchGeneration.current;
     setSearchLoadingMore(true);
     try {
       const data = await api.searchBranches(chatId, queryAtStart, searchCursor);
+      if (searchGeneration.current !== generation || searchQueryRef.current !== queryAtStart) return;
       setSearchHits((previous) => new Map([...previous, ...data.matches.map((match) => [match.nodeId, match.snippet] as const)]));
       setSearchCursor(data.nextCursor);
     } catch { /* 保留已加载结果 */ }
-    finally { setSearchLoadingMore(false); }
+    finally { if (searchGeneration.current === generation) setSearchLoadingMore(false); }
   };
   const loadMorePreview = async () => {
     if (!selectedId || !preview || preview.nextOffset === null || previewLoadingRef.current) return;
@@ -406,16 +410,18 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
 
   const normalizedQuery = query.trim().toLowerCase();
   useEffect(() => {
+    const generation = ++searchGeneration.current;
+    searchQueryRef.current = normalizedQuery;
     if (!normalizedQuery) { setSearchHits(new Map()); setSearchCursor(null); setSearchLoading(false); return; }
     let active = true;
     setSearchLoading(true); setSearchHits(new Map()); setSearchCursor(null); setSearchLoadingMore(false);
     const timer = setTimeout(() => {
       void api.searchBranches(chatId, normalizedQuery).then((result) => {
-        if (!active) return;
+        if (!active || searchGeneration.current !== generation) return;
         setSearchHits(new Map(result.matches.map((match) => [match.nodeId, match.snippet])));
         setSearchCursor(result.nextCursor);
-      }).catch(() => { if (active) { setSearchHits(new Map()); setSearchCursor(null); } })
-        .finally(() => { if (active) setSearchLoading(false); });
+      }).catch(() => { if (active && searchGeneration.current === generation) { setSearchHits(new Map()); setSearchCursor(null); } })
+        .finally(() => { if (active && searchGeneration.current === generation) setSearchLoading(false); });
     }, 250);
     return () => { active = false; clearTimeout(timer); };
   }, [chatId, normalizedQuery]);
@@ -476,7 +482,12 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
         </div>
       </div>
       <div className="border-b border-tavern-border px-5 py-2">
-        <input aria-label="搜索分支" value={query} onChange={(event) => setQuery(event.target.value)}
+        <input aria-label="搜索分支" value={query} onChange={(event) => {
+          const value = event.target.value;
+          searchGeneration.current += 1;
+          searchQueryRef.current = value.trim().toLowerCase();
+          setQuery(value);
+        }}
           placeholder="搜索名称 / 剧情关键词 / 路径"
           className="w-full rounded-md border border-tavern-border bg-tavern-bg px-3 py-1.5 text-sm text-tavern-text outline-none placeholder:text-tavern-dim focus:border-tavern-accent-dim" />
         <div className="mt-2 flex flex-wrap items-center gap-1.5" role="tablist" aria-label="分支筛选">

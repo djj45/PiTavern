@@ -273,15 +273,24 @@ export class SessionManager {
   }
 
   branchIndex(chatId: string): BranchIndexDto {
-    return this.chats.branchIndex(chatId);
+    const before = this.chats.revisionId(chatId);
+    const index = this.chats.branchIndex(chatId);
+    if (this.chats.revisionId(chatId) !== before) this.changed(chatId);
+    return index;
   }
 
   branchPreview(chatId: string, nodeId: string, offset: number, limit: number) {
-    return this.chats.branchPreview(chatId, nodeId, offset, limit);
+    const before = this.chats.revisionId(chatId);
+    const preview = this.chats.branchPreview(chatId, nodeId, offset, limit);
+    if (this.chats.revisionId(chatId) !== before) this.changed(chatId);
+    return preview;
   }
 
   searchBranches(chatId: string, query: string, cursor?: number, limit?: number) {
-    return this.chats.searchBranches(chatId, query, cursor, limit);
+    const before = this.chats.revisionId(chatId);
+    const result = this.chats.searchBranches(chatId, query, cursor, limit);
+    if (this.chats.revisionId(chatId) !== before) this.changed(chatId);
+    return result;
   }
 
   switchBranchPath(chatId: string, steps: BranchPathStepDto[], revision: string): BranchIndexDto {

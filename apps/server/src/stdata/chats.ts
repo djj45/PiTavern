@@ -414,7 +414,12 @@ export class ChatStore {
   editMessage(chatId: string, messageId: string, text: string, expectedText: string): void {
     if (!text.trim() || text.length > 1_000_000) throw new Error("消息不能为空且不能超过 100 万字符");
     const rev = this.revision(chatId);
-    const index = rev.records.findIndex(({ line }, i) => (typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + i) === messageId);
+    let index = rev.records.findIndex(({ line }, i) => (typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + i) === messageId);
+    // 旧界面在目录迁移前拿到的是 line-N；记录位置不变时允许兼容编辑，避免迁移后立即 409。
+    if (index < 0) {
+      const legacyIndex = /^line-(\d+)$/.exec(messageId);
+      if (legacyIndex && rev.records[Number(legacyIndex[1])] && !rev.records[Number(legacyIndex[1])].line.is_system) index = Number(legacyIndex[1]);
+    }
     const record = rev.records[index];
     if (!record || record.line.is_system) throw new Error("消息不存在，请刷新后重试");
     if (record.line.mes !== expectedText) throw new Error("消息已被修改，请刷新后重试");
@@ -555,17 +560,53 @@ export class ChatStore {
     return this.branchIndex(chatId);
   }
 
-  /** 旧 JSONL 首次进入分支目录时补齐持久 messageId；同时把旧节点元数据键迁移到新键。 */
+  /**
+   * 旧 JSONL 首次进入分支目录时，递归补齐活动消息、候选 messages 和 continuation 内的持久 messageId。
+   * 同一事务里把旧节点元数据键迁移到新键，避免某条旧子树第一次被切入后身份改变。
+   */
   private ensureLegacyMessageIds(chatId: string): boolean {
     const rev = this.revision(chatId);
-    const legacy = rev.records.filter(({ line }) => typeof line.extra?.messageId !== "string");
-    if (!legacy.length) return false;
-    const sourceRevision = this.revisionId(chatId);
-    const oldIndex = buildBranchIndex(rev.source, sourceRevision);
-    for (const { line, rawIndex } of legacy) {
-      line.extra = { ...line.extra, messageId: randomUUID() };
-      rev.raw[rawIndex] = JSON.stringify(line);
+    const originalSource = rev.source;
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    if (metadata._pitavernLegacyMigrated === true) return false;
+    let changed = false;
+    const migrateCatalog = (catalog: unknown) => {
+      const value = catalog as { versions?: Array<Record<string, unknown>> } | undefined;
+      if (!value || !Array.isArray(value.versions)) return;
+      for (const version of value.versions) {
+        if (!version || typeof version !== "object") continue;
+        if (Array.isArray(version.messages)) {
+          for (const message of version.messages) ensureLine(message);
+        }
+        if (Array.isArray(version.continuation)) {
+          version.continuation = version.continuation.map((raw) => {
+            if (typeof raw !== "string") return raw;
+            try {
+              const line = JSON.parse(raw);
+              if (line && typeof line === "object" && typeof line.mes === "string" && typeof line.name === "string") {
+                ensureLine(line);
+                return JSON.stringify(line);
+              }
+            } catch { /* Preserve unknown/damaged raw lines. */ }
+            return raw;
+          });
+        }
+      }
+    };
+    const ensureLine = (value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const line = value as Record<string, any>;
+      const extra = line.extra && typeof line.extra === "object" && !Array.isArray(line.extra) ? line.extra : (line.extra = {});
+      if (typeof extra.messageId !== "string") { extra.messageId = randomUUID(); changed = true; }
+      if (extra._pitavernReplies) migrateCatalog(extra._pitavernReplies);
+    };
+    for (const record of rev.records) {
+      ensureLine(record.line);
+      rev.raw[record.rawIndex] = JSON.stringify(record.line);
     }
+    if (!changed) return false;
+    const sourceRevision = this.revisionId(chatId);
+    const oldIndex = buildBranchIndex(originalSource, sourceRevision);
     const withIds = rev.raw.join("\n").replace(/\n+$/, "") + "\n";
     const newIndex = buildBranchIndex(withIds, sourceRevision);
     const oldNodes: import("@pitavern/shared").BranchTreeNodeDto[] = [];
@@ -574,16 +615,16 @@ export class ChatStore {
       for (const node of nodes) { target.push(node); collect(node.children, target); }
     };
     collect(oldIndex.nodes, oldNodes); collect(newIndex.nodes, newNodes);
-    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
-    const meta = metadata._pitavernBranchMeta && typeof metadata._pitavernBranchMeta === "object" && !Array.isArray(metadata._pitavernBranchMeta)
+    const branchMeta = metadata._pitavernBranchMeta && typeof metadata._pitavernBranchMeta === "object" && !Array.isArray(metadata._pitavernBranchMeta)
       ? { ...(metadata._pitavernBranchMeta as Record<string, Record<string, unknown>>) } : {};
     if (oldNodes.length === newNodes.length) {
       for (let index = 0; index < oldNodes.length; index++) {
         const oldId = oldNodes[index].id, newId = newNodes[index].id;
-        if (oldId !== newId && meta[oldId] && !meta[newId]) { meta[newId] = meta[oldId]; delete meta[oldId]; }
+        if (oldId !== newId && branchMeta[oldId] && !branchMeta[newId]) { branchMeta[newId] = branchMeta[oldId]; delete branchMeta[oldId]; }
       }
     }
-    metadata._pitavernBranchMeta = meta;
+    metadata._pitavernBranchMeta = branchMeta;
+    metadata._pitavernLegacyMigrated = true;
     rev.header.chat_metadata = metadata;
     if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);
     else rev.raw.unshift(JSON.stringify(rev.header));
