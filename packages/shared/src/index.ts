@@ -422,6 +422,8 @@ export interface BranchSearchDto {
   query: string;
   matches: BranchSearchMatchDto[];
   truncated: boolean;
+  /** 下一页在扁平节点列表中的游标；null 表示已搜完。 */
+  nextCursor: number | null;
 }
 
 export interface GreetingChoicesDto {

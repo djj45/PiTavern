@@ -173,6 +173,8 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const [tagDraft, setTagDraft] = useState("");
   const [searchHits, setSearchHits] = useState<Map<string, string>>(new Map());
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchCursor, setSearchCursor] = useState<number | null>(null);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
   const [locateTick, setLocateTick] = useState(0);
   const [preview, setPreview] = useState<{ messages: ChatMessageDto[]; total: number; nextOffset: number | null; nodeId: string }>();
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -268,6 +270,17 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   }, [chatId, selectedId]);
 
   const previewLoadingRef = useRef(false);
+  const loadMoreSearch = async () => {
+    if (!normalizedQuery || searchCursor === null || searchLoadingMore) return;
+    const queryAtStart = normalizedQuery;
+    setSearchLoadingMore(true);
+    try {
+      const data = await api.searchBranches(chatId, queryAtStart, searchCursor);
+      setSearchHits((previous) => new Map([...previous, ...data.matches.map((match) => [match.nodeId, match.snippet] as const)]));
+      setSearchCursor(data.nextCursor);
+    } catch { /* 保留已加载结果 */ }
+    finally { setSearchLoadingMore(false); }
+  };
   const loadMorePreview = async () => {
     if (!selectedId || !preview || preview.nextOffset === null || previewLoadingRef.current) return;
     const nodeId = selectedId, offset = preview.nextOffset;
@@ -393,14 +406,15 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
 
   const normalizedQuery = query.trim().toLowerCase();
   useEffect(() => {
-    if (!normalizedQuery) { setSearchHits(new Map()); setSearchLoading(false); return; }
+    if (!normalizedQuery) { setSearchHits(new Map()); setSearchCursor(null); setSearchLoading(false); return; }
     let active = true;
-    setSearchLoading(true);
+    setSearchLoading(true); setSearchHits(new Map()); setSearchCursor(null); setSearchLoadingMore(false);
     const timer = setTimeout(() => {
       void api.searchBranches(chatId, normalizedQuery).then((result) => {
         if (!active) return;
         setSearchHits(new Map(result.matches.map((match) => [match.nodeId, match.snippet])));
-      }).catch(() => { if (active) setSearchHits(new Map()); })
+        setSearchCursor(result.nextCursor);
+      }).catch(() => { if (active) { setSearchHits(new Map()); setSearchCursor(null); } })
         .finally(() => { if (active) setSearchLoading(false); });
     }, 250);
     return () => { active = false; clearTimeout(timer); };
@@ -471,7 +485,11 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
             className={"rounded-full px-2.5 py-1 text-xs " + (filter === item.value ? "bg-tavern-accent/20 text-tavern-accent" : "text-tavern-dim hover:text-tavern-text")}>
             {item.label}
           </button>)}
-          <span className="ml-auto text-[11px] text-tavern-dim">{searchLoading ? "搜索正文中…" : filteredCount + " 个节点"}{index?.truncated ? " · 已截断" : ""}</span>
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-tavern-dim">
+            {searchCursor !== null && !searchLoading && <button type="button" onClick={() => void loadMoreSearch()} disabled={searchLoadingMore}
+              className="rounded border border-tavern-border px-2 py-0.5 text-tavern-accent disabled:opacity-40">{searchLoadingMore ? "搜索中…" : "继续搜索正文"}</button>}
+            <span>{searchLoading ? "搜索正文中…" : filteredCount + " 个节点"}{index?.truncated ? " · 已截断" : ""}</span>
+          </div>
         </div>
         {bulkMode && <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md border border-tavern-border bg-tavern-raised/40 px-2 py-1.5 text-xs">
           <span className="text-tavern-dim">已选 {bulkSelected.size} 条</span>

@@ -280,8 +280,8 @@ export class SessionManager {
     return this.chats.branchPreview(chatId, nodeId, offset, limit);
   }
 
-  searchBranches(chatId: string, query: string) {
-    return this.chats.searchBranches(chatId, query);
+  searchBranches(chatId: string, query: string, cursor?: number, limit?: number) {
+    return this.chats.searchBranches(chatId, query, cursor, limit);
   }
 
   switchBranchPath(chatId: string, steps: BranchPathStepDto[], revision: string): BranchIndexDto {

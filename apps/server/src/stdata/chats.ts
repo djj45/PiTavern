@@ -547,7 +547,7 @@ export class ChatStore {
   /** 一次请求里按祖先路径连续切换，最后只写一次 JSONL。 */
   selectReplyPath(chatId: string, steps: { userMessageId: string; selected: number }[], expectedRevision: string) {
     if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后切换路线");
-    if (!steps.length || steps.length > 100) throw new Error("路线路径无效");
+    if (!steps.length || steps.length > 200) throw new Error("路线路径无效");
     const rev = this.revision(chatId);
     let source = rev.source;
     for (const step of steps) source = selectReplySource(source, step.userMessageId, step.selected);
@@ -555,7 +555,45 @@ export class ChatStore {
     return this.branchIndex(chatId);
   }
 
+  /** 旧 JSONL 首次进入分支目录时补齐持久 messageId；同时把旧节点元数据键迁移到新键。 */
+  private ensureLegacyMessageIds(chatId: string): boolean {
+    const rev = this.revision(chatId);
+    const legacy = rev.records.filter(({ line }) => typeof line.extra?.messageId !== "string");
+    if (!legacy.length) return false;
+    const sourceRevision = this.revisionId(chatId);
+    const oldIndex = buildBranchIndex(rev.source, sourceRevision);
+    for (const { line, rawIndex } of legacy) {
+      line.extra = { ...line.extra, messageId: randomUUID() };
+      rev.raw[rawIndex] = JSON.stringify(line);
+    }
+    const withIds = rev.raw.join("\n").replace(/\n+$/, "") + "\n";
+    const newIndex = buildBranchIndex(withIds, sourceRevision);
+    const oldNodes: import("@pitavern/shared").BranchTreeNodeDto[] = [];
+    const newNodes: import("@pitavern/shared").BranchTreeNodeDto[] = [];
+    const collect = (nodes: import("@pitavern/shared").BranchTreeNodeDto[], target: import("@pitavern/shared").BranchTreeNodeDto[]) => {
+      for (const node of nodes) { target.push(node); collect(node.children, target); }
+    };
+    collect(oldIndex.nodes, oldNodes); collect(newIndex.nodes, newNodes);
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    const meta = metadata._pitavernBranchMeta && typeof metadata._pitavernBranchMeta === "object" && !Array.isArray(metadata._pitavernBranchMeta)
+      ? { ...(metadata._pitavernBranchMeta as Record<string, Record<string, unknown>>) } : {};
+    if (oldNodes.length === newNodes.length) {
+      for (let index = 0; index < oldNodes.length; index++) {
+        const oldId = oldNodes[index].id, newId = newNodes[index].id;
+        if (oldId !== newId && meta[oldId] && !meta[newId]) { meta[newId] = meta[oldId]; delete meta[oldId]; }
+      }
+    }
+    metadata._pitavernBranchMeta = meta;
+    rev.header.chat_metadata = metadata;
+    if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);
+    else rev.raw.unshift(JSON.stringify(rev.header));
+    const next = rev.raw.join("\n").replace(/\n+$/, "") + "\n";
+    this.replaceSource(chatId, rev.source, next);
+    return true;
+  }
+
   branchIndex(chatId: string) {
+    this.ensureLegacyMessageIds(chatId);
     const file = this.resolveChatFile(chatId);
     if (!file) throw new Error("聊天不存在");
     const revision = this.revisionId(chatId);
@@ -584,18 +622,18 @@ export class ChatStore {
     };
   }
 
-  searchBranches(chatId: string, query: string) {
+  searchBranches(chatId: string, query: string, cursor = 0, limit = 100) {
     const needle = query.trim().toLowerCase();
     if (!needle || needle.length > 100) throw new Error("搜索关键词长度需为 1–100 个字符");
+    if (!Number.isInteger(cursor) || cursor < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error("搜索分页参数无效");
     const index = this.branchIndex(chatId);
     const rev = this.revision(chatId);
     const nodes: import("@pitavern/shared").BranchTreeNodeDto[] = [];
     const walk = (list: import("@pitavern/shared").BranchTreeNodeDto[]) => { for (const node of list) { nodes.push(node); walk(node.children); } };
     walk(index.nodes);
+    const end = Math.min(nodes.length, cursor + limit);
     const matches: { nodeId: string; snippet: string }[] = [];
-    let truncated = nodes.length > 5000;
-    for (const node of nodes.slice(0, 5000)) {
-      if (matches.length >= 100) { truncated = true; break; }
+    for (const node of nodes.slice(cursor, end)) {
       let source = rev.source;
       for (const step of node.path) source = selectReplySource(source, step.userMessageId, step.selected);
       const messages = chatMessages(parseChatSource(source).records.map((record) => record.line));
@@ -605,7 +643,8 @@ export class ChatStore {
       const snippet = message.text.slice(Math.max(0, position - 35), Math.min(message.text.length, position + needle.length + 65)).replace(/\s+/g, " ").trim();
       matches.push({ nodeId: node.id, snippet: (position > 35 ? "…" : "") + snippet + (position + needle.length + 65 < message.text.length ? "…" : "") });
     }
-    return { query: needle, matches, truncated };
+    const nextCursor = end < nodes.length ? end : null;
+    return { query: needle, matches, truncated: nextCursor !== null, nextCursor };
   }
 
   updateBranchMeta(chatId: string, nodeId: string, patch: BranchMetaPatchDto, expectedRevision: string) {
