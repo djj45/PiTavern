@@ -276,6 +276,10 @@ export class SessionManager {
     return this.chats.branchIndex(chatId);
   }
 
+  branchPreview(chatId: string, nodeId: string, offset: number, limit: number) {
+    return this.chats.branchPreview(chatId, nodeId, offset, limit);
+  }
+
   switchBranchPath(chatId: string, steps: BranchPathStepDto[], revision: string): BranchIndexDto {
     if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再切换路线");

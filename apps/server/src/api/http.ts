@@ -617,6 +617,15 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
+  app.get("/api/chat/branch-preview", (req, res) => {
+    const { chatId, nodeId } = req.query;
+    if (typeof chatId !== "string" || typeof nodeId !== "string") { res.status(400).json({ error: "分支预览参数无效" }); return; }
+    const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+    const limit = req.query.limit === undefined ? 20 : Number(req.query.limit);
+    try { res.json(sessions.branchPreview(chatId, nodeId, offset, limit)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   app.post("/api/chat/branch-switch", (req, res) => {
     const { chatId, revision, path } = req.body ?? {};
     if (typeof chatId !== "string" || typeof revision !== "string" || !Array.isArray(path) || path.length === 0 || path.length > 100

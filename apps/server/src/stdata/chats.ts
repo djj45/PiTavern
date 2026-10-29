@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AuthorNoteDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
 import type { CharacterCard, StChatLine } from "./types.ts";
 import { greetingCatalog } from "./greetings.ts";
-import { lastReplies, restoreState, selectedMessages, selectReplySource, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
+import { lastReplies, parseChatSource, restoreState, selectedMessages, selectReplySource, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
 import { buildBranchIndex, findBranchNode } from "./branch-index.ts";
 import { validateAuthorNote } from "../context/author-note.ts";
 
@@ -566,6 +566,22 @@ export class ChatStore {
     this.branchIndexes.set(file, { revision, index });
     while (this.branchIndexes.size > 8) this.branchIndexes.delete(this.branchIndexes.keys().next().value!);
     return index;
+  }
+
+  branchPreview(chatId: string, nodeId: string, offset = 0, limit = 20) {
+    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("预览分页参数无效");
+    const index = this.branchIndex(chatId);
+    const node = findBranchNode(index.nodes, nodeId);
+    if (!node) throw new Error("分支节点不存在，请刷新后重试");
+    const rev = this.revision(chatId);
+    let source = rev.source;
+    for (const step of node.path) source = selectReplySource(source, step.userMessageId, step.selected);
+    const messages = chatMessages(parseChatSource(source).records.map((record) => record.line));
+    const page = messages.slice(offset, offset + limit);
+    return {
+      revision: index.revision, nodeId, total: messages.length, offset, messages: page,
+      nextOffset: offset + page.length < messages.length ? offset + page.length : null,
+    };
   }
 
   updateBranchMeta(chatId: string, nodeId: string, patch: { name?: string | null; note?: string | null; favorite?: boolean; archived?: boolean }, expectedRevision: string) {

@@ -402,6 +402,15 @@ export interface BranchSwitchResultDto {
   index: BranchIndexDto;
 }
 
+export interface BranchPreviewDto {
+  revision: string;
+  nodeId: string;
+  total: number;
+  offset: number;
+  messages: ChatMessageDto[];
+  nextOffset: number | null;
+}
+
 export interface GreetingChoicesDto {
   selected: number;
   labels: string[];

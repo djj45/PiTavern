@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, BranchSwitchResultDto, BranchTreeNodeDto } from "@pitavern/shared";
+import type { BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, BranchSwitchResultDto, BranchTreeNodeDto, ChatMessageDto } from "@pitavern/shared";
 import { api } from "../api.ts";
 
 type Filter = "all" | "favorite" | "recent";
@@ -12,11 +12,6 @@ interface BranchDialogProps {
   onSwitchPath: (path: BranchPathStepDto[], revision?: string) => Promise<BranchSwitchResultDto | null>;
   onRegenerate: (instruction: string) => void;
   onClose: () => void;
-}
-
-function previewText(text: string, limit = 600): string {
-  const value = text.replace(/\s+/g, " ").trim();
-  return value.length > limit ? value.slice(0, limit) + "…" : value;
 }
 
 function isUnused(node: BranchTreeNodeDto): boolean {
@@ -140,6 +135,10 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
   const [previousLabel, setPreviousLabel] = useState("");
   const [showUnusedRoot, setShowUnusedRoot] = useState(false);
   const [rootPage, setRootPage] = useState(1);
+  const [preview, setPreview] = useState<{ messages: ChatMessageDto[]; total: number; nextOffset: number | null; nodeId: string }>();
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const previewRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
   const savedScroll = useRef(0);
@@ -212,6 +211,34 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
     if (!selectedId) return;
     requestAnimationFrame(() => document.querySelector('[data-branch-id="' + selectedId + '"]')?.scrollIntoView({ block: "nearest" }));
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) { setPreview(undefined); return; }
+    let active = true;
+    setPreview({ messages: [], total: 0, nextOffset: 0, nodeId: selectedId });
+    setPreviewLoading(true); setPreviewError("");
+    void api.branchPreview(chatId, selectedId, 0, 20).then((data) => {
+      if (!active) return;
+      setPreview({ messages: data.messages, total: data.total, nextOffset: data.nextOffset, nodeId: data.nodeId });
+      requestAnimationFrame(() => { if (previewRef.current) previewRef.current.scrollTop = 0; });
+    }).catch((cause: Error) => { if (active) setPreviewError(cause.message); })
+      .finally(() => { if (active) setPreviewLoading(false); });
+    return () => { active = false; };
+  }, [chatId, selectedId]);
+
+  const previewLoadingRef = useRef(false);
+  const loadMorePreview = async () => {
+    if (!selectedId || !preview || preview.nextOffset === null || previewLoadingRef.current) return;
+    const nodeId = selectedId, offset = preview.nextOffset;
+    previewLoadingRef.current = true; setPreviewLoading(true); setPreviewError("");
+    try {
+      const data = await api.branchPreview(chatId, nodeId, offset, 20);
+      setPreview((previous) => previous && previous.nodeId === nodeId
+        ? { messages: [...previous.messages, ...data.messages], total: data.total, nextOffset: data.nextOffset, nodeId }
+        : previous);
+    } catch (cause) { setPreviewError((cause as Error).message); }
+    finally { previewLoadingRef.current = false; setPreviewLoading(false); }
+  };
 
   const remember = (id?: string) => {
     if (!id) return;
@@ -411,8 +438,28 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
               </div>
             </div>
             <div className="mt-4 shrink-0">
-              <p className="mb-2 text-[11px] text-tavern-dim">剧情预览</p>
-              <p className="whitespace-pre-wrap break-words rounded-lg border border-tavern-border bg-tavern-bg/40 p-3 text-sm leading-6 text-tavern-text">{previewText(selected.preview || selected.assistantPreview || "（暂无正文预览）", 1600)}</p>
+              <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-tavern-dim">
+                <span>剧情预览 · 原文</span>
+                {preview && <span>{preview.messages.length} / {preview.total} 条 · 下滑加载</span>}
+              </div>
+              <div ref={previewRef} onScroll={(event) => {
+                const element = event.currentTarget;
+                if (element.scrollTop + element.clientHeight >= element.scrollHeight - 80) void loadMorePreview();
+              }} className="max-h-[42vh] min-h-24 overflow-y-auto rounded-lg border border-tavern-border bg-tavern-bg/40 p-3">
+                {preview?.messages.map((message, index) => (
+                  <div key={(message.id ?? "message") + ":" + index} className="border-b border-tavern-border/50 py-2 first:pt-0 last:border-0 last:pb-0">
+                    <div className="mb-0.5 text-[10px] text-tavern-dim">{message.role === "user" ? "用户" : message.name || "角色"}</div>
+                    <p className="whitespace-pre-wrap break-words text-sm leading-6 text-tavern-text">{message.text}</p>
+                  </div>
+                ))}
+                {previewError && <p role="alert" className="text-xs text-red-300">{previewError}</p>}
+                {previewLoading && <p role="status" className="py-2 text-center text-xs text-tavern-dim">正在加载原文…</p>}
+                {!previewLoading && !previewError && preview && preview.messages.length === 0 && <p className="py-2 text-center text-xs text-tavern-dim">没有可预览的正文。</p>}
+                {!previewLoading && preview?.nextOffset !== null && preview?.nextOffset !== undefined && (
+                  <button type="button" onClick={() => void loadMorePreview()} className="mt-2 w-full rounded border border-tavern-border px-2 py-1 text-xs text-tavern-dim hover:text-tavern-text">加载更多（下滑）</button>
+                )}
+                {!previewLoading && preview && preview.nextOffset === null && preview.messages.length > 0 && <p className="pt-2 text-center text-[10px] text-tavern-dim">已加载全文</p>}
+              </div>
               {selected.note && <p className="mt-2 whitespace-pre-wrap text-xs text-tavern-dim">备注：{selected.note}</p>}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">

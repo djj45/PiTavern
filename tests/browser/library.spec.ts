@@ -532,6 +532,8 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   await dialog.getByRole('button', { name: /未继续的候选/ }).click();
   await expect(dialog.locator('button[aria-pressed]')).toHaveCount(3);
   await dialog.locator('button[aria-pressed]').nth(1).click();
+  await expect(dialog.getByText('剧情预览 · 原文', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('已加载全文', { exact: true })).toBeVisible();
   await page.screenshot({ path: path.join(app.runDir, 'branch-manager.png') });
   await dialog.getByRole('button', { name: '继续这条路线' }).click();
   await expect(page.getByText('已切换剧情路线', { exact: true })).toBeVisible();

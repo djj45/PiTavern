@@ -3,6 +3,7 @@ import type {
   AuthorNoteSnapshotDto,
   BranchIndexDto,
   BranchMetaPatchDto,
+  BranchPreviewDto,
   BranchPathStepDto,
   BranchSwitchResultDto,
   ChatBackupDto,
@@ -138,6 +139,8 @@ export const api = {
     fetch("/api/chat/reply", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, userMessageId, selected, revision }) }).then((r) => json<{ ok: boolean }>(r)),
   branchIndex: (chatId: string) => fetch("/api/chat/branch-index?" + new URLSearchParams({ chatId })).then((r) => json<BranchIndexDto>(r)),
+  branchPreview: (chatId: string, nodeId: string, offset = 0, limit = 20) =>
+    fetch("/api/chat/branch-preview?" + new URLSearchParams({ chatId, nodeId, offset: String(offset), limit: String(limit) })).then((r) => json<BranchPreviewDto>(r)),
   switchBranchPath: (chatId: string, revision: string, path: BranchPathStepDto[]) =>
     fetch("/api/chat/branch-switch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, revision, path }) }).then((r) => json<BranchSwitchResultDto>(r)),

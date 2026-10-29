@@ -213,6 +213,24 @@ try {
   assert.ok(fs.readFileSync(chat.file, "utf8") !== beforeSwitch, "切换必须写入目标活动路径");
   console.log("✓ 完整目录读取非活动嵌套分支，并支持一次跨层切换");
 
+  const previewResponse = await fetch(base + "/api/chat/branch-preview?" + new URLSearchParams({
+    chatId: chat.id, nodeId: deepLeaf.id, offset: "0", limit: "1" }));
+  const previewText = await previewResponse.text();
+  assert.equal(previewResponse.status, 200, previewText);
+  const previewPage = JSON.parse(previewText) as any;
+  assert.equal(previewPage.nodeId, deepLeaf.id);
+  assert.ok(previewPage.total >= 1 && previewPage.messages.length <= 1);
+  assert.equal(typeof previewPage.messages[0]?.text, "string");
+  if (previewPage.nextOffset != null) {
+    const nextResponse = await fetch(base + "/api/chat/branch-preview?" + new URLSearchParams({
+      chatId: chat.id, nodeId: deepLeaf.id, offset: String(previewPage.nextOffset), limit: "1" }));
+    const nextText = await nextResponse.text();
+    assert.equal(nextResponse.status, 200, nextText);
+    const nextPage = JSON.parse(nextText) as any;
+    assert.notEqual(nextPage.messages[0]?.id, previewPage.messages[0]?.id, "分页必须返回后续原文");
+  }
+  console.log("✓ 分支全文预览按原文分页返回");
+
   const metaResponse = await fetch(base + "/api/chat/branch-meta", { method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chatId: chat.id, revision: revision(chat.id), nodeId: deepLeaf.id, patch: { name: "深层路线", favorite: true } }) });
   const metaText = await metaResponse.text();
