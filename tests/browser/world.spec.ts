@@ -74,6 +74,15 @@ test('世界模板选择、状态面板、旧聊天初始化与手工修正', as
   await expect(dialog).toContainText('55 · 无');
   await dialog.getByRole('button', { name: '关闭世界状态' }).click();
 
+  // 刷新（重连）后世界快照仍来自 JSONL。
+  await page.reload();
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.locator('aside li').filter({ hasText: '浏览器向导' }).first().getByRole('button').first().click();
+  await expect(page.getByRole('button', { name: '聊天操作', exact: true })).toBeEnabled();
+  dialog = await openWorld(page);
+  await expect(dialog).toContainText('55 · 无');
+  await dialog.getByRole('button', { name: '关闭世界状态' }).click();
+
   // 新建聊天时直接选择世界模板，开局即带初始快照。
   await page.getByLabel('新聊天世界模板').selectOption('tavern-sword');
   await page.getByRole('button', { name: '＋ 开始新对话' }).click();
@@ -82,5 +91,22 @@ test('世界模板选择、状态面板、旧聊天初始化与手工修正', as
   await expect(dialog).toContainText('酒馆买剑');
   await expect(dialog).toContainText('100');
   await expect(dialog).toContainText('酒馆');
+  await dialog.getByRole('button', { name: '关闭世界状态' }).click();
+});
+
+test('世界状态面板在 390px 手机宽度可用', async ({ page, app }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(app.baseURL);
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.getByLabel('新聊天世界模板').selectOption('tavern-sword');
+  await page.getByRole('button', { name: '＋ 开始新对话' }).click();
+  const worldButton = page.getByRole('button', { name: '打开世界状态', exact: true });
+  await expect(worldButton).toBeVisible();
+  await worldButton.click();
+  const dialog = page.getByRole('dialog', { name: '世界状态' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('酒馆买剑');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await dialog.getByRole('button', { name: '关闭世界状态' }).click();
 });

@@ -178,3 +178,41 @@ test("手工修正世界校验模板并同步活动候选", () => {
   assert.equal(store.readWorld(chat.id)!.snapshot.clockMinutes, 120);
   assert.equal(store.readWorld(chat.id)!.snapshot.revision, snapshot.revision + 1);
 });
+
+test("重启、备份和单文件 JSONL 都保留旧聊天世界与模板", () => {
+  const { st, store, chat } = setup();
+  store.initializeWorld(chat.id, template);
+  const before = stateFields(store.readMetadata(chat.id));
+  store.appendMessage(chat.id, {
+    name: "User", is_user: true, is_system: false, mes: "旧剧情",
+    extra: { _pitavernBeforeTurn: { metadata: before, enforcement: { turn: 1, usedThisTurn: 0, cooldownUntilTurn: 0 } } },
+  });
+  store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "旧回答" });
+  const snapshot = store.readWorld(chat.id)!.snapshot;
+  store.correctWorld(chat.id, { ...snapshot, money: { ...snapshot.money, player: 77 } }, store.revisionId(chat.id));
+
+  const restarted = new ChatStore(st);
+  const restartedState = restarted.readWorld(chat.id)!;
+  assert.equal(restartedState.snapshot.money.player, 77);
+  assert.ok(restartedState.template);
+
+  const copyRoot = fs.mkdtempSync(path.join(ROOT, "data/test-runs/world-copy-"));
+  const copySt = path.join(copyRoot, "st");
+  fs.mkdirSync(path.join(copySt, "chats", "copied"), { recursive: true });
+  fs.copyFileSync(chat.file, path.join(copySt, "chats", "copied", "export.jsonl"));
+  const copied = new ChatStore(copySt).readWorld("chats/copied/export.jsonl")!;
+  assert.equal(copied.snapshot.money.player, 77);
+  assert.ok(copied.template);
+  const transaction = new WorldTransaction(copied, 1);
+  const result = transaction.execute(purchase);
+  assert.equal(result.status, "staged");
+  assert.equal(transaction.snapshot.money.player, 67);
+
+  const backup = store.backups(chat.id).backups[0];
+  assert.ok(backup);
+  store.restoreBackup(chat.id, backup.id, store.revisionId(chat.id));
+  const restored = store.readWorld(chat.id)!;
+  assert.ok(restored.template);
+  assert.equal(restored.snapshot.templateHash, snapshot.templateHash);
+  assert.equal(restored.snapshot.revision, snapshot.revision);
+});
