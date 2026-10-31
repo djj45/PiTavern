@@ -1,6 +1,6 @@
 # World Engine v0.1（M0 契约）
 
-状态：M0 语义锁定。尚未接入 Runtime、Agent 或 UI。
+状态：M0 语义锁定；M1 纯状态、固定规则和内存事务已实现。尚未接入聊天 Runtime、Agent 或 UI。
 
 目标：先证明**世界硬状态在生成、失败、停止、重生成、分支切换、重启和恢复备份之间始终正确**，首个场景固定为「酒馆买剑」。
 
@@ -154,3 +154,35 @@ const TURN_STATE_KEYS = [
 > Runtime 保证世界账本一致；不承诺模型自由文本永不与账本矛盾。
 
 后续版本再扩展知识、关系、任务、NPC 意图、日程和模拟规则。
+
+## 12. M1 纯引擎接口
+
+入口为 `apps/server/src/world/index.ts`，不读取配置、不读写聊天文件、不调用模型。
+
+- `createWorldTemplateRecord(input)`：校验模板，生成不可变版本记录。内容哈希采用 SHA-256；递归按对象键排序、保留数组顺序的 JSON 为输入，字段顺序不影响身份。
+- `createInitialWorldSnapshot(record)`：校验记录哈希和已支持的规则版本，创建 revision 0、时钟 0 的快照。
+- `new WorldState(snapshot, templates, capability?)`：校验快照及模板引用，解析能力模式；模板缺失、内容/版本不匹配、规则未知或引用不一致时只读。快照自身结构损坏则抛出 `WorldValidationError`，不猜测修复。
+- `state.snapshot` / `state.template` / `state.capability`：返回独立副本，只读查看不会暴露引擎内部对象。
+- `new WorldTransaction(state, turn)`：从状态创建工作副本；`turn` 必须为非负安全整数。
+- `transaction.execute(command)`：严格校验命令，不接受价格或其他额外字段。每条命令在独立副本上结算，成功才更新事务工作副本。
+- `transaction.snapshot` / `transaction.receipts`：返回暂存状态和收据的独立副本。
+- `transaction.commit()`：结束内存事务并返回独立快照，**不修改原 WorldState、不写文件**。M2 负责校验聊天 revision 后，将该结果与正文一起提交。
+- `transaction.discard()`：丢弃全部暂存修改和收据，结束事务。结束后不再接受命令或重复提交。
+
+### 固定规则版本 1
+
+- 所有声明角色初始为 alive，位于 `initial.locationId`；仅 `initial.actorId` 获得初始金额，其他角色余额为 0；初始库存按 ownerId 明确归属。
+- 库存每个 `(ownerId, itemId)` 只有一条正数记录；数量清零时移除记录。不同角色可各自持有同种物品。
+- 购买和转移要求双方是已声明、alive 且同地点的不同角色；价格固定来自模板。购买同时给卖家入账，金钱和物品总量守恒，固定零价格允许。
+- 移动可到任意已声明地点，不消耗时间；v0.1 无路径或移动耗时配置。当前场景跟随玩家位置，在场列表由角色位置派生，inactive 不列入在场，dead 可在场但不能行动。
+- 推进时间只增加总分钟，不执行日程或后台模拟。所有数值均采用共享常量的上限；乘法/加法在修改状态前校验。
+- 每条新成功命令使世界 revision 加 1 并产生一条事件；拒绝和重复调用不改变 revision。
+- `recentEvents` 保存当前分支最近最多 100 条成功事件；事件 ID 为 UUID。其裁剪不影响事务内收据。
+- 结构合法的命令无论 staged 或 rejected 都保留原收据；相同 ID 的不同参数返回冲突。结构不合法且 ID 尚未使用的输入只报错，不占用收据。收据从不进入持久化快照。
+- 只读/禁用模式可以读取快照，命令返回 READ_ONLY；模型与工具能力的具体判定由 M3 调用方提供，M1 不接供应商配置。
+
+### M1 验证
+
+`npm run verify:world-engine` 使用纯合成数据运行单元测试，已加入 `verify:ci`。覆盖模板和快照校验、内容哈希、只读降级、固定交易规则、数值边界、单命令原子性、事务隔离、幂等、事件裁剪及 JSON 往返。
+
+真实聊天的失败/停止/重生成/分支/备份生命周期仍属于 M2；JSON 往返测试不代替存储集成验收。

@@ -20,6 +20,7 @@
     "verify:chat-ux": "tsx scripts/chat-ux-verify.ts",
     "verify:activity": "tsx scripts/activity-context-verify.ts",
     "verify:world-display": "tsx scripts/world-display-verify.ts",
+    "verify:world-engine": "tsx --test scripts/world-engine-verify.ts",
     "verify:library": "tsx scripts/library-verify.ts",
     "verify:regex-isolation": "tsx scripts/regex-isolation-verify.ts",
     "verify:library-maintenance": "tsx scripts/library-maintenance-verify.ts",

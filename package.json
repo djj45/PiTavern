@@ -27,6 +27,7 @@
     "verify:rendering": "npm run verify:rendering -w apps/web",
     "verify:activity": "npm run verify:activity -w apps/server",
     "verify:world-display": "npm run verify:world-display -w apps/server",
+    "verify:world-engine": "npm run verify:world-engine -w apps/server",
     "verify:library": "npm run verify:library -w apps/server",
     "verify:ci": "node scripts/verify-ci.mjs",
     "verify:browser": "playwright test",
