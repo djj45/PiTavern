@@ -702,7 +702,7 @@ test('设置可标记对白颜色并支持自定义符号', async ({ page, app }
   await expect(settings).toHaveCount(0);
   await page.locator('aside').first().locator('li').getByRole('button').filter({ hasText: '浏览器向导' }).first().click();
   await expect(page.getByText('欢迎，旅行者。', { exact: true })).toBeVisible();
-  expect(await page.getByText('欢迎，旅行者。', { exact: true }).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(255, 0, 0)');
+  await expect.poll(async () => await page.getByText('欢迎，旅行者。', { exact: true }).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(255, 0, 0)');
 
   const chatDir = path.join(app.runDir, 'st', 'chats', '浏览器向导');
   const file = fs.readdirSync(chatDir).find((name) => name.endsWith('.jsonl'))!;
@@ -715,8 +715,8 @@ test('设置可标记对白颜色并支持自定义符号', async ({ page, app }
   await expect(dialogue).toHaveCount(2);
   await expect(dialogue.nth(0)).toHaveText('【自定义对白】');
   await expect(dialogue.nth(1)).toHaveText('“引号对白”');
-  expect(await dialogue.nth(0).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(0, 255, 0)');
-  expect(await dialogue.nth(1).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(0, 128, 255)');
+  await expect.poll(async () => await dialogue.nth(0).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(0, 255, 0)');
+  await expect.poll(async () => await dialogue.nth(1).evaluate((element) => getComputedStyle(element).color)).toBe('rgb(0, 128, 255)');
   expect(await page.locator('.tavern-markdown p').filter({ hasText: '普通叙述。' }).first().evaluate((element) => getComputedStyle(element).color)).toBe('rgb(255, 0, 0)');
 });
 
