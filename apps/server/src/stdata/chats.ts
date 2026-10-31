@@ -259,8 +259,10 @@ export class ChatStore {
             ? version.state as Record<string, unknown> : undefined;
           if (state) {
             if (!Object.hasOwn(state, WORLD_STATE_KEY)) state[WORLD_STATE_KEY] = structuredClone(snapshot);
+            if (!Object.hasOwn(state, "variables")) version.statePruned = true;
           } else {
             version.state = { [WORLD_STATE_KEY]: structuredClone(snapshot) };
+            version.statePruned = true;
           }
           const continuation = version.continuation;
           if (Array.isArray(continuation)) {
@@ -510,7 +512,7 @@ export class ChatStore {
     const before = line.extra._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
     if (before && typeof before === "object" && !Array.isArray(before)) {
       const world = before.metadata?.[WORLD_STATE_KEY];
-      if (world !== undefined) line.extra._pitavernBeforeTurn = { metadata: { [WORLD_STATE_KEY]: structuredClone(world) } };
+      if (world !== undefined) line.extra._pitavernBeforeTurn = { metadata: { [WORLD_STATE_KEY]: structuredClone(world) }, statePruned: true };
       else delete line.extra._pitavernBeforeTurn;
     }
     const catalog = line.extra._pitavernReplies as ReplyVersions | undefined;
@@ -524,8 +526,10 @@ export class ChatStore {
         if (world !== undefined) {
           hasWorld = true;
           version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
+          version.statePruned = true;
         } else {
           delete version.state;
+          delete version.statePruned;
         }
         delete version.enforcement;
       }
@@ -553,7 +557,13 @@ export class ChatStore {
           cursor = original + 1;
           if (changed) this.retainWorldRecovery(line);
           next.push(changed ? JSON.stringify(line) : rev.raw[original]);
-        } else next.push(JSON.stringify({ ...line, extra: { ...line.extra, messageId: randomUUID() } }));
+        } else {
+          const extra: Record<string, unknown> = { ...line.extra, messageId: line.extra?.messageId ?? randomUUID() };
+          if (line.is_user && !line.is_system && !Object.hasOwn(extra, "_pitavernBeforeTurn")) {
+            extra._pitavernBeforeTurn = { metadata: stateFields(metadata) };
+          }
+          next.push(JSON.stringify({ ...line, extra }));
+        }
       }
       next.push(...rev.raw.slice(cursor));
       if (changed) { delete metadata.projection; delete metadata.timedWorldInfo; delete metadata._pitavernEnforcement; }
@@ -609,7 +619,7 @@ export class ChatStore {
       if (!checkpoint) continue;
       const world = checkpoint.metadata?.[WORLD_STATE_KEY];
       if (world !== undefined) {
-        next.line.extra = { ...next.line.extra, _pitavernBeforeTurn: { metadata: { [WORLD_STATE_KEY]: structuredClone(world) } } };
+        next.line.extra = { ...next.line.extra, _pitavernBeforeTurn: { metadata: { [WORLD_STATE_KEY]: structuredClone(world) }, statePruned: true } };
       } else if (next.line.extra) {
         delete next.line.extra._pitavernBeforeTurn;
       }
@@ -624,8 +634,13 @@ export class ChatStore {
         if (Array.isArray(catalog.versions)) for (const version of catalog.versions) {
           if (!version || typeof version !== "object") continue;
           const world = version.state?.[WORLD_STATE_KEY];
-          if (world !== undefined) version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
-          else delete version.state;
+          if (world !== undefined) {
+            version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
+            version.statePruned = true;
+          } else {
+            delete version.state;
+            delete version.statePruned;
+          }
           delete version.enforcement;
         }
         rev.raw[next.rawIndex] = JSON.stringify(next.line);
@@ -652,9 +667,11 @@ export class ChatStore {
     const document = this.readDocument(chatId)!;
     const { catalog } = lastReplies(lines, document.metadata);
     const metadata = structuredClone(document.metadata);
-    const checkpoint = lines[userIndex].extra?._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
+    const checkpoint = lines[userIndex].extra?._pitavernBeforeTurn as { metadata?: Record<string, unknown>; statePruned?: boolean } | undefined;
     for (const key of ["variables", "projection", "timedWorldInfo", WORLD_STATE_KEY]) {
       if (checkpoint?.metadata && Object.hasOwn(checkpoint.metadata, key)) metadata[key] = structuredClone(checkpoint.metadata[key]);
+      // 检查点被脚本/编辑裁成仅世界时，variables 是当前值，不能当作“该回合无变量”删除。
+      else if (key === "variables" && checkpoint?.statePruned) continue;
       else if (checkpoint?.metadata || key !== "variables") delete metadata[key];
     }
     // Replace assistant replies only; preserve system notes and unrecognized/raw lines in that turn.

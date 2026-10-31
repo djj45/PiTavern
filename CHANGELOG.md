@@ -2,7 +2,7 @@
 
 ## 未发布
 
-- World Engine v0.1 修复：旧聊天绑定世界时为缺失的回合检查点补建世界恢复点（含 continuation 内嵌套回合）；普通变量脚本不再删除检查点/候选世界快照，只清理普通状态；`world_query` 的 summary/catalog/all 返回角色、地点、物品 ID、地点目录和固定价格；世界引擎测试增至 59 项。
+- World Engine v0.1 修复：旧聊天绑定世界时为缺失的回合检查点补建世界恢复点（含 continuation 内嵌套回合）；普通变量脚本不再删除检查点/候选世界快照，重生成/候选切换保留当前变量；脚本新增用户回合补建检查点；`world_query` 的 summary/catalog/all 返回角色、地点、物品 ID、地点目录和固定价格；世界引擎测试增至 61 项。
 - World Engine v0.1 M5：完成重启、备份恢复、单文件 JSONL 复制和浏览器刷新/390px 移动端验收；世界引擎测试 57 项、浏览器 35 项、离线 CI 18 组；当前无单文件 JSONL 导入 UI，仍不包含自定义模板编辑和模板热更新，不改变 0.2.2 发布版本。
 - World Engine v0.1 M4：新增内置世界模板目录（酒馆买剑/雾港旅店）、新聊天模板选择、`ChatSnapshotDto.world` 世界视图、世界状态/只读提示面板、旧聊天中途初始化（回填旧检查点/分支候选）和手工修正快照（同模板校验、revision+1、活动候选同步）；世界引擎测试 M4 阶段 56 项，浏览器 34 项通过（新增世界 UI 用例）；仍不包含自定义模板编辑、模板热更新和脚本内世界工具，不改变 0.2.2 发布版本。
 - World Engine v0.1 M3：接入 `world_query` / `world_command` Agent 工具、World Digest 和只读/无工具能力矩阵；查询走本轮事务工作副本，命令继续由每轮 `WorldTransaction` 暂存，成功回合统一提交，失败/停止/重生成失败丢弃；simple / bridge / takeover 均注入 Digest，文本补全和 `toolsEnabled=false` 固定只读且不提示调用不存在的工具；世界工具测试并入 `verify:world-engine`（M3 阶段 52 项）；世界 UI 和旧聊天入口在 M4 补上。

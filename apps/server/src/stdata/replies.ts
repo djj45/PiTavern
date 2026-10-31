@@ -10,6 +10,8 @@ export interface ReplyVersion {
   branchId?: string;
   messages: StChatLine[];
   state?: Record<string, unknown>;
+  /** 普通状态曾被脚本/编辑清理，只剩世界恢复点；切换时保留当前 variables。 */
+  statePruned?: boolean;
   enforcement?: RecallState;
   /**
    * 该候选分支之后的原始 JSONL 行（含换行前的空行）。只有该候选不在当前活动路径上时才写入；
@@ -118,7 +120,9 @@ export function turnReplies(lines: StChatLine[], metadata: Record<string, unknow
     }) };
   } else if (current.length) catalog = { selected: 0, versions: [{ messages: structuredClone(current) }] };
   if (current.length && catalog.versions.length) {
-    catalog.versions[catalog.selected] = { ...catalog.versions[catalog.selected], messages: structuredClone(current), state: stateFields(metadata) };
+    const currentVersion = { ...catalog.versions[catalog.selected], messages: structuredClone(current), state: stateFields(metadata) };
+    delete currentVersion.statePruned;
+    catalog.versions[catalog.selected] = currentVersion;
   }
   return {
     userIndex, catalog,
@@ -200,8 +204,10 @@ export function selectReplySource(source: string, userMessageId: string, selecte
   // 离开当前候选前，把它后面的所有行（后续回合、系统注释、损坏行）原样收好。
   const continuation = lastReply ? rev.raw.slice(lastReply.rawIndex + 1).filter((line) => line.trim() !== "") : [];
   const current = catalog.versions[catalog.selected];
-  catalog.versions[catalog.selected] = { ...current, messages: structuredClone(replies.map(({ line }) => line)), state: stateFields(metadata),
+  const currentVersion = { ...current, messages: structuredClone(replies.map(({ line }) => line)), state: stateFields(metadata),
     ...(continuation.length ? { continuation } : { continuation: undefined }) };
+  delete currentVersion.statePruned;
+  catalog.versions[catalog.selected] = currentVersion;
   const fileCatalog = structuredClone(catalog);
   fileCatalog.selected = selected;
   // 即将生效的候选不再需要旧 continuation（写入文件后它就是活动路径）；先取出待恢复的原始行。
@@ -221,6 +227,8 @@ export function selectReplySource(source: string, userMessageId: string, selecte
   if (metadata[WORLD_STATE_KEY] && (!target.state || !Object.hasOwn(target.state, WORLD_STATE_KEY))) {
     restored[WORLD_STATE_KEY] = structuredClone(metadata[WORLD_STATE_KEY]);
   }
+  // 普通状态被脚本/编辑清理过的候选不应把当前 variables 一起删掉。
+  if (target.statePruned && Object.hasOwn(metadata, "variables")) restored.variables = structuredClone(metadata.variables);
   rev.header.chat_metadata = restored;
   const prefix = rev.raw.slice(0, userRecord.rawIndex);
   if (rev.hasHeader) prefix[0] = JSON.stringify(rev.header);

@@ -250,15 +250,63 @@ test("普通变量脚本保留世界检查点和候选恢复点", () => {
   script.metadata.variables = { scriptTouched: true };
   script.commit();
   assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 10);
+  assert.deepEqual(store.readMetadata(chat.id).variables, { scriptTouched: true });
   const userLine = store.readDocument(chat.id)!.lines.find((line) => line.is_user)!;
   assert.ok((userLine.extra!._pitavernBeforeTurn as { metadata: Record<string, unknown> }).metadata[WORLD_STATE_KEY]);
-  const catalog = userLine.extra!._pitavernReplies as { versions: Array<{ state?: Record<string, unknown> }> };
-  assert.ok(catalog.versions.some((version) => version.state?.[WORLD_STATE_KEY]));
+  const catalog = userLine.extra!._pitavernReplies as { versions: Array<{ state?: Record<string, unknown>; statePruned?: boolean }> };
+  assert.ok(catalog.versions.some((version) => version.state?.[WORLD_STATE_KEY] && version.statePruned));
+  store.selectReply(chat.id, userLine.extra!.messageId as string, 0, store.revisionId(chat.id));
+  assert.deepEqual(store.readMetadata(chat.id).variables, { scriptTouched: true });
+  assert.ok(store.readWorld(chat.id));
   const current = store.readDocument(chat.id)!.lines.filter((line) => !line.is_user && !line.is_system).at(-1)!;
   const again = store.prepareRegeneration(chat.id, current.extra!.messageId as string, current.mes);
   assert.ok(again.metadata[WORLD_STATE_KEY]);
   again.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "脚本后回答", send_date: new Date().toISOString(), extra: { messageId: "assistant-script-after" } }], again.metadata);
   assert.ok(store.readWorld(chat.id));
-  // 重生成回到该回合前检查点，因此恢复的是购买前余额；关键是世界没有被脚本删除。
+  assert.deepEqual(store.readMetadata(chat.id).variables, { scriptTouched: true });
+  // 重生成回到该回合前检查点，因此恢复的是购买前余额；关键是世界和当前 variables 没有被脚本删除。
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
+});
+
+test("脚本新增用户回合后重生成保留世界和变量", () => {
+  const { store, chat } = setup();
+  store.initializeWorld(chat.id, template);
+  const script = store.prepareScript(chat.id, store.revisionId(chat.id));
+  script.metadata.variables = { afterScript: 1 };
+  script.lines.push(
+    { name: "User", is_user: true, is_system: false, mes: "继续", send_date: new Date().toISOString() },
+    { name: "世界向导", is_user: false, is_system: false, mes: "脚本回答", send_date: new Date().toISOString() },
+  );
+  script.commit();
+  const user = store.readDocument(chat.id)!.lines.findLast((line) => line.is_user && !line.is_system)!;
+  assert.ok((user.extra!._pitavernBeforeTurn as { metadata?: Record<string, unknown> })?.metadata?.[WORLD_STATE_KEY]);
+  const assistant = store.readDocument(chat.id)!.lines.filter((line) => !line.is_user && !line.is_system).at(-1)!;
+  const regeneration = store.prepareRegeneration(chat.id, assistant.extra!.messageId as string, assistant.mes);
+  assert.ok(regeneration.metadata[WORLD_STATE_KEY]);
+  assert.deepEqual(regeneration.metadata.variables, { afterScript: 1 });
+  regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "脚本后重生成", send_date: new Date().toISOString(), extra: { messageId: "assistant-script-new-turn" } }], regeneration.metadata);
+  assert.ok(store.readWorld(chat.id));
+  assert.deepEqual(store.readMetadata(chat.id).variables, { afterScript: 1 });
+});
+
+test("候选切换与 continuation 嵌套回合在绑定世界后仍可恢复", () => {
+  const { store, chat } = setup();
+  const user1 = store.appendMessage(chat.id, { name: "User", is_user: true, is_system: false, mes: "第一问" });
+  const assistant1 = store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "第一答" });
+  const regeneration = store.prepareRegeneration(chat.id, assistant1.extra!.messageId as string, assistant1.mes);
+  regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "第一答 B", send_date: new Date().toISOString(), extra: { messageId: "assistant-branch-b" } }], regeneration.metadata);
+  store.appendMessage(chat.id, { name: "User", is_user: true, is_system: false, mes: "第二问" });
+  store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "第二答" });
+  store.selectReply(chat.id, user1.extra!.messageId as string, 0, store.revisionId(chat.id));
+  store.initializeWorld(chat.id, template, undefined, { allowExisting: true });
+  assert.ok(store.readWorld(chat.id));
+  store.selectReply(chat.id, user1.extra!.messageId as string, 1, store.revisionId(chat.id));
+  const user2 = store.readDocument(chat.id)!.lines.findLast((line) => line.is_user && !line.is_system)!;
+  assert.ok((user2.extra!._pitavernBeforeTurn as { metadata?: Record<string, unknown> })?.metadata?.[WORLD_STATE_KEY]);
+  assert.ok(store.readWorld(chat.id));
+  const assistant2 = store.readDocument(chat.id)!.lines.filter((line) => !line.is_user && !line.is_system).at(-1)!;
+  const again = store.prepareRegeneration(chat.id, assistant2.extra!.messageId as string, assistant2.mes);
+  assert.ok(again.metadata[WORLD_STATE_KEY]);
+  again.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "第二答重生成", send_date: new Date().toISOString(), extra: { messageId: "assistant-continuation-after" } }], again.metadata);
   assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
 });
