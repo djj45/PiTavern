@@ -271,6 +271,7 @@ test("普通变量脚本保留世界检查点和候选恢复点", () => {
 test("脚本新增用户回合后重生成保留世界和变量", () => {
   const { store, chat } = setup();
   store.initializeWorld(chat.id, template);
+  store.writeMetadata(chat.id, { projection: "旧投影", timedWorldInfo: { sticky: { demo: { start: 0, end: 10 } } } });
   const script = store.prepareScript(chat.id, store.revisionId(chat.id));
   script.metadata.variables = { afterScript: 1 };
   script.lines.push(
@@ -279,11 +280,16 @@ test("脚本新增用户回合后重生成保留世界和变量", () => {
   );
   script.commit();
   const user = store.readDocument(chat.id)!.lines.findLast((line) => line.is_user && !line.is_system)!;
-  assert.ok((user.extra!._pitavernBeforeTurn as { metadata?: Record<string, unknown> })?.metadata?.[WORLD_STATE_KEY]);
+  const checkpoint = user.extra!._pitavernBeforeTurn as { metadata?: Record<string, unknown> };
+  assert.ok(checkpoint?.metadata?.[WORLD_STATE_KEY]);
+  assert.ok(!Object.hasOwn(checkpoint.metadata!, "projection"));
+  assert.ok(!Object.hasOwn(checkpoint.metadata!, "timedWorldInfo"));
   const assistant = store.readDocument(chat.id)!.lines.filter((line) => !line.is_user && !line.is_system).at(-1)!;
   const regeneration = store.prepareRegeneration(chat.id, assistant.extra!.messageId as string, assistant.mes);
   assert.ok(regeneration.metadata[WORLD_STATE_KEY]);
   assert.deepEqual(regeneration.metadata.variables, { afterScript: 1 });
+  assert.equal(regeneration.metadata.projection, undefined);
+  assert.equal(regeneration.metadata.timedWorldInfo, undefined);
   regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "脚本后重生成", send_date: new Date().toISOString(), extra: { messageId: "assistant-script-new-turn" } }], regeneration.metadata);
   assert.ok(store.readWorld(chat.id));
   assert.deepEqual(store.readMetadata(chat.id).variables, { afterScript: 1 });
@@ -309,4 +315,40 @@ test("候选切换与 continuation 嵌套回合在绑定世界后仍可恢复", 
   assert.ok(again.metadata[WORLD_STATE_KEY]);
   again.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "第二答重生成", send_date: new Date().toISOString(), extra: { messageId: "assistant-continuation-after" } }], again.metadata);
   assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
+});
+
+test("脚本变量清理会递归隐藏 continuation 检查点", () => {
+  const { store, chat } = setup();
+  store.initializeWorld(chat.id, template);
+  store.writeMetadata(chat.id, { variables: { score: 0 } });
+  const before = stateFields(store.readMetadata(chat.id));
+  const user1 = store.appendMessage(chat.id, {
+    name: "User", is_user: true, is_system: false, mes: "第一问",
+    extra: { _pitavernBeforeTurn: { metadata: before } },
+  });
+  const assistant1 = store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "第一答" });
+  const first = store.prepareRegeneration(chat.id, assistant1.extra!.messageId as string, assistant1.mes);
+  first.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "第一答 B", send_date: new Date().toISOString(), extra: { messageId: "assistant-hidden-b" } }], first.metadata);
+  store.appendMessage(chat.id, {
+    name: "User", is_user: true, is_system: false, mes: "第二问",
+    extra: { _pitavernBeforeTurn: { metadata: before } },
+  });
+  store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "第二答" });
+  store.selectReply(chat.id, user1.extra!.messageId as string, 0, store.revisionId(chat.id));
+  const script = store.prepareScript(chat.id, store.revisionId(chat.id));
+  script.metadata.variables = { score: 7 };
+  script.commit();
+  assert.deepEqual(store.readMetadata(chat.id).variables, { score: 7 });
+  store.selectReply(chat.id, user1.extra!.messageId as string, 1, store.revisionId(chat.id));
+  const user2 = store.readDocument(chat.id)!.lines.findLast((line) => line.is_user && !line.is_system)!;
+  const checkpoint = user2.extra!._pitavernBeforeTurn as { metadata?: Record<string, unknown>; statePruned?: boolean };
+  assert.equal(checkpoint.statePruned, true);
+  assert.ok(checkpoint.metadata?.[WORLD_STATE_KEY]);
+  assert.ok(!Object.hasOwn(checkpoint.metadata!, "variables"));
+  const assistant2 = store.readDocument(chat.id)!.lines.filter((line) => !line.is_user && !line.is_system).at(-1)!;
+  const again = store.prepareRegeneration(chat.id, assistant2.extra!.messageId as string, assistant2.mes);
+  assert.deepEqual(again.metadata.variables, { score: 7 });
+  again.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "第二答重生成", send_date: new Date().toISOString(), extra: { messageId: "assistant-hidden-after" } }], again.metadata);
+  assert.deepEqual(store.readMetadata(chat.id).variables, { score: 7 });
+  assert.ok(store.readWorld(chat.id));
 });

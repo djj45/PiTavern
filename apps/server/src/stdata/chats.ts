@@ -506,8 +506,8 @@ export class ChatStore {
     return { source, raw, records, header, hasHeader };
   }
 
-  /** 脚本修改变量/消息后，保留世界恢复字段，只清理已失效的普通回合状态。 */
-  private retainWorldRecovery(line: StChatLine): void {
+  /** 只保留检查点的世界恢复点；脚本/编辑清理普通状态时共用。 */
+  private retainWorldCheckpoint(line: StChatLine): void {
     if (!line.extra || typeof line.extra !== "object") return;
     const before = line.extra._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
     if (before && typeof before === "object" && !Array.isArray(before)) {
@@ -515,27 +515,47 @@ export class ChatStore {
       if (world !== undefined) line.extra._pitavernBeforeTurn = { metadata: { [WORLD_STATE_KEY]: structuredClone(world) }, statePruned: true };
       else delete line.extra._pitavernBeforeTurn;
     }
+  }
+
+  /** 只保留候选的世界状态，并递归清理 continuation 内的隐藏回合与嵌套分支。 */
+  private retainWorldCatalog(line: StChatLine): void {
+    if (!line.extra || typeof line.extra !== "object") return;
     const catalog = line.extra._pitavernReplies as ReplyVersions | undefined;
-    if (catalog && Array.isArray(catalog.versions)) {
-      let hasWorld = false;
-      for (const version of catalog.versions) {
-        if (!version || typeof version !== "object") continue;
-        const state = version.state && typeof version.state === "object" && !Array.isArray(version.state)
-          ? version.state as Record<string, unknown> : undefined;
-        const world = state?.[WORLD_STATE_KEY];
-        if (world !== undefined) {
-          hasWorld = true;
-          version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
-          version.statePruned = true;
-        } else {
-          delete version.state;
-          delete version.statePruned;
-        }
-        delete version.enforcement;
+    if (!catalog || !Array.isArray(catalog.versions)) return;
+    for (const version of catalog.versions) {
+      if (!version || typeof version !== "object") continue;
+      const state = version.state && typeof version.state === "object" && !Array.isArray(version.state)
+        ? version.state as Record<string, unknown> : undefined;
+      const world = state?.[WORLD_STATE_KEY];
+      if (world !== undefined) {
+        version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
+        version.statePruned = true;
+      } else {
+        delete version.state;
+        delete version.statePruned;
       }
-      if (hasWorld) line.extra._pitavernReplies = catalog;
-      else delete line.extra._pitavernReplies;
+      delete version.enforcement;
+      if (Array.isArray(version.continuation)) {
+        version.continuation = version.continuation.map((raw) => {
+          if (typeof raw !== "string") return raw;
+          try {
+            const nested = JSON.parse(raw) as StChatLine;
+            if (nested && typeof nested === "object" && typeof nested.mes === "string" && typeof nested.name === "string") {
+              this.retainWorldRecovery(nested);
+              return JSON.stringify(nested);
+            }
+          } catch { /* 保留无法解析的原始行。 */ }
+          return raw;
+        });
+      }
     }
+    line.extra._pitavernReplies = catalog;
+  }
+
+  /** 脚本修改变量/消息后，保留世界恢复字段，只清理已失效的普通回合状态。 */
+  private retainWorldRecovery(line: StChatLine): void {
+    this.retainWorldCheckpoint(line);
+    this.retainWorldCatalog(line);
   }
 
   /** Preserve raw unknown/damaged records and commit a whole script in one replacement. */
@@ -550,6 +570,9 @@ export class ChatStore {
       const next = [...rev.raw.slice(0, rev.hasHeader ? 1 : 0)];
       let cursor = rev.hasHeader ? 1 : 0;
       const changed = lines.length !== rev.records.length || JSON.stringify(metadata.variables) !== beforeVariables;
+      // 派生状态在脚本结束后已经失效；先清理，再让新回合检查点只保存 variables/world。
+      if (changed) { delete metadata.projection; delete metadata.timedWorldInfo; delete metadata._pitavernEnforcement; }
+      const checkpointState = changed ? stateFields(metadata) : {};
       for (const line of lines) {
         const original = origins.get(line);
         if (original !== undefined) {
@@ -560,13 +583,12 @@ export class ChatStore {
         } else {
           const extra: Record<string, unknown> = { ...line.extra, messageId: line.extra?.messageId ?? randomUUID() };
           if (line.is_user && !line.is_system && !Object.hasOwn(extra, "_pitavernBeforeTurn")) {
-            extra._pitavernBeforeTurn = { metadata: stateFields(metadata) };
+            extra._pitavernBeforeTurn = { metadata: structuredClone(checkpointState) };
           }
           next.push(JSON.stringify({ ...line, extra }));
         }
       }
       next.push(...rev.raw.slice(cursor));
-      if (changed) { delete metadata.projection; delete metadata.timedWorldInfo; delete metadata._pitavernEnforcement; }
       rev.header.chat_metadata = metadata;
       if (rev.hasHeader) next[0] = JSON.stringify(rev.header); else next.unshift(JSON.stringify(rev.header));
       const result = next.join("\n");
@@ -615,35 +637,18 @@ export class ChatStore {
     rev.raw[record.rawIndex] = JSON.stringify(line);
     // 文本编辑不重算世界：后续检查点只丢弃普通变量/投影等字段，保留世界快照。
     for (const next of rev.records.slice(index + 1)) {
-      const checkpoint = next.line.extra?._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
-      if (!checkpoint) continue;
-      const world = checkpoint.metadata?.[WORLD_STATE_KEY];
-      if (world !== undefined) {
-        next.line.extra = { ...next.line.extra, _pitavernBeforeTurn: { metadata: { [WORLD_STATE_KEY]: structuredClone(world) }, statePruned: true } };
-      } else if (next.line.extra) {
-        delete next.line.extra._pitavernBeforeTurn;
-      }
-      rev.raw[next.rawIndex] = JSON.stringify(next.line);
+      const before = JSON.stringify(next.line);
+      this.retainWorldCheckpoint(next.line);
+      if (JSON.stringify(next.line) !== before) rev.raw[next.rawIndex] = JSON.stringify(next.line);
     }
     // 候选的普通状态失效，但世界快照随分支保留。
     for (const [position, next] of rev.records.entries()) {
       if (!next.line.extra?._pitavernReplies) continue;
       const nextUser = rev.records.findIndex((entry, i) => i > position && entry.line.is_user && !entry.line.is_system);
       if (index < position || (index >= position && (nextUser < 0 || index < nextUser))) {
-        const catalog = next.line.extra._pitavernReplies as ReplyVersions;
-        if (Array.isArray(catalog.versions)) for (const version of catalog.versions) {
-          if (!version || typeof version !== "object") continue;
-          const world = version.state?.[WORLD_STATE_KEY];
-          if (world !== undefined) {
-            version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
-            version.statePruned = true;
-          } else {
-            delete version.state;
-            delete version.statePruned;
-          }
-          delete version.enforcement;
-        }
-        rev.raw[next.rawIndex] = JSON.stringify(next.line);
+        const before = JSON.stringify(next.line);
+        this.retainWorldCatalog(next.line);
+        if (JSON.stringify(next.line) !== before) rev.raw[next.rawIndex] = JSON.stringify(next.line);
       }
     }
     const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };

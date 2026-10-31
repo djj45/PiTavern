@@ -357,17 +357,17 @@ M5 不新增世界规则，只补跨存储边界和 UI 回归。
 - **单文件 JSONL**：把导出的聊天 JSONL 复制到独立 ST 数据目录的 `chats/` 下，`readWorld` 能恢复模板/快照，并可创建 `WorldTransaction` 继续执行购买命令；当前没有单文件 JSONL 导入 UI。
 - **浏览器刷新**：世界模板选择、旧聊天绑定、修正后的快照在页面刷新后仍显示。
 - **移动端**：390px 宽度下世界状态面板可打开、可关闭，无水平溢出。
-- **回归修复**：旧聊天绑定补齐缺失回合检查点（含 continuation）；普通变量脚本保留检查点/候选世界快照，重生成和候选切换保留当前 variables；脚本新增用户回合补建检查点；`world_query` 返回命令 ID、地点/物品目录和价格。
+- **回归修复**：旧聊天绑定补齐缺失回合检查点（含 continuation）；普通变量脚本保留检查点/候选世界快照，重生成和候选切换保留当前 variables；脚本/编辑清理递归进入隐藏 continuation；脚本新增用户回合补建检查点时先清除已失效的投影/计时；`world_query` 返回命令 ID、地点/物品目录和价格。
 
 ### M5 验证
 
-`npm run verify:world-engine` 共 **61 项**：
+`npm run verify:world-engine` 共 **62 项**：
 
 - M1 纯规则/校验 42 项；
 - M2 聊天生命周期 6 项；
 - M3 工具与 Digest 4 项；
 - M4 历史/模板 4 项；
-- M5 5 项：重启/备份/单文件 JSONL 持久化、缺失回合检查点补建、普通变量脚本保留世界/变量、脚本新增回合、候选切换与嵌套 continuation 恢复。
+- M5 6 项：重启/备份/单文件 JSONL 持久化、缺失回合检查点补建、普通变量脚本保留世界/变量、脚本新增回合清理派生状态、候选切换与 continuation 恢复、隐藏 continuation 递归清理。
 
 `npm run verify:browser` 共 **35 项**（33 项既有 + 2 项世界 UI），`npm run verify:ci` 18 组通过。日志写入 `data/test-runs/`。
 
