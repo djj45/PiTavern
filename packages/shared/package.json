@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./macros": "./src/macros.ts",
-    "./regex": "./src/regex.ts"
+    "./regex": "./src/regex.ts",
+    "./world": "./src/world.ts"
   }
 }
