@@ -42,7 +42,7 @@ npm run verify:greetings # 备用开场白、翻页落库、原版 swipes、版�
 npm run verify:library # 世界书/正则编辑、PNG 保留、全局执行顺序、整库备份迁移
 npm run verify:regex-isolation # 提示词正则隔离、超时与取消回滚
 npm run verify:library-maintenance # 便携设置、任务进度、取消和归档管理
-npm run verify:ci     # 17 组独立合成数据回归，不需要本机资料库或真实 API Key
+npm run verify:ci     # 18 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
 npm run build && npm run verify:browser # 33 项真实界面验收，独立合成库与本地 mock
 ```
@@ -188,7 +188,7 @@ npm run build && npm run verify:browser # 33 项真实界面验收，独立合�
 
 ## 持续集成
 
-GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括 M4、接管、M6、会话回归、兼容、模型列表、备用开场白、聊天操作、剧情分支、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容与群聊脚本共 17 组测试，全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消、模型列表获取与草稿连接、开局翻页与窗口同步、多分支切换与自动候选、侧栏置顶/重命名/归档/删除、推理等级、空白连接默认隐藏、设置自动保存/重置、逐模型测试、顶栏即时提示、聊天配色、无框模型选择和 390px 手机布局；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
+GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括世界引擎、M4、接管、M6、会话回归、兼容、模型列表、备用开场白、聊天操作、剧情分支、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容与群聊脚本共 18 组测试，全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消、模型列表获取与草稿连接、开局翻页与窗口同步、多分支切换与自动候选、侧栏置顶/重命名/归档/删除、推理等级、空白连接默认隐藏、设置自动保存/重置、逐模型测试、顶栏即时提示、聊天配色、无框模型选择和 390px 手机布局；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
 
 ## 架构
 

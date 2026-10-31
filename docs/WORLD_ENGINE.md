@@ -185,4 +185,44 @@ const TURN_STATE_KEYS = [
 
 `npm run verify:world-engine` 使用纯合成数据运行单元测试，已加入 `verify:ci`。覆盖模板和快照校验、内容哈希、只读降级、固定交易规则、数值边界、单命令原子性、事务隔离、幂等、事件裁剪及 JSON 往返。
 
-真实聊天的失败/停止/重生成/分支/备份生命周期仍属于 M2；JSON 往返测试不代替存储集成验收。
+真实聊天的失败/停止/重生成/分支/备份生命周期已由 M2 接入；JSON 往返测试不代替存储集成验收。
+
+## 13. M2 聊天生命周期接入（当前）
+
+M2 已把纯世界引擎接入聊天存储边界，但仍不接 Agent 工具和 UI。
+
+### ChatStore
+
+- `initializeWorld(chatId, template, expectedRevision?)`：只允许没有用户发言的新聊天；一次性写入 `_pitavernWorldTemplates` 和初始 `_pitavernWorld`。
+- `readWorld(chatId, capability?)`：从当前聊天元数据加载快照和模板；模板缺失/版本异常由 `WorldState` 降级只读；未启用返回 null。
+- `beginWorldTransaction(chatId, turn, capability?)`：读取当前世界并创建事务，供 M3 的 Agent 工具和集成测试使用。
+- 初始化不会中途绑定旧聊天；文本编辑、普通分支切换和备份恢复不重新初始化世界。
+
+### 状态生命周期
+
+- `STATE_KEYS` 增加 `_pitavernWorld`；`stateFields` / `restoreState` 自动复制/恢复世界。
+- 用户回合 `_pitavernBeforeTurn.metadata` 自动包含世界；分支候选 `state` 自动包含世界。
+- 重生成从回合前快照恢复世界。
+- 文本编辑清理旧变量、投影等失效字段时，保留世界快照和候选世界恢复点。
+- 模板表在聊天 JSONL 头部保存；分支候选只复制快照，不复制模板表。
+- 世界快照通过现有单次 JSONL 替换和回复一起提交；M3 的 Agent 工具会在同一个 `WorldTransaction` 中暂存命令。
+
+### SessionManager
+
+- 每轮生成开始时从恢复后的聊天元数据创建 `WorldTransaction`；文本补全（无普通工具）能力固定为 read-only。
+- 生成成功时把事务快照放入 `pendingMetadata._pitavernWorld`，随后和回复、变量、投影一起提交。
+- 失败、停止、空正文和重生成失败不提交事务；已有候选保留。
+- M3 将复用 `session.worldTransaction`，不另建世界提交路径。
+
+### M2 验证
+
+`npm run verify:world-engine` 同时运行 M1 纯规则和 M2 生命周期测试，共 48 项：
+
+- 初始化、重启、模板持久化；
+- 禁止已有用户发言后中途初始化；
+- 回合提交、候选切换和重启后各自世界快照；
+- 事务丢弃不改变聊天；
+- 文本编辑后切分支仍能恢复世界；
+- 备份恢复保留世界和模板。
+
+M2 不包含 Agent 工具、World Digest、模板选择 UI、当前状态面板和世界修正入口。

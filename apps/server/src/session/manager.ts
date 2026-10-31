@@ -6,6 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY } from "@pitavern/shared/world";
+import { WorldState, WorldTransaction } from "../world/index.ts";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -55,6 +57,8 @@ class ChatSession {
   autoBranching = false;
   autoStop = false;
   enforcement: RecallEnforcement = { turn: 0, usedThisTurn: 0, cooldownUntilTurn: 0 };
+  /** M2: 当前生成轮的世界事务；M3 的工具会在此暂存命令。 */
+  worldTransaction: WorldTransaction | null = null;
 }
 
 export class SessionManager {
@@ -465,6 +469,16 @@ export class SessionManager {
       const textCompletion = model.api === "openai-text-completions";
       if (textCompletion && config.contextMode === "takeover") throw new Error("文本补全接口不能使用依赖工具召回的 Agent 接管模式，请选择简洁或 ST 桥接模式");
       if (textCompletion && config.outputProtocol === "game_tool") throw new Error("文本补全接口不支持 game_tool，请将输出协议设为原生文本流式");
+      const worldSnapshot = document.metadata[WORLD_STATE_KEY];
+      const worldState = worldSnapshot
+        ? new WorldState(worldSnapshot, document.metadata[WORLD_TEMPLATES_KEY], textCompletion
+          ? { mode: "read-only", reason: "文本补全模型没有普通工具，世界仅可查看" }
+          : { mode: "enabled" })
+        : null;
+      const worldTransaction = worldState
+        ? new WorldTransaction(worldState, document.lines.filter((line) => line.is_user && !line.is_system).length + 1)
+        : null;
+      session.worldTransaction = worldTransaction;
       const variables = structuredClone(document.metadata.variables && typeof document.metadata.variables === "object" && !Array.isArray(document.metadata.variables)
         ? document.metadata.variables as Record<string, unknown> : {});
       const beforeTurn = {
@@ -583,6 +597,7 @@ export class SessionManager {
       if (!session.aborted) {
         if (!generated.some((line) => line.mes.trim())) throw new Error(regeneration ? "模型未返回正文，已保留原回复" : "模型未返回正文，状态未改变，可重试本轮");
         pendingMetadata._pitavernEnforcement = structuredClone(session.enforcement);
+        if (worldTransaction) pendingMetadata[WORLD_STATE_KEY] = worldTransaction.commit();
         transaction.commit(generated, pendingMetadata);
         committed = true;
         if (!regeneration) for (const line of generated) this.emit({ type: "chat.done", chatId, message: chatMessages([line])[0] });
@@ -596,6 +611,8 @@ export class SessionManager {
       session.running = false;
       session.agent = null;
       session.controller = null;
+      if (session.worldTransaction?.status === "open") session.worldTransaction.discard();
+      session.worldTransaction = null;
       if (!committed) session.enforcement = previousEnforcement;
       if (session.generation) {
         const run = session.generation;

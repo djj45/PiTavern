@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import type { BranchPointDto, ReplyChoicesDto } from "@pitavern/shared";
+import { WORLD_STATE_KEY } from "@pitavern/shared/world";
 import type { StChatLine } from "./types.ts";
 
-export const STATE_KEYS = ["variables", "projection", "timedWorldInfo", "_pitavernEnforcement"] as const;
+export const STATE_KEYS = ["variables", "projection", "timedWorldInfo", "_pitavernEnforcement", WORLD_STATE_KEY] as const;
 export type RecallState = { turn: number; usedThisTurn: number; cooldownUntilTurn: number };
 export interface ReplyVersion {
   /** 持久化的候选 ID；旧存档没有时由完整路径派生稳定 ID。 */

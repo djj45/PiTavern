@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { AuthorNoteDto, BranchMetaPatchDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
+import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldEngineCapability } from "@pitavern/shared/world";
+import { WorldState, WorldTransaction, createInitialWorldSnapshot, createWorldTemplateRecord } from "../world/index.ts";
 import type { CharacterCard, StChatLine } from "./types.ts";
 import { greetingCatalog } from "./greetings.ts";
 import { lastReplies, parseChatSource, restoreState, selectedMessages, selectReplySource, stateFields, turnReplies, type ReplyVersions } from "./replies.ts";
@@ -188,6 +190,41 @@ export class ChatStore {
 
   readMetadata(chatId: string): Record<string, unknown> {
     return this.readDocument(chatId)?.metadata ?? {};
+  }
+
+  /** 读取当前聊天的权威世界；未启用返回 null。模板缺失由 WorldState 自动降级只读。 */
+  readWorld(chatId: string, capability: WorldEngineCapability = { mode: "enabled" }): WorldState | null {
+    const metadata = this.readMetadata(chatId);
+    if (!metadata[WORLD_STATE_KEY]) return null;
+    return new WorldState(metadata[WORLD_STATE_KEY], metadata[WORLD_TEMPLATES_KEY], capability);
+  }
+
+  beginWorldTransaction(chatId: string, turn: number, capability: WorldEngineCapability = { mode: "enabled" }): WorldTransaction | null {
+    const state = this.readWorld(chatId, capability);
+    return state ? new WorldTransaction(state, turn) : null;
+  }
+
+  /** v0.1 只允许在还没有用户发言的聊天中初始化世界。 */
+  initializeWorld(chatId: string, templateInput: unknown, expectedRevision?: string): WorldState {
+    if (expectedRevision && this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后初始化世界");
+    const rev = this.revision(chatId);
+    if (rev.records.some(({ line }) => line.is_user && !line.is_system)) throw new Error("世界只能在尚未开始对话的新聊天中初始化");
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    if (metadata[WORLD_STATE_KEY]) throw new Error("该聊天已初始化世界");
+    const record = createWorldTemplateRecord(templateInput);
+    const snapshot = createInitialWorldSnapshot(record);
+    const existing = metadata[WORLD_TEMPLATES_KEY] && typeof metadata[WORLD_TEMPLATES_KEY] === "object" && !Array.isArray(metadata[WORLD_TEMPLATES_KEY])
+      ? { ...(metadata[WORLD_TEMPLATES_KEY] as Record<string, unknown>) } : {};
+    const templates = { ...existing, [record.contentHash]: record };
+    metadata[WORLD_TEMPLATES_KEY] = templates;
+    metadata[WORLD_STATE_KEY] = snapshot;
+    rev.header.chat_metadata = metadata;
+    if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);
+    else rev.raw.unshift(JSON.stringify(rev.header));
+    this.replaceSource(chatId, rev.source, rev.raw.join("\n").replace(/\n+$/, "") + "\n");
+    const state = this.readWorld(chatId);
+    if (!state) throw new Error("世界初始化失败");
+    return state;
   }
 
   revisionId(chatId: string): string {
@@ -437,21 +474,30 @@ export class ChatStore {
       if (info?.extra) { delete info.extra.summary; delete info.extra.thinking; }
     }
     rev.raw[record.rawIndex] = JSON.stringify(line);
-    // A later turn's checkpoint was calculated from the old text and is no longer valid.
+    // 文本编辑不重算世界：后续检查点只丢弃普通变量/投影等字段，保留世界快照。
     for (const next of rev.records.slice(index + 1)) {
-      if (next.line.extra?._pitavernBeforeTurn) {
+      const checkpoint = next.line.extra?._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
+      if (!checkpoint) continue;
+      const world = checkpoint.metadata?.[WORLD_STATE_KEY];
+      if (world !== undefined) {
+        next.line.extra = { ...next.line.extra, _pitavernBeforeTurn: { metadata: { [WORLD_STATE_KEY]: structuredClone(world) } } };
+      } else if (next.line.extra) {
         delete next.line.extra._pitavernBeforeTurn;
-        rev.raw[next.rawIndex] = JSON.stringify(next.line);
       }
+      rev.raw[next.rawIndex] = JSON.stringify(next.line);
     }
-    // Versions derived from edited history no longer have trustworthy state checkpoints.
+    // 候选的普通状态失效，但世界快照随分支保留。
     for (const [position, next] of rev.records.entries()) {
       if (!next.line.extra?._pitavernReplies) continue;
       const nextUser = rev.records.findIndex((entry, i) => i > position && entry.line.is_user && !entry.line.is_system);
       if (index < position || (index >= position && (nextUser < 0 || index < nextUser))) {
         const catalog = next.line.extra._pitavernReplies as ReplyVersions;
         if (Array.isArray(catalog.versions)) for (const version of catalog.versions) {
-          if (version && typeof version === "object") { delete version.state; delete version.enforcement; }
+          if (!version || typeof version !== "object") continue;
+          const world = version.state?.[WORLD_STATE_KEY];
+          if (world !== undefined) version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
+          else delete version.state;
+          delete version.enforcement;
         }
         rev.raw[next.rawIndex] = JSON.stringify(next.line);
       }
@@ -478,7 +524,7 @@ export class ChatStore {
     const { catalog } = lastReplies(lines, document.metadata);
     const metadata = structuredClone(document.metadata);
     const checkpoint = lines[userIndex].extra?._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
-    for (const key of ["variables", "projection", "timedWorldInfo"]) {
+    for (const key of ["variables", "projection", "timedWorldInfo", WORLD_STATE_KEY]) {
       if (checkpoint?.metadata && Object.hasOwn(checkpoint.metadata, key)) metadata[key] = structuredClone(checkpoint.metadata[key]);
       else if (checkpoint?.metadata || key !== "variables") delete metadata[key];
     }

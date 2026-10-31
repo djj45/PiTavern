@@ -2,7 +2,8 @@
 
 ## 未发布
 
-- World Engine v0.1 M1：新增纯模板/快照校验、稳定内容哈希、固定酒馆买卖/转移/移动/时钟规则、事务暂存/提交/丢弃、事务级幂等和模板异常只读降级；新增 `verify:world-engine` 单元测试并接入离线 CI，尚未接入聊天存储、Agent 或 UI。
+- World Engine v0.1 M2：世界快照/模板接入聊天 JSONL、回合检查点、候选分支、重生成、文本编辑和备份恢复；`SessionManager` 每轮创建并提交/丢弃 `WorldTransaction`，文本补全模型固定只读；生命周期测试并入 `verify:world-engine`（48 项），尚未接入 Agent 工具或 UI。
+- World Engine v0.1 M1：新增纯模板/快照校验、稳定内容哈希、固定酒馆买卖/转移/移动/时钟规则、事务暂存/提交/丢弃、事务级幂等和模板异常只读降级；新增 `verify:world-engine` 单元测试并接入离线 CI。
 - World Engine v0.1 M0：锁定 `_pitavernWorld` 统一字段、快照权威/事件审计、单 JSONL 事务、事务级幂等、不可变模板版本表、重生成/分支/编辑语义、数值边界和文本补全只读能力；新增共享类型契约与 M0 设计文档 `docs/WORLD_ENGINE.md`。
 
 ## 0.2.2 — 2026-10-30
