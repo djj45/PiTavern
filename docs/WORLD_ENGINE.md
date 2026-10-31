@@ -1,6 +1,6 @@
 # World Engine v0.1（M0 契约）
 
-状态：M0 语义锁定；M1 纯状态、固定规则和内存事务已实现。尚未接入聊天 Runtime、Agent 或 UI。
+状态：M0 语义锁定；M1 纯状态/固定规则/内存事务、M2 聊天生命周期、M3 Agent 工具与 World Digest 均已实现。尚未包含世界 UI 和旧聊天中途绑定。
 
 目标：先证明**世界硬状态在生成、失败、停止、重生成、分支切换、重启和恢复备份之间始终正确**，首个场景固定为「酒馆买剑」。
 
@@ -134,8 +134,8 @@ const TURN_STATE_KEYS = [
 1. **M0：本文档 + 共享类型/常量 + 评审。**
 2. **M1：纯 WorldState/规则/事务，不接聊天。**
 3. **M2：先接 ChatStore/SessionManager，用直接事务集成测试跑通完整生命周期；暂不接 Agent/UI。**
-4. **M3：`world_query` / `world_command` 工具、World Digest、模型能力限制。**
-5. **M4：新聊天模板编辑、当前状态/本轮事件 UI、只读状态提示。**
+4. **M3：`world_query` / `world_command` 工具、World Digest、模型能力限制（已实现）。**
+5. **M4：新聊天模板选择/编辑 UI、当前世界状态与本轮事件面板、只读提示、旧聊天初始化/世界修正入口。**
 6. **M5：浏览器/备份/重启验收与文档。**
 
 ## 10. 验收补充
@@ -187,9 +187,9 @@ const TURN_STATE_KEYS = [
 
 真实聊天的失败/停止/重生成/分支/备份生命周期已由 M2 接入；JSON 往返测试不代替存储集成验收。
 
-## 13. M2 聊天生命周期接入（当前）
+## 13. M2 聊天生命周期接入
 
-M2 已把纯世界引擎接入聊天存储边界，但仍不接 Agent 工具和 UI。
+M2 已把纯世界引擎接入聊天存储边界；M2 本身不接 Agent 工具和 UI，工具层由 M3 接入。
 
 ### ChatStore
 
@@ -212,11 +212,11 @@ M2 已把纯世界引擎接入聊天存储边界，但仍不接 Agent 工具和 
 - 每轮生成开始时从恢复后的聊天元数据创建 `WorldTransaction`；文本补全（无普通工具）能力固定为 read-only。
 - 生成成功时把事务快照放入 `pendingMetadata._pitavernWorld`，随后和回复、变量、投影一起提交。
 - 失败、停止、空正文和重生成失败不提交事务；已有候选保留。
-- M3 将复用 `session.worldTransaction`，不另建世界提交路径。
+- M3 已复用 `session.worldTransaction`，不另建世界提交路径。
 
 ### M2 验证
 
-`npm run verify:world-engine` 同时运行 M1 纯规则和 M2 生命周期测试，共 48 项：
+M2 阶段加入 6 项生命周期测试；当前 `npm run verify:world-engine` 同时运行 M1 纯规则、M2 生命周期和 M3 工具测试，共 52 项：
 
 - 初始化、重启、模板持久化；
 - 禁止已有用户发言后中途初始化；
@@ -225,4 +225,76 @@ M2 已把纯世界引擎接入聊天存储边界，但仍不接 Agent 工具和 
 - 文本编辑后切分支仍能恢复世界；
 - 备份恢复保留世界和模板。
 
-M2 不包含 Agent 工具、World Digest、模板选择 UI、当前状态面板和世界修正入口。
+M2 不包含 Agent 工具、World Digest、模板选择 UI、当前状态面板和世界修正入口；Agent 工具与 Digest 在 M3，UI 和修正入口在 M4。
+
+## 14. M3 Agent 工具与 World Digest（当前）
+
+M3 把世界事务接到 Agent 工具层。世界仍只在聊天生成中可用，不包含 UI、旧聊天中途绑定或手工修正。
+
+### 工具注册与能力
+
+- `createTavernTools(ctx)` 在 `ctx.world` 存在时追加世界工具；未初始化世界时工具列表保持原来的四个，不注入 Digest。
+- enabled：注册 `world_query` 和 `world_command`。
+- read-only（文本补全、`toolsEnabled=false`、模板缺失/哈希或版本异常）：只注册 `world_query`；当普通工具整体关闭或文本补全没有工具时，工具列表为空，模型只能看到只读 Digest。
+- disabled：不注册世界工具。
+- 世界命令只在 enabled 下执行；`world_command` 自身再次检查能力，防止读路径绕过注册表。
+- `world_query` 读取事务工作副本（含本轮已 staged 的命令），不是上一轮已提交快照。
+
+### world_query
+
+- `section`：`summary`（默认）/ `actors` / `inventory` / `events` / `all`。
+- `summary`：时间、地点、在场者、玩家金钱、随身物品、最近 3 条变化；不包含 revision、命令收据或完整快照。
+- 其他 section 返回权威列表；`all` 额外包含全部角色、库存和最近事件（最多 100 条）。
+- 只读世界仍可查询；返回末尾会明确标注只读原因，避免模型把只读摘要当作可提交状态。
+
+### world_command
+
+- 命令：`move_to`、`transfer_item`、`purchase_item`、`advance_time`。
+- 参数按命令类型严格校验；`additionalProperties: false`；数量、分钟、金额沿用共享上限；不接受模型定价，购买价格来自模板。
+- 每条命令只在事务工作副本上结算；`staged` 不是已提交事实，返回中包含本轮暂存 revision。
+- 同一事务内 `commandId` 幂等：相同 ID + 相同参数返回第一次结果；相同 ID + 不同参数返回 `COMMAND_CONFLICT`。失败命令的收据也保留，防止模型用同一 ID 重试改变意图；跨回合/重启不去重。
+- 校验失败、余额/库存不足、未知实体等返回 `isError` 和错误码，世界状态不变。
+- 工具结果只提示“已暂存”；本轮成功结束才随 JSONL 一起提交，失败/停止/空正文/重生成失败由 M2 的 `discard()` 撤销。
+
+### World Digest
+
+- 内容仅：当前时间、地点、在场者、玩家金钱、随身物品、最近 3 条变化；不含完整快照、revision、模板表或收据。
+- simple 模式拼在 system prompt 末尾；bridge / takeover 作为尾部 system 消息追加；三种模式都不改变各模式原有历史组装。
+- 群聊每个发言者开始前从同一事务工作副本重新生成 Digest，前一位角色 staged 的命令会进入下一位的摘要。
+- 模板名称用于角色/地点/物品；角色与地点同 ID 时按实体类型分别取名。事件摘要优先用结构化字段和模板名称重排，旧存档只有原始 summary 时回退。
+- 只读世界明确写“世界为只读模式（原因）”，并根据是否还有工具，分别提示只能用 `world_query` 或只能依据摘要叙述。
+- simple 模式的工具指引按能力区分 enabled / read-only；桥接模式仍由预设自行约定，但 Digest 本身的能力提示一致。
+- Digest 只包含摘要，不承诺完整事件解释；精确查询走 `world_query`。
+
+### 能力矩阵
+
+| 场景 | 能力 | 世界工具 | Digest |
+| --- | --- | --- | --- |
+| 未初始化世界 | 关闭 | 无 | 不注入 |
+| chat-completions + `toolsEnabled=true`，模板有效 | enabled | world_query、world_command | 完整，提示可提交命令 |
+| `toolsEnabled=false` | read-only | 无（普通工具整体关闭） | 只读、无工具提示 |
+| text-completions | read-only | 无（文本补全没有普通工具） | 只读、无工具提示 |
+| 模板缺失/哈希或版本异常 | read-only | 仅 world_query（若普通工具可用） | 带只读原因；不提示 world_command |
+| takeover | 取决于模型与工具开关 | 同上；文本补全不允许 takeover | 同对应行 |
+| bridge | 取决于模型与工具开关 | 同上 | 同对应行 |
+
+“只读时只暴露 world_query”指普通工具仍可用、但世界降级只读；`toolsEnabled=false` 或文本补全时整个工具列表为空，因此不会有任何世界工具。
+
+### 事务与失败
+
+- 每轮生成仍只有一个 `WorldTransaction`，所有世界工具共享；不新建第二条提交路径。
+- 生成成功：`pendingMetadata._pitavernWorld = worldTransaction.commit()`，与回复、变量、投影、计时和候选状态一次 JSONL 提交。
+- 失败、停止、空正文、重生成失败：`finally` 中 `discard()`；旧分支/旧候选世界完全保留。
+- 分支候选保存各自快照；文本编辑不重算世界；模板热更新不在 M3。
+
+### 测试与验收
+
+`npm run verify:world-engine` 共 52 项：
+
+- M1 纯规则/校验 42 项（含 14 个生成式非法模板用例）；
+- M2 聊天生命周期 6 项；
+- M3 工具与 Digest 4 项：只注入摘要且区分只读/无工具、角色与地点同 ID 取名、world_query 分节查询、world_command staged/幂等/非法命令、只读只暴露 world_query。
+
+M3 还要求 `npm run verify:branches` 通过；浏览器与离线 CI 使用 `npm run verify:browser` / `npm run verify:ci` 在外部终端验收，日志写入 `data/test-runs/`。
+
+M3 不包含：模板选择/编辑 UI、当前世界状态与本轮事件面板、只读状态提示 UI、旧聊天中途绑定、手工修正世界入口、文本补全世界命令、脚本内世界工具。这些留到 M4/M5。

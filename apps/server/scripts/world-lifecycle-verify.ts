@@ -92,10 +92,12 @@ test("丢弃事务不改变聊天世界", () => {
   assert.deepEqual(store.readWorld(chat.id)!.snapshot, before);
 });
 
-test("备份恢复保留世界快照和模板", () => {
+test("备份恢复保留世界快照和模板", async () => {
   const { store, chat } = setup();
   store.initializeWorld(chat.id, template);
+  await new Promise((resolve) => setTimeout(resolve, 5));
   store.editMessage(chat.id, "line-0", "欢迎来到酒馆。", "欢迎来到酒馆。");
+  await new Promise((resolve) => setTimeout(resolve, 5));
   store.editMessage(chat.id, "line-0", "欢迎来到酒馆。 ", "欢迎来到酒馆。");
   const backup = store.backups(chat.id).backups[0];
   assert.ok(backup);

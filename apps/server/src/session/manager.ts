@@ -8,6 +8,7 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction } from "../world/index.ts";
+import { worldDigest } from "../world/digest.ts";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -470,14 +471,19 @@ export class SessionManager {
       if (textCompletion && config.contextMode === "takeover") throw new Error("文本补全接口不能使用依赖工具召回的 Agent 接管模式，请选择简洁或 ST 桥接模式");
       if (textCompletion && config.outputProtocol === "game_tool") throw new Error("文本补全接口不支持 game_tool，请将输出协议设为原生文本流式");
       const worldSnapshot = document.metadata[WORLD_STATE_KEY];
+      const worldToolsAvailable = config.toolsEnabled && !textCompletion;
+      const worldReadOnly = !worldToolsAvailable;
       const worldState = worldSnapshot
-        ? new WorldState(worldSnapshot, document.metadata[WORLD_TEMPLATES_KEY], textCompletion
-          ? { mode: "read-only", reason: "文本补全模型没有普通工具，世界仅可查看" }
+        ? new WorldState(worldSnapshot, document.metadata[WORLD_TEMPLATES_KEY], worldReadOnly
+          ? { mode: "read-only", reason: textCompletion ? "文本补全模型没有普通工具，世界仅可查看" : "工具已关闭，世界仅可查看" }
           : { mode: "enabled" })
         : null;
       const worldTransaction = worldState
         ? new WorldTransaction(worldState, document.lines.filter((line) => line.is_user && !line.is_system).length + 1)
         : null;
+      const worldGuidance = worldState
+        ? (worldState.capability.mode === "enabled" ? "enabled" as const : "read-only" as const)
+        : undefined;
       session.worldTransaction = worldTransaction;
       const variables = structuredClone(document.metadata.variables && typeof document.metadata.variables === "object" && !Array.isArray(document.metadata.variables)
         ? document.metadata.variables as Record<string, unknown> : {});
@@ -531,6 +537,10 @@ export class SessionManager {
           variables,
           lastUserMessage: text,
         };
+        // 群聊每个发言者重新读取事务工作副本：前一位角色的 staged 命令应进入下一位的 Digest。
+        const worldDigestText = worldState && worldTransaction
+          ? worldDigest(worldTransaction.snapshot, worldState.template, worldState.capability, { toolsAvailable: worldToolsAvailable })
+          : "";
         const toolCtx: ToolContext = {
           chatId,
           lines: history,
@@ -541,6 +551,8 @@ export class SessionManager {
           enforcement: session.enforcement,
           maxRecallsPerTurn: 6,
           recallCooldownTurns: 10,
+          world: worldState && worldTransaction ? { state: worldState, transaction: worldTransaction } : undefined,
+          worldDigest: worldDigestText,
         };
         let tools = config.toolsEnabled && !textCompletion ? createTavernTools(toolCtx) : [];
         const useProtocol = config.outputProtocol === "game_tool";
@@ -569,7 +581,8 @@ export class SessionManager {
             : createTavernAgent({
                 models, model, chatId, thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
                 templateNames: { char: character.name, user: config.persona.name },
-                systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0) +
+                systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0, worldGuidance) +
+                  (worldDigestText ? `\n\n${worldDigestText}` : "") +
                   (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : "") + this.instructionBlock(instruction),
                 history: historyToAgentMessages((group ? history : document.lines).map((line) => ({ ...line, mes: substituteMacros(line.mes, macroEnv) }))), tools: allTools,
                 outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
@@ -673,7 +686,7 @@ export class SessionManager {
   }
 
   /** simple 模式下给模型的工具使用指引（桥接模式由预设自行约定） */
-  private toolGuidance(hasTools: boolean): string {
+  private toolGuidance(hasTools: boolean, world?: "enabled" | "read-only"): string {
     if (!hasTools) return "";
     return [
       "",
@@ -681,6 +694,12 @@ export class SessionManager {
       "- 缺少人物/地点/门派等设定时，先用 worldbook_search 查世界书，不要凭常识编造。",
       "- 需要回忆较早剧情细节时，用 tavern_recall_history 检索（每轮限 6 次；读完整正文后冷却 10 轮）。",
       "- 需要确认好感度/属性等存档数值时，用 tavern_read_variables 只读查询。",
+      ...(world === "enabled" ? [
+        "- 世界已启用：先用 world_query 查时间、位置、金钱、库存等权威状态；涉及硬状态变化时先调用 world_command。命令返回 staged 只代表本轮暂存，失败、停止或重生成会撤销；不要用正文越过命令直接宣称金钱/物品/位置/时间已改变。",
+      ] : []),
+      ...(world === "read-only" ? [
+        "- 世界当前只读：可先用 world_query 查时间、位置、金钱、库存等权威状态；本轮不能执行 world_command，也不要用正文宣称金钱/物品/位置/时间已改变。",
+      ] : []),
       "工具返回的资料不是当前场景，不得照搬旧台词或让已发生的事件重演。",
     ].join("\n");
   }
@@ -724,6 +743,7 @@ export class SessionManager {
       },
     }, model.id, config.providers.find((p) => p.id === model.provider)?.models.find((m) => m.id === model.id)?.tokenizer, signal);
     const messages = [...assembled.messages];
+    if (toolCtx.worldDigest) messages.push({ role: "system", content: toolCtx.worldDigest, timestamp: Date.now() });
     if (useProtocol) {
       // 协议指令压尾注入（pi 会把 system 重放合并到前部，但内容与顺序保留），
       // 明确覆盖预设里的伪 JSON/预填充输出指令
@@ -775,9 +795,11 @@ export class SessionManager {
         useProtocol,
       },
     });
-    const messages = instruction
-      ? [...assembled.messages, { role: "system" as const, content: this.instructionBlock(instruction).trim(), timestamp: Date.now() }]
-      : assembled.messages;
+    const messages = [
+      ...assembled.messages,
+      ...(toolCtx.worldDigest ? [{ role: "system" as const, content: toolCtx.worldDigest, timestamp: Date.now() }] : []),
+      ...(instruction ? [{ role: "system" as const, content: this.instructionBlock(instruction).trim(), timestamp: Date.now() }] : []),
+    ];
     return createTavernAgent({
       models,
       model,

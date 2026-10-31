@@ -1,5 +1,6 @@
 import type { StChatLine } from "../../stdata/types.ts";
 import type { WiEntry } from "../../context/worldinfo.ts";
+import type { WorldState, WorldTransaction } from "../../world/index.ts";
 
 /** 召回限次冷却的运行时强制状态（挂在 ChatSession 上，跨工具调用共享） */
 export interface RecallEnforcement {
@@ -29,6 +30,13 @@ export interface ToolContext {
   recallCooldownTurns: number;
   /** 接管模式：状态投影写入回调（tavern_set_state 用），未启用时缺省 */
   setState?: (projection: string) => void;
+  /** M3：当前轮世界事务和只读状态；仅世界已初始化时存在。 */
+  world?: {
+    state: WorldState;
+    transaction: WorldTransaction;
+  };
+  /** 世界 Digest；三种上下文模式统一注入，不包含完整状态。 */
+  worldDigest?: string;
 }
 
 /** 为消息行标注剧情轮次：开场白=0，此后每条用户消息开启新一轮 */
