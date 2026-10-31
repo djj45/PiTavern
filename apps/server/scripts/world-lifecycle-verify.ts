@@ -126,3 +126,55 @@ test("文本编辑保留世界和分支恢复点", () => {
   store.selectReply(chat.id, user.extra!.messageId as string, 0, store.revisionId(chat.id));
   assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
 });
+
+test("旧聊天中途初始化世界并回填检查点与候选状态", () => {
+  const { store, chat } = setup();
+  const before = stateFields(store.readMetadata(chat.id));
+  const user = store.appendMessage(chat.id, {
+    name: "User", is_user: true, is_system: false, mes: "旧剧情",
+    extra: { _pitavernBeforeTurn: { metadata: before, enforcement: { turn: 1, usedThisTurn: 0, cooldownUntilTurn: 0 } } },
+  });
+  const current = store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "旧回答 A" });
+  const regeneration = store.prepareRegeneration(chat.id, current.extra!.messageId as string, current.mes);
+  regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "旧回答 B", send_date: new Date().toISOString(), extra: { messageId: "assistant-old-b" } }], regeneration.metadata);
+  assert.equal(store.readWorld(chat.id), null);
+  store.initializeWorld(chat.id, template, undefined, { allowExisting: true });
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
+  const userLine = store.readDocument(chat.id)!.lines.find((line) => line.is_user)!;
+  assert.ok((userLine.extra!._pitavernBeforeTurn as { metadata: Record<string, unknown> }).metadata[WORLD_STATE_KEY]);
+  const catalog = userLine.extra!._pitavernReplies as { versions: Array<{ state?: Record<string, unknown> }> };
+  assert.equal(catalog.versions.length, 2);
+  for (const version of catalog.versions) assert.ok(version.state?.[WORLD_STATE_KEY]);
+  store.selectReply(chat.id, user.extra!.messageId as string, 0, store.revisionId(chat.id));
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
+});
+
+test("手工修正世界校验模板并同步活动候选", () => {
+  const { store, chat } = setup();
+  store.initializeWorld(chat.id, template);
+  const before = stateFields(store.readMetadata(chat.id));
+  const user = store.appendMessage(chat.id, {
+    name: "User", is_user: true, is_system: false, mes: "旧剧情",
+    extra: { _pitavernBeforeTurn: { metadata: before, enforcement: { turn: 1, usedThisTurn: 0, cooldownUntilTurn: 0 } } },
+  });
+  const current = store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "旧回答 A" });
+  const regeneration = store.prepareRegeneration(chat.id, current.extra!.messageId as string, current.mes);
+  const transaction = new WorldTransaction(store.readWorld(chat.id)!, 1);
+  transaction.execute(purchase);
+  const worldB = transaction.commit();
+  regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "旧回答 B", send_date: new Date().toISOString(), extra: { messageId: "assistant-correct-b" } }],
+    { ...regeneration.metadata, [WORLD_STATE_KEY]: worldB });
+  const snapshot = store.readWorld(chat.id)!.snapshot;
+  const corrected = { ...snapshot, clockMinutes: 120, money: { ...snapshot.money, player: 77 } };
+  store.correctWorld(chat.id, corrected, store.revisionId(chat.id));
+  assert.equal(store.readWorld(chat.id)!.snapshot.clockMinutes, 120);
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 77);
+  assert.equal(store.readWorld(chat.id)!.snapshot.revision, snapshot.revision + 1);
+  const userLine = store.readDocument(chat.id)!.lines.find((line) => line.is_user)!;
+  const catalog = userLine.extra!._pitavernReplies as { selected: number; versions: Array<{ state?: Record<string, unknown> }> };
+  assert.equal((catalog.versions[catalog.selected].state?.[WORLD_STATE_KEY] as { clockMinutes?: number }).clockMinutes, 120);
+  const revision = store.revisionId(chat.id);
+  assert.throws(() => store.correctWorld(chat.id, { ...corrected, templateHash: "0".repeat(64) }, revision), /模板/);
+  assert.equal(store.readWorld(chat.id)!.snapshot.clockMinutes, 120);
+  assert.equal(store.readWorld(chat.id)!.snapshot.revision, snapshot.revision + 1);
+});

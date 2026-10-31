@@ -469,6 +469,8 @@ export interface ChatSnapshotDto {
   activityError?: string;
   /** 渲染只读副本；不改变消息正文。 */
   display?: ChatDisplayDto;
+  /** M4：当前聊天的世界快照/模板/能力；未初始化世界时缺省。 */
+  world?: import("./world.ts").WorldChatStateDto;
 }
 
 export interface ChatDisplayDto {

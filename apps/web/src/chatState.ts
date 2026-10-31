@@ -1,4 +1,5 @@
 import type { GroupChatDto, ChatMessageDto, ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, GreetingChoicesDto, BranchPointDto, ServerEvent } from "@pitavern/shared";
+import type { WorldChatStateDto } from "@pitavern/shared/world";
 import { isToolItem, type ChatItem } from "./chatItems.ts";
 export interface UsageStats {
   input: number;
@@ -33,6 +34,8 @@ export interface ChatState {
   activity?: ChatActivityDto;
   activityError?: string;
   display?: ChatDisplayDto;
+  /** M4：当前聊天的世界快照/模板/能力；未初始化时缺省。 */
+  world?: WorldChatStateDto;
 }
 
 export type ChatsState = Record<string, ChatState>;
@@ -70,7 +73,7 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       id: snapshot.id, character: snapshot.character, group: snapshot.group, memberDisplays: snapshot.memberDisplays, streamingCharacter: snapshot.streamingCharacter, stagedMessages: snapshot.stagedMessages, items, page, replyChoices: snapshot.replyChoices, branchChoices: snapshot.branchChoices, greetingChoices: snapshot.greetingChoices,
       streamingText: snapshot.running ? snapshot.streamingText : null,
       generationStartedAt: snapshot.running ? snapshot.generationStartedAt : undefined,
-      pending: false, activity, activityError: snapshot.activityError, display: snapshot.display,
+      pending: false, activity, activityError: snapshot.activityError, display: snapshot.display, world: snapshot.world,
       usage: activity ? { ...activity.usage, turns: activity.turns } : previous?.usage ?? EMPTY_USAGE,
       ...(snapshot.projection ? { projection: snapshot.projection } : {}),
     } };

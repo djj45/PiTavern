@@ -45,7 +45,7 @@
     npm run release:pack
     npm run verify:release -- /绝对路径/PiTavern-0.2.2.tar.gz
 
-- npm run verify:ci 当前为 17 组独立合成数据回归；npm run verify:browser 当前为 33 项 Chromium 验收，均不需要真实 API Key。
+- npm run verify:ci 当前为 18 组独立合成数据回归；npm run verify:browser 当前为 34 项 Chromium 验收，均不需要真实 API Key。
 - 分支管理专项验收已覆盖旧存档活动/非活动迁移、元数据保留、101 层切换、全文搜索分页与旧响应隔离、迁移后编辑和移动端目录。
 - provider 参数明确启用一次真实默认模型请求；无模型时报告待验并退出 2。不要在发布流程中隐式调用真实供应商。
 - 全部源码提交后再打包，工作区不干净会拒绝。输出到 data/releases/ 唯一目录，附 manifest.json 和 SHA256SUMS。包内无 data、node_modules、.git 或 .env，是需要 Node/npm 的源码包。
@@ -59,7 +59,7 @@
     ├── SHA256SUMS
     └── manifest.json
 
-发布包是纯源码归档，基于 v0.2.2 提交生成。GitHub 远端 CI 结果以推送后的 Actions 记录为准；本地发布前执行类型检查、构建、17 组 CI 和 33 项浏览器验收。
+发布包是纯源码归档，基于 v0.2.2 提交生成。GitHub 远端 CI 结果以推送后的 Actions 记录为准；本地发布前执行类型检查、构建、18 组 CI 和 34 项浏览器验收。
 
 ## 真实环境边界
 

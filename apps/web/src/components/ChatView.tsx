@@ -11,6 +11,7 @@ import { VirtualRow } from "./VirtualRow.tsx";
 import { BackupDialog } from "./BackupDialog.tsx";
 import { AuthorNoteDialog } from "./AuthorNoteDialog.tsx";
 import { BranchDialog } from "./BranchDialog.tsx";
+import { WorldDialog } from "./WorldDialog.tsx";
 const MarkdownContent = lazy(() => import("./MessageContent.tsx").then(({ MessageContent }) => ({ default: MessageContent })));
 const MessageContent = memo(function MessageContent({ text, placement, depth, display, dialoguePairs }: {
   text: string; placement: number; depth: number; display?: ChatDisplayDto; dialoguePairs?: DialoguePairDto[];
@@ -98,6 +99,7 @@ interface ChatViewProps {
   onLoadOlder: () => Promise<boolean>;
   loadingOlder: boolean;
   onRestored: () => void;
+  onWorldChanged: (message: string) => void;
   disabled: boolean;
   maintenance?: boolean;
   connected: boolean;
@@ -238,7 +240,7 @@ const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRo
 });
 
 export function ChatView({ chat, personaName, models, currentModel, onModelChange, thinkingLevel, onThinkingLevelChange, appearance, streamingText, onSend, onStop, onEdit, onRegenerate,
-  onSwitchBranchPath, onSelectGreeting, onLoadOlder, loadingOlder, onRestored, disabled, maintenance = false, connected }: ChatViewProps) {
+  onSwitchBranchPath, onSelectGreeting, onLoadOlder, loadingOlder, onRestored, onWorldChanged, disabled, maintenance = false, connected }: ChatViewProps) {
   const [responder, setResponder] = useState("");
   useEffect(() => setResponder(""), [chat?.id]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -253,12 +255,13 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
   const [scriptFor, setScriptFor] = useState<string | null>(null);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [branchOpen, setBranchOpen] = useState(false);
+  const [worldOpen, setWorldOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [greetingOpen, setGreetingOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
   const greetingRef = useRef<HTMLDivElement>(null);
   const [switching, setSwitching] = useState(false);
-  useEffect(() => { setBranchOpen(false); setActionsOpen(false); setGreetingOpen(false); }, [chat?.id]);
+  useEffect(() => { setBranchOpen(false); setWorldOpen(false); setActionsOpen(false); setGreetingOpen(false); }, [chat?.id]);
   useEffect(() => {
     if (!actionsOpen && !greetingOpen) return;
     const closeOnPointer = (event: PointerEvent) => {
@@ -415,6 +418,9 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
                     <div role="menu" aria-label="聊天操作菜单"
                       className="absolute bottom-full left-0 z-50 mb-2 w-44 overflow-hidden rounded-xl border border-tavern-border bg-tavern-panel py-1 text-sm shadow-xl">
                       <button type="button" role="menuitem" disabled={locked || !chat.page?.revision}
+                        onClick={() => { setActionsOpen(false); setWorldOpen(true); }}
+                        className="block w-full px-3 py-2 text-left text-tavern-text hover:bg-tavern-raised disabled:opacity-40">世界状态</button>
+                      <button type="button" role="menuitem" disabled={locked || !chat.page?.revision}
                         onClick={() => { setActionsOpen(false); setScriptFor(chat.id); }}
                         className="block w-full px-3 py-2 text-left text-tavern-text hover:bg-tavern-raised disabled:opacity-40">STscript</button>
                       <button type="button" role="menuitem" disabled={locked}
@@ -473,6 +479,15 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
                 )}
               </div>
               <div className="ml-auto flex shrink-0 items-center gap-2">
+                {chat.world && (
+                  <button type="button" onClick={() => setWorldOpen(true)} disabled={locked || !chat.page?.revision}
+                    aria-label="打开世界状态" title={`${chat.world.templateName} · ${chat.world.capability.mode === "enabled" ? "世界可写入" : `世界只读${chat.world.capability.reason ? "：" + chat.world.capability.reason : ""}`}`}
+                    className={`rounded-lg border px-2.5 py-1.5 text-xs disabled:opacity-40 ${chat.world.capability.mode === "enabled"
+                      ? "border-tavern-border text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text"
+                      : "border-amber-400/50 text-amber-300 hover:border-amber-300"}`}>
+                    🌍 {chat.world.capability.mode === "enabled" ? "世界" : "世界只读"}
+                  </button>
+                )}
                 {chat.greetingChoices && (
                   <div ref={greetingRef} className="relative">
                     <button type="button" aria-label="开场白" title="选择开场白"
@@ -547,6 +562,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
       </div>
       {backupsFor === chat.id && <BackupDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setBackupsFor(null)} onRestored={onRestored} />}
       {noteFor === chat.id && <AuthorNoteDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setNoteFor(null)} />}
+      {worldOpen && chat.page?.revision && <WorldDialog key={chat.id} chatId={chat.id} revision={chat.page.revision} world={chat.world} messageCount={chat.page.total} busy={locked} onClose={() => setWorldOpen(false)} onChanged={onWorldChanged} />}
       {branchOpen && <BranchDialog chatId={chat.id} revision={chat.page?.revision ?? ""} busy={locked} canRegenerate={canRegenerate && !disabled && !isStreaming}
         onSwitchPath={onSwitchBranchPath} onRegenerate={(instruction) => onRegenerate(instruction.trim() || undefined)} onClose={() => setBranchOpen(false)} />}
     </main>

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { AuthorNoteDto, BranchMetaPatchDto, ChatBackupDto, ChatBackupPreviewDto, ChatMessageDto, ChatPageDto } from "@pitavern/shared";
-import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldEngineCapability } from "@pitavern/shared/world";
+import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldEngineCapability, type WorldSnapshot } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction, createInitialWorldSnapshot, createWorldTemplateRecord } from "../world/index.ts";
 import type { CharacterCard, StChatLine } from "./types.ts";
 import { greetingCatalog } from "./greetings.ts";
@@ -204,15 +204,20 @@ export class ChatStore {
     return state ? new WorldTransaction(state, turn) : null;
   }
 
-  /** v0.1 只允许在还没有用户发言的聊天中初始化世界。 */
-  initializeWorld(chatId: string, templateInput: unknown, expectedRevision?: string): WorldState {
+  /**
+   * 初始化世界。allowExisting 用于 M4 旧聊天中途绑定：会把同一份初始快照回填到旧回合检查点和
+   * 分支候选状态，保证之后重生成/切分支时世界仍存在；历史正文不会重算。
+   */
+  initializeWorld(chatId: string, templateInput: unknown, expectedRevision?: string, options: { allowExisting?: boolean } = {}): WorldState {
     if (expectedRevision && this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后初始化世界");
     const rev = this.revision(chatId);
-    if (rev.records.some(({ line }) => line.is_user && !line.is_system)) throw new Error("世界只能在尚未开始对话的新聊天中初始化");
+    const hasUserMessage = rev.records.some(({ line }) => line.is_user && !line.is_system);
+    if (hasUserMessage && !options.allowExisting) throw new Error("世界只能在尚未开始对话的新聊天中初始化");
     const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
     if (metadata[WORLD_STATE_KEY]) throw new Error("该聊天已初始化世界");
     const record = createWorldTemplateRecord(templateInput);
     const snapshot = createInitialWorldSnapshot(record);
+    if (hasUserMessage) this.backfillWorldState(rev, snapshot);
     const existing = metadata[WORLD_TEMPLATES_KEY] && typeof metadata[WORLD_TEMPLATES_KEY] === "object" && !Array.isArray(metadata[WORLD_TEMPLATES_KEY])
       ? { ...(metadata[WORLD_TEMPLATES_KEY] as Record<string, unknown>) } : {};
     const templates = { ...existing, [record.contentHash]: record };
@@ -225,6 +230,92 @@ export class ChatStore {
     const state = this.readWorld(chatId);
     if (!state) throw new Error("世界初始化失败");
     return state;
+  }
+
+  /** 旧聊天中途绑定：把初始快照补进回合检查点和所有候选状态（含 continuation 内的嵌套分支）。 */
+  private backfillWorldState(rev: { raw: string[]; records: { line: StChatLine; rawIndex: number }[] }, snapshot: WorldSnapshot): void {
+    const seen = new Set<StChatLine>();
+    const patchLine = (line: StChatLine): void => {
+      if (seen.has(line) || !line.extra || typeof line.extra !== "object") return;
+      seen.add(line);
+      const before = line.extra._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
+      if (before && typeof before === "object" && before.metadata && typeof before.metadata === "object" && !Array.isArray(before.metadata)
+        && !Object.hasOwn(before.metadata, WORLD_STATE_KEY)) {
+        before.metadata[WORLD_STATE_KEY] = structuredClone(snapshot);
+      }
+      const catalog = line.extra._pitavernReplies as { versions?: Array<Record<string, unknown>> } | undefined;
+      if (catalog && Array.isArray(catalog.versions)) {
+        for (const version of catalog.versions) {
+          if (!version || typeof version !== "object") continue;
+          const state = version.state && typeof version.state === "object" && !Array.isArray(version.state)
+            ? version.state as Record<string, unknown> : undefined;
+          if (state) {
+            if (!Object.hasOwn(state, WORLD_STATE_KEY)) state[WORLD_STATE_KEY] = structuredClone(snapshot);
+          } else {
+            version.state = { [WORLD_STATE_KEY]: structuredClone(snapshot) };
+          }
+          const continuation = version.continuation;
+          if (Array.isArray(continuation)) {
+            version.continuation = continuation.map((raw) => {
+              if (typeof raw !== "string") return raw;
+              try {
+                const nested = JSON.parse(raw) as StChatLine;
+                if (nested && typeof nested === "object" && typeof nested.mes === "string" && typeof nested.name === "string") {
+                  patchLine(nested);
+                  return JSON.stringify(nested);
+                }
+              } catch { /* 保留无法解析的原始行。 */ }
+              return raw;
+            });
+          }
+        }
+      }
+    };
+    for (const record of rev.records) {
+      const before = JSON.stringify(record.line);
+      patchLine(record.line);
+      if (JSON.stringify(record.line) !== before) rev.raw[record.rawIndex] = JSON.stringify(record.line);
+    }
+  }
+
+  /** M4 手工修正：校验快照与当前模板，revision 单调 +1，并同步当前活动分支候选的 world 状态。 */
+  correctWorld(chatId: string, snapshotInput: unknown, expectedRevision: string): WorldState {
+    if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请重新同步后修正世界");
+    const rev = this.revision(chatId);
+    const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
+    const templates = metadata[WORLD_TEMPLATES_KEY];
+    if (!metadata[WORLD_STATE_KEY]) throw new Error("该聊天尚未初始化世界");
+    const current = new WorldState(metadata[WORLD_STATE_KEY], templates);
+    if (!current.template) throw new Error(current.capability.reason ?? "世界模板缺失，无法修正");
+    const checked = new WorldState(snapshotInput, templates, { mode: "enabled" });
+    if (checked.capability.mode !== "enabled") throw new Error(checked.capability.reason ?? "世界快照校验失败");
+    if (!checked.template) throw new Error("世界模板缺失，无法修正");
+    const base = current.snapshot;
+    const next = checked.snapshot;
+    if (next.templateHash !== base.templateHash || next.templateVersion !== base.templateVersion || next.rulesVersion !== base.rulesVersion) {
+      throw new Error("修正不能切换模板或规则版本");
+    }
+    if (base.revision >= Number.MAX_SAFE_INTEGER) throw new Error("世界 revision 已达上限");
+    const corrected: WorldSnapshot = { ...next, revision: base.revision + 1 };
+    metadata[WORLD_STATE_KEY] = corrected;
+    rev.header.chat_metadata = metadata;
+    const active = rev.records.findLast(({ line }) => {
+      const catalog = line.extra?._pitavernReplies as { selected?: number; versions?: unknown[] } | undefined;
+      return Boolean(catalog && Array.isArray(catalog.versions) && Number.isInteger(catalog.selected)
+        && catalog.selected! >= 0 && catalog.selected! < catalog.versions.length);
+    });
+    if (active) {
+      const catalog = active.line.extra!._pitavernReplies as { selected: number; versions: Array<{ state?: Record<string, unknown> }> };
+      const version = catalog.versions[catalog.selected];
+      if (version) {
+        version.state = { ...(version.state && typeof version.state === "object" ? version.state : {}), [WORLD_STATE_KEY]: structuredClone(corrected) };
+        rev.raw[active.rawIndex] = JSON.stringify(active.line);
+      }
+    }
+    if (rev.hasHeader) rev.raw[0] = JSON.stringify(rev.header);
+    else rev.raw.unshift(JSON.stringify(rev.header));
+    this.replaceSource(chatId, rev.source, rev.raw.join("\n").replace(/\n+$/, "") + "\n");
+    return new WorldState(corrected, templates);
   }
 
   revisionId(chatId: string): string {

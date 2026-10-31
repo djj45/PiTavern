@@ -44,7 +44,7 @@ npm run verify:regex-isolation # 提示词正则隔离、超时与取消回滚
 npm run verify:library-maintenance # 便携设置、任务进度、取消和归档管理
 npm run verify:ci     # 18 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
-npm run build && npm run verify:browser # 33 项真实界面验收，独立合成库与本地 mock
+npm run build && npm run verify:browser # 34 项真实界面验收，独立合成库与本地 mock
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。

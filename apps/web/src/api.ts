@@ -27,6 +27,7 @@ import type {
   LibraryHistoryPageDto,
   LibraryHistoryPreviewDto,
 } from "@pitavern/shared";
+import type { WorldSnapshot, WorldTemplateSummaryDto } from "@pitavern/shared/world";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -102,6 +103,13 @@ export const api = {
   characters: () => fetch("/api/characters").then((r) => json<CharacterDto[]>(r)),
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
   worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),
+  worldTemplates: () => fetch("/api/world/templates").then((r) => json<WorldTemplateSummaryDto[]>(r)),
+  initializeWorld: (chatId: string, templateId: string, revision: string, allowExisting = true) =>
+    fetch("/api/chat/world/initialize", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, templateId, revision, allowExisting }) }).then((r) => json<{ ok: boolean }>(r)),
+  correctWorld: (chatId: string, revision: string, snapshot: WorldSnapshot) =>
+    fetch("/api/chat/world/correct", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, revision, snapshot }) }).then((r) => json<{ ok: boolean }>(r)),
   chats: (character?: string) =>
     fetch(`/api/chats${character ? `?character=${encodeURIComponent(character)}` : ""}`).then((r) =>
       json<ChatSummaryDto[]>(r),
@@ -112,11 +120,11 @@ export const api = {
   createGroup: (name: string, members: string[]) => fetch("/api/groups", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, members }),
   }).then((r) => json<{ id: string }>(r)),
-  createChat: (character: string, greeting?: string) =>
+  createChat: (character: string, greeting?: string, worldTemplateId?: string) =>
     fetch("/api/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ character, greeting }),
+      body: JSON.stringify({ character, greeting, ...(worldTemplateId ? { worldTemplateId } : {}) }),
     }).then((r) => json<{ id: string }>(r)),
   selectGreeting: (chatId: string, selected: number, revision: string) => fetch("/api/chat/greeting", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, selected, revision }),

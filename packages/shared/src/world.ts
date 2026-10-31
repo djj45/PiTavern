@@ -187,3 +187,25 @@ export interface WorldEngineCapability {
   mode: WorldEngineMode;
   reason?: string;
 }
+
+/** 世界模板选择器使用的轻量摘要；模板正文按需读取。 */
+export interface WorldTemplateSummaryDto {
+  id: string;
+  name: string;
+  description?: string;
+  templateVersion: number;
+  rulesVersion: number;
+  contentHash: string;
+  locations: number;
+  actors: number;
+  items: number;
+}
+
+/** ChatSnapshotDto.world：当前聊天的世界视图；快照损坏时只带 error 和只读能力。 */
+export interface WorldChatStateDto {
+  snapshot?: WorldSnapshot;
+  template?: WorldTemplate;
+  templateName: string;
+  capability: WorldEngineCapability;
+  error?: string;
+}

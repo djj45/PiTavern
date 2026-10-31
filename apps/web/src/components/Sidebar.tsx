@@ -1,16 +1,18 @@
 import { useRef, useState } from "react";
 import type { ChatSummaryDto, CharacterDto } from "@pitavern/shared";
+import type { WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { api } from "../api.ts";
 import { ChatItemMenu } from "./ChatItemMenu.tsx";
 
 interface SidebarProps {
   characters: CharacterDto[];
+  worldTemplates: WorldTemplateSummaryDto[];
   selectedCharacter: string | null;
   onSelectCharacter: (name: string | null) => void;
   chats: ChatSummaryDto[];
   activeChatId: string | null;
   onOpenChat: (chatId: string) => void;
-  onNewChat: () => void;
+  onNewChat: (worldTemplateId?: string) => void;
   onNewGroup: (name: string, members: string[]) => Promise<boolean>;
   onDeleteChat: (chatId: string) => void;
   /** 置顶/重命名/归档成功后刷新对话列表。 */
@@ -24,6 +26,7 @@ interface SidebarProps {
 
 export function Sidebar({
   characters,
+  worldTemplates,
   selectedCharacter,
   onSelectCharacter,
   chats,
@@ -42,6 +45,7 @@ export function Sidebar({
   const [importing, setImporting] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
   const [groupName, setGroupName] = useState("新群聊");
+  const [worldTemplateId, setWorldTemplateId] = useState("");
   const [members, setMembers] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -114,9 +118,17 @@ export function Sidebar({
         }`}
       >
         <div className="border-b border-tavern-border p-3">
+          <label className="mb-2 block text-xs text-tavern-dim">
+            <span className="mb-1 block">世界引擎</span>
+            <select aria-label="新聊天世界模板" value={worldTemplateId} onChange={(event) => setWorldTemplateId(event.target.value)}
+              className="w-full rounded border border-tavern-border bg-tavern-bg p-2 text-xs text-tavern-text">
+              <option value="">不启用世界</option>
+              {worldTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+            </select>
+          </label>
           <button
             type="button"
-          onClick={onNewChat}
+          onClick={() => onNewChat(worldTemplateId || undefined)}
           className="w-full rounded-md bg-tavern-accent/15 px-3 py-1.5 text-sm font-medium text-tavern-accent hover:bg-tavern-accent/25"
         >
           ＋ 开始新对话

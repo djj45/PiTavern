@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { BranchPathStepDto, ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import type { WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { api } from "./api.ts";
 import { useTavernSocket } from "./socket.ts";
 import { isToolItem } from "./chatItems.ts";
@@ -16,6 +17,7 @@ export function App() {
   const [connection, setConnection] = useState<ConnectionDto | null>(null);
   const [characters, setCharacters] = useState<CharacterDto[]>([]);
   const [chats, setChats] = useState<ChatSummaryDto[]>([]);
+  const [worldTemplates, setWorldTemplates] = useState<WorldTemplateSummaryDto[]>([]);
   const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatStates, dispatch] = useReducer(chatReducer, {});
@@ -52,6 +54,8 @@ export function App() {
     api.connection().then(setConnection).catch((e: Error) => showNotice(`读取连接设置失败: ${e.message}`)), [showNotice]);
   const refreshCharacters = useCallback(() =>
     api.characters().then(setCharacters).catch((e: Error) => showNotice(`读取角色失败: ${e.message}`)), [showNotice]);
+  const refreshWorldTemplates = useCallback(() =>
+    api.worldTemplates().then(setWorldTemplates).catch((e: Error) => showNotice(`读取世界模板失败: ${e.message}`)), [showNotice]);
   const refreshChats = useCallback(async () => {
     const request = ++listRequest.current;
     try {
@@ -62,7 +66,7 @@ export function App() {
     }
   }, [selectedCharacter, showNotice]);
 
-  useEffect(() => { void refreshConnection(); void refreshCharacters(); }, [refreshConnection, refreshCharacters]);
+  useEffect(() => { void refreshConnection(); void refreshCharacters(); void refreshWorldTemplates(); }, [refreshConnection, refreshCharacters, refreshWorldTemplates]);
   useEffect(() => { void refreshChats(); }, [refreshChats]);
 
   const onEvent = useCallback((event: ServerEvent) => {
@@ -127,11 +131,11 @@ export function App() {
     if (!socket.send({ type: "chat.sync", chatId })) showNotice("服务未连接，重连后将同步聊天");
   }, [socket.send, showNotice]);
 
-  const newChat = useCallback(async () => {
+  const newChat = useCallback(async (worldTemplateId?: string) => {
     const name = selectedCharacter ?? characters[0]?.name;
     if (!name) { showNotice("数据目录里还没有角色卡，请先把 PNG 角色卡放入 characters/ 目录"); return; }
     try {
-      const { id } = await api.createChat(name);
+      const { id } = await api.createChat(name, undefined, worldTemplateId);
       openChat(id);
       setNavOpen(false);
       await refreshChats();
@@ -216,6 +220,11 @@ export function App() {
   }, [showNotice]);
 
   const restored = useCallback(() => showNotice("备份已恢复，恢复前的存档也已备份"), [showNotice]);
+  const worldChanged = useCallback((message: string) => {
+    const chatId = activeChatIdRef.current;
+    if (chatId) sendRef.current({ type: "chat.sync", chatId });
+    showNotice(message);
+  }, [showNotice]);
 
   const regenerate = useCallback((instruction?: string) => {
     if (!activeChat || activeChat.pending || activeChat.streamingText !== null) return;
@@ -281,7 +290,7 @@ export function App() {
         onToggleNav={() => { setNavOpen((v) => !v); setPanelOpen(false); }} />
       {maintenance && <p role="status" className="shrink-0 border-b border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-accent">{maintenance}</p>}
       <div className="relative flex min-h-0 flex-1">
-        <Sidebar characters={characters} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
+        <Sidebar characters={characters} worldTemplates={worldTemplates} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
           chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onNewGroup={async (name, members) => {
             try { const { id } = await api.createGroup(name, members); setSelectedCharacter(null); openChat(id); await refreshChats(); return true; }
             catch (error) { showNotice("创建群聊失败: " + (error as Error).message); return false; }
@@ -292,7 +301,7 @@ export function App() {
           thinkingLevel={connection?.thinkingLevel ?? "off"} onThinkingLevelChange={changeThinkingLevel}
           appearance={connection?.appearance}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
-          onSwitchBranchPath={switchBranchPath} onSelectGreeting={selectGreeting} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored}
+          onSwitchBranchPath={switchBranchPath} onSelectGreeting={selectGreeting} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored} onWorldChanged={worldChanged}
           onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} disabled={!connection?.defaultModel} maintenance={!!maintenance} connected={socket.connected} />
         {panelOpen && (
           <ActivityPanel

@@ -6,9 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
-import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY } from "@pitavern/shared/world";
+import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatStateDto, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction } from "../world/index.ts";
 import { worldDigest } from "../world/digest.ts";
+import { getWorldTemplate, worldTemplateName, worldTemplateSummaries } from "../world/catalog.ts";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -170,6 +171,60 @@ export class SessionManager {
     return true;
   }
 
+  /** M4：模板选择器使用；模板正文仍从聊天 JSONL 的模板表读取。 */
+  worldTemplates(): WorldTemplateSummaryDto[] {
+    return worldTemplateSummaries();
+  }
+
+  /** 世界初始化；allowExisting 允许旧聊天中途绑定，由 ChatStore 回填旧检查点。 */
+  initializeChatWorld(chatId: string, templateId: string, revision: string, allowExisting = true): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再初始化世界");
+    const template = getWorldTemplate(templateId);
+    if (!template) throw new Error("世界模板不存在: " + templateId);
+    this.chats.initializeWorld(chatId, template, revision, { allowExisting });
+    this.changed(chatId);
+  }
+
+  /** M4：手工修正当前世界快照；只允许同一模板/规则版本，并同步活动分支候选。 */
+  correctChatWorld(chatId: string, snapshot: unknown, revision: string): void {
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId)) throw new Error("请先停止生成，再修正世界");
+    this.chats.correctWorld(chatId, snapshot, revision);
+    this.changed(chatId);
+  }
+
+  /** 把聊天元数据投影成 UI 世界视图；快照损坏时给只读错误，不阻断聊天快照。 */
+  private worldView(metadata: Record<string, unknown>): WorldChatStateDto | undefined {
+    if (!metadata[WORLD_STATE_KEY]) return undefined;
+    try {
+      const state = new WorldState(metadata[WORLD_STATE_KEY], metadata[WORLD_TEMPLATES_KEY]);
+      const template = state.template;
+      let capability = state.capability;
+      if (capability.mode === "enabled") {
+        try {
+          const model = resolveModel(this.models(), this.config);
+          if (!this.config.toolsEnabled) capability = { mode: "read-only", reason: "工具已关闭，世界仅可查看" };
+          else if (model.api === "openai-text-completions") capability = { mode: "read-only", reason: "文本补全模型没有普通工具，世界仅可查看" };
+        } catch {
+          capability = { mode: "read-only", reason: "尚未配置可用模型" };
+        }
+      }
+      return {
+        snapshot: state.snapshot,
+        ...(template ? { template } : {}),
+        templateName: template ? worldTemplateName(template.templateId) : "未知模板",
+        capability,
+      };
+    } catch (error) {
+      return {
+        templateName: "未知模板",
+        capability: { mode: "read-only", reason: "世界快照无法读取" },
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   snapshot(chatId: string, full = false): ChatSnapshotDto | null {
     const document = this.chats.readDocument(chatId);
     if (!document) return null;
@@ -192,6 +247,7 @@ export class SessionManager {
       running: session?.running ?? false, streamingText: session?.streamingText ?? "",
       ...(session?.running && session.generation?.startedAt ? { generationStartedAt: session.generation.startedAt } : {}),
       activity, activityError,
+      world: this.worldView(document.metadata),
       memberDisplays: Object.fromEntries((readGroup(document.metadata)?.members ?? []).map((name) => [name, this.displayConfig(name, document.metadata, document.lines)])),
       group: readGroup(document.metadata), streamingCharacter: session?.character,
       stagedMessages: chatMessages(session?.staged ?? []),

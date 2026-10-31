@@ -216,7 +216,12 @@ export function selectReplySource(source: string, userMessageId: string, selecte
   }
   const userLine = structuredClone(userRecord.line);
   userLine.extra = { ...userLine.extra, _pitavernReplies: fileCatalog };
-  rev.header.chat_metadata = restoreState(metadata, target.state);
+  const restored = restoreState(metadata, target.state);
+  // 候选没有世界快照（旧 ST swipe 或世界启用前的分支）时保留当前世界，避免切分支把世界删掉。
+  if (metadata[WORLD_STATE_KEY] && (!target.state || !Object.hasOwn(target.state, WORLD_STATE_KEY))) {
+    restored[WORLD_STATE_KEY] = structuredClone(metadata[WORLD_STATE_KEY]);
+  }
+  rev.header.chat_metadata = restored;
   const prefix = rev.raw.slice(0, userRecord.rawIndex);
   if (rev.hasHeader) prefix[0] = JSON.stringify(rev.header);
   else prefix.unshift(JSON.stringify(rev.header));

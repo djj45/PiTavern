@@ -720,6 +720,34 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
+  app.get("/api/world/templates", (_req, res) => {
+    res.json(sessions.worldTemplates());
+  });
+
+  app.post("/api/chat/world/initialize", (req, res) => {
+    const { chatId, templateId, revision, allowExisting } = req.body ?? {};
+    if ([chatId, templateId, revision].some((value) => typeof value !== "string") || (allowExisting !== undefined && typeof allowExisting !== "boolean")) {
+      res.status(400).json({ error: "世界初始化参数无效" });
+      return;
+    }
+    try {
+      sessions.initializeChatWorld(chatId, templateId, revision, allowExisting ?? true);
+      res.json({ ok: true });
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/chat/world/correct", (req, res) => {
+    const { chatId, revision, snapshot } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof revision !== "string" || !snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+      res.status(400).json({ error: "世界修正参数无效" });
+      return;
+    }
+    try {
+      sessions.correctChatWorld(chatId, snapshot, revision);
+      res.json({ ok: true });
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   app.get("/api/chats", (req, res) => {
     const character = typeof req.query.character === "string" ? req.query.character : undefined;
     const list: ChatSummaryDto[] = chats.listChats(character).map((m) => ({
@@ -759,6 +787,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   app.post("/api/chats", (req, res) => {
     if (sessions.writeBlocked) { res.status(503).json({ error: sessions.writeBlocked }); return; }
     const { character, greeting } = req.body as { character?: string; greeting?: string };
+    const worldTemplateId = typeof req.body?.worldTemplateId === "string" ? req.body.worldTemplateId : undefined;
     const card = character ? characters.getCharacter(character) : undefined;
     if (!card) {
       res.status(404).json({ error: `角色不存在: ${character}` });
@@ -770,6 +799,15 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       firstMes ? { name: card.name, is_user: false, is_system: false, mes: firstMes } : null,
       config.persona.name,
     );
+    if (worldTemplateId) {
+      try {
+        sessions.initializeChatWorld(meta.id, worldTemplateId, chats.revisionId(meta.id), false);
+      } catch (error) {
+        try { chats.deleteChat(meta.id); } catch { /* 初始化失败时尽力清理孤立聊天。 */ }
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
     res.json({ id: meta.id });
   });
 
