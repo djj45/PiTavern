@@ -10,6 +10,7 @@ import { WorldTransaction } from "../src/world/index.ts";
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 
 function setup() {
+  fs.mkdirSync(path.join(ROOT, "data/test-runs"), { recursive: true });
   const root = fs.mkdtempSync(path.join(ROOT, "data/test-runs/world-lifecycle-"));
   const st = path.join(root, "st");
   const store = new ChatStore(st);
