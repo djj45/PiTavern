@@ -12,7 +12,7 @@ import { WorldTransaction } from "../src/world/index.ts";
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const template: WorldTemplate = {
   schemaVersion: 1, templateId: "tool-tavern", templateVersion: 1, rulesVersion: 1,
-  locations: [{ id: "tavern", name: "酒馆" }],
+  locations: [{ id: "tavern", name: "酒馆" }, { id: "square", name: "集市" }],
   actors: [{ id: "player", name: "旅人" }, { id: "merchant", name: "掌柜" }],
   items: [{ id: "sword", name: "长剑", price: 10 }],
   initial: { actorId: "player", locationId: "tavern", money: 20, inventory: [{ ownerId: "merchant", itemId: "sword", quantity: 2 }] },
@@ -77,8 +77,19 @@ test("world_query 返回按场景/库存查询的权威状态", async () => {
   const summary = content(await query.execute("q1", { section: "summary" }));
   assert.match(summary, /金钱：20/);
   assert.match(summary, /随身物品：无/);
-  const all = content(await query.execute("q2", { section: "all" }));
-  assert.match(all, /掌柜：长剑×2/);
+  assert.match(summary, /地点：酒馆（tavern）、集市（square）/);
+  assert.match(summary, /长剑（sword，价格 10）/);
+  const catalog = content(await query.execute("q2", { section: "catalog" }));
+  assert.match(catalog, /id: sword/);
+  assert.match(catalog, /价格 10/);
+  assert.match(catalog, /id: square/);
+  const actors = content(await query.execute("q3", { section: "actors" }));
+  assert.match(actors, /位于酒馆（tavern）/);
+  const inventory = content(await query.execute("q4", { section: "inventory" }));
+  assert.match(inventory, /掌柜（merchant）：长剑（sword）×2/);
+  const all = content(await query.execute("q5", { section: "all" }));
+  assert.match(all, /掌柜（merchant）：长剑（sword）×2/);
+  assert.match(all, /id: square/);
 });
 
 test("world_command 暂存购买，重复/非法命令不重复应用", async () => {

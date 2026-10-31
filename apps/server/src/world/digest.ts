@@ -72,10 +72,10 @@ export function worldDigest(
   if (restriction) {
     lines.push(`${restriction}：本轮不要声称修改了金钱、物品、位置或时间。`);
     lines.push(toolsAvailable
-      ? "需要精确状态时调用 world_query；本轮不能执行 world_command。"
+      ? "需要精确状态或命令 ID 时调用 world_query（section=catalog/all）；本轮不能执行 world_command。"
       : "本轮没有可用的世界工具，只能依据以上摘要叙述。");
   } else if (toolsAvailable) {
-    lines.push("需要精确状态或账本时调用 world_query；硬状态变化先用 world_command，命令返回 staged 只表示本轮暂存，整轮成功后才会提交。");
+    lines.push("需要精确状态、命令 ID 或完整目录时调用 world_query（section=catalog/all）；硬状态变化先用 world_command，命令返回 staged 只表示本轮暂存，整轮成功后才会提交。");
   } else {
     lines.push("本轮没有可用的世界工具；不要声称修改了金钱、物品、位置或时间。");
   }
@@ -88,34 +88,62 @@ function eventsText(snapshot: WorldSnapshot, template?: WorldTemplate): string {
     : "没有世界事件。";
 }
 
+/** 命令需要稳定 ID：查询结果同时给显示名、ID、价格和可用地点。 */
+function catalogText(template: WorldTemplate | undefined, compact: boolean): string {
+  if (!template) return "世界模板缺失，无法列出角色、地点和物品目录。";
+  if (compact) {
+    return [
+      "角色：" + template.actors.map((actor) => `${actor.name}（${actor.id}）`).join("、"),
+      "地点：" + template.locations.map((location) => `${location.name}（${location.id}）`).join("、"),
+      "物品：" + template.items.map((item) => `${item.name}（${item.id}，价格 ${item.price}）`).join("、"),
+    ].join("\n");
+  }
+  return [
+    "角色：",
+    ...template.actors.map((actor) => `- ${actor.name}（id: ${actor.id}）${actor.description ? `：${actor.description}` : ""}`),
+    "",
+    "地点：",
+    ...template.locations.map((location) => `- ${location.name}（id: ${location.id}）${location.description ? `：${location.description}` : ""}`),
+    "",
+    "物品：",
+    ...template.items.map((item) => `- ${item.name}（id: ${item.id}，价格 ${item.price}）${item.description ? `：${item.description}` : ""}`),
+  ].join("\n");
+}
+
 export function worldStateText(
   snapshot: WorldSnapshot,
   template?: WorldTemplate,
-  section: "summary" | "actors" | "inventory" | "events" | "all" = "summary",
+  section: "summary" | "actors" | "inventory" | "events" | "catalog" | "all" = "summary",
   capability?: WorldEngineCapability,
 ): string {
   const restriction = restrictionLabel(capability);
   const restrictedNote = restriction ? `\n\n${restriction}，不能执行命令。` : "";
-  if (section === "summary") return worldDigest(snapshot, template, capability);
+  if (section === "summary") {
+    return `${worldDigest(snapshot, template, capability)}\n\n### 可用标识目录\n${catalogText(template, true)}`;
+  }
   if (section === "actors") {
     const body = Object.values(snapshot.actors).map((actor) =>
-      `${actorLabel(actor.id, template)}（${actor.id}）：${actor.status}，位于${locationLabel(actor.locationId, template)}`).join("\n") || "没有角色。";
+      `${actorLabel(actor.id, template)}（${actor.id}）：${actor.status}，位于${locationLabel(actor.locationId, template)}（${actor.locationId}）`).join("\n") || "没有角色。";
     return body + restrictedNote;
   }
   if (section === "inventory") {
     const rows = snapshot.inventory.map((entry) =>
-      `${actorLabel(entry.ownerId, template)}：${itemLabel(entry.itemId, template)}×${entry.quantity}`);
+      `${actorLabel(entry.ownerId, template)}（${entry.ownerId}）：${itemLabel(entry.itemId, template)}（${entry.itemId}）×${entry.quantity}`);
     return (rows.length ? rows.join("\n") : "没有物品。") + restrictedNote;
   }
   if (section === "events") return eventsText(snapshot, template) + restrictedNote;
+  if (section === "catalog") return catalogText(template, false) + restrictedNote;
   return [
     worldDigest(snapshot, template, capability),
     "",
     "角色：",
-    Object.values(snapshot.actors).map((actor) => `- ${actorLabel(actor.id, template)}（${actor.id}）：${actor.status} @ ${locationLabel(actor.locationId, template)}`).join("\n"),
+    Object.values(snapshot.actors).map((actor) => `- ${actorLabel(actor.id, template)}（${actor.id}）：${actor.status} @ ${locationLabel(actor.locationId, template)}（${actor.locationId}）`).join("\n"),
     "",
     "库存：",
-    snapshot.inventory.map((entry) => `- ${actorLabel(entry.ownerId, template)}：${itemLabel(entry.itemId, template)}×${entry.quantity}`).join("\n") || "- 无",
+    snapshot.inventory.map((entry) => `- ${actorLabel(entry.ownerId, template)}（${entry.ownerId}）：${itemLabel(entry.itemId, template)}（${entry.itemId}）×${entry.quantity}`).join("\n") || "- 无",
+    "",
+    "目录：",
+    catalogText(template, false),
     "",
     "事件：",
     eventsText(snapshot, template),

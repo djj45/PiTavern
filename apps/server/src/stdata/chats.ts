@@ -217,7 +217,7 @@ export class ChatStore {
     if (metadata[WORLD_STATE_KEY]) throw new Error("该聊天已初始化世界");
     const record = createWorldTemplateRecord(templateInput);
     const snapshot = createInitialWorldSnapshot(record);
-    if (hasUserMessage) this.backfillWorldState(rev, snapshot);
+    if (hasUserMessage) this.backfillWorldState(rev, snapshot, metadata);
     const existing = metadata[WORLD_TEMPLATES_KEY] && typeof metadata[WORLD_TEMPLATES_KEY] === "object" && !Array.isArray(metadata[WORLD_TEMPLATES_KEY])
       ? { ...(metadata[WORLD_TEMPLATES_KEY] as Record<string, unknown>) } : {};
     const templates = { ...existing, [record.contentHash]: record };
@@ -233,14 +233,22 @@ export class ChatStore {
   }
 
   /** 旧聊天中途绑定：把初始快照补进回合检查点和所有候选状态（含 continuation 内的嵌套分支）。 */
-  private backfillWorldState(rev: { raw: string[]; records: { line: StChatLine; rawIndex: number }[] }, snapshot: WorldSnapshot): void {
+  private backfillWorldState(rev: { raw: string[]; records: { line: StChatLine; rawIndex: number }[] }, snapshot: WorldSnapshot, baseMetadata: Record<string, unknown>): void {
+    const baseline = stateFields(baseMetadata);
+    baseline[WORLD_STATE_KEY] = structuredClone(snapshot);
     const seen = new Set<StChatLine>();
     const patchLine = (line: StChatLine): void => {
-      if (seen.has(line) || !line.extra || typeof line.extra !== "object") return;
+      if (seen.has(line)) return;
       seen.add(line);
+      if ((!line.extra || typeof line.extra !== "object") && line.is_user && !line.is_system) line.extra = {};
+      if (!line.extra || typeof line.extra !== "object") return;
       const before = line.extra._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
-      if (before && typeof before === "object" && before.metadata && typeof before.metadata === "object" && !Array.isArray(before.metadata)
-        && !Object.hasOwn(before.metadata, WORLD_STATE_KEY)) {
+      if (!before || typeof before !== "object" || Array.isArray(before)) {
+        if (line.is_user && !line.is_system) line.extra._pitavernBeforeTurn = { metadata: structuredClone(baseline) };
+      } else if (!before.metadata || typeof before.metadata !== "object" || Array.isArray(before.metadata)
+        || Object.keys(before.metadata).length === 0) {
+        before.metadata = structuredClone(baseline);
+      } else if (!Object.hasOwn(before.metadata, WORLD_STATE_KEY)) {
         before.metadata[WORLD_STATE_KEY] = structuredClone(snapshot);
       }
       const catalog = line.extra._pitavernReplies as { versions?: Array<Record<string, unknown>> } | undefined;
@@ -496,6 +504,36 @@ export class ChatStore {
     return { source, raw, records, header, hasHeader };
   }
 
+  /** 脚本修改变量/消息后，保留世界恢复字段，只清理已失效的普通回合状态。 */
+  private retainWorldRecovery(line: StChatLine): void {
+    if (!line.extra || typeof line.extra !== "object") return;
+    const before = line.extra._pitavernBeforeTurn as { metadata?: Record<string, unknown> } | undefined;
+    if (before && typeof before === "object" && !Array.isArray(before)) {
+      const world = before.metadata?.[WORLD_STATE_KEY];
+      if (world !== undefined) line.extra._pitavernBeforeTurn = { metadata: { [WORLD_STATE_KEY]: structuredClone(world) } };
+      else delete line.extra._pitavernBeforeTurn;
+    }
+    const catalog = line.extra._pitavernReplies as ReplyVersions | undefined;
+    if (catalog && Array.isArray(catalog.versions)) {
+      let hasWorld = false;
+      for (const version of catalog.versions) {
+        if (!version || typeof version !== "object") continue;
+        const state = version.state && typeof version.state === "object" && !Array.isArray(version.state)
+          ? version.state as Record<string, unknown> : undefined;
+        const world = state?.[WORLD_STATE_KEY];
+        if (world !== undefined) {
+          hasWorld = true;
+          version.state = { [WORLD_STATE_KEY]: structuredClone(world) };
+        } else {
+          delete version.state;
+        }
+        delete version.enforcement;
+      }
+      if (hasWorld) line.extra._pitavernReplies = catalog;
+      else delete line.extra._pitavernReplies;
+    }
+  }
+
   /** Preserve raw unknown/damaged records and commit a whole script in one replacement. */
   prepareScript(chatId: string, expectedRevision: string) {
     if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请同步后重新运行脚本");
@@ -513,7 +551,7 @@ export class ChatStore {
         if (original !== undefined) {
           while (cursor < original) next.push(rev.raw[cursor++]);
           cursor = original + 1;
-          if (changed && line.extra) { delete line.extra._pitavernReplies; delete line.extra._pitavernBeforeTurn; }
+          if (changed) this.retainWorldRecovery(line);
           next.push(changed ? JSON.stringify(line) : rev.raw[original]);
         } else next.push(JSON.stringify({ ...line, extra: { ...line.extra, messageId: randomUUID() } }));
       }

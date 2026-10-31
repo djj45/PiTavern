@@ -9,7 +9,8 @@ function text(t: string): AgentToolResult["content"] {
 }
 
 const section = Type.Union([
-  Type.Literal("summary"), Type.Literal("actors"), Type.Literal("inventory"), Type.Literal("events"), Type.Literal("all"),
+  Type.Literal("summary"), Type.Literal("actors"), Type.Literal("inventory"), Type.Literal("events"),
+  Type.Literal("catalog"), Type.Literal("all"),
 ]);
 
 export function buildWorldQueryParameters() {
@@ -24,7 +25,7 @@ export function createWorldQueryTool(ctx: ToolContext): AgentTool<ReturnType<typ
     name: "world_query",
     label: "世界状态",
     description:
-      "查询当前世界的权威状态：时间、地点、在场人物、金钱、库存、最近事件。只读，不修改世界。精确账本或跨轮变化必须查询，不要仅凭叙事猜测硬状态。",
+      "查询当前世界的权威状态：时间、地点、在场人物、金钱、库存、最近事件；summary/catalog/all 同时返回角色、地点、物品的显示名与命令 ID、物品固定价格，便于 world_command。只读，不修改世界。精确账本、命令 ID 或跨轮变化必须查询，不要仅凭叙事猜测硬状态。",
     parameters,
     execute: async (_id, params) => {
       if (!ctx.world) return { content: text("当前聊天没有启用世界状态。"), details: { summary: "世界未启用" }, isError: true };

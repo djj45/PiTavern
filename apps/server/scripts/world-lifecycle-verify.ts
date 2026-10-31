@@ -216,3 +216,49 @@ test("重启、备份和单文件 JSONL 都保留旧聊天世界与模板", () =
   assert.equal(restored.snapshot.templateHash, snapshot.templateHash);
   assert.equal(restored.snapshot.revision, snapshot.revision);
 });
+
+test("旧聊天绑定世界会为缺失回合检查点补建恢复点", () => {
+  const { store, chat } = setup();
+  store.appendMessage(chat.id, { name: "User", is_user: true, is_system: false, mes: "导入剧情" });
+  const assistant = store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "导入回答" });
+  store.initializeWorld(chat.id, template, undefined, { allowExisting: true });
+  const userLine = store.readDocument(chat.id)!.lines.find((line) => line.is_user)!;
+  const checkpoint = userLine.extra!._pitavernBeforeTurn as { metadata?: Record<string, unknown> };
+  assert.ok(checkpoint?.metadata?.[WORLD_STATE_KEY]);
+  const regeneration = store.prepareRegeneration(chat.id, assistant.extra!.messageId as string, assistant.mes);
+  assert.ok(regeneration.metadata[WORLD_STATE_KEY]);
+  regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "补建后的回答", send_date: new Date().toISOString(), extra: { messageId: "assistant-checkpoint-fixed" } }], regeneration.metadata);
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
+});
+
+test("普通变量脚本保留世界检查点和候选恢复点", () => {
+  const { store, chat } = setup();
+  store.initializeWorld(chat.id, template);
+  const before = stateFields(store.readMetadata(chat.id));
+  store.appendMessage(chat.id, {
+    name: "User", is_user: true, is_system: false, mes: "买剑",
+    extra: { _pitavernBeforeTurn: { metadata: before, enforcement: { turn: 1, usedThisTurn: 0, cooldownUntilTurn: 0 } } },
+  });
+  const assistant = store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "旧回答" });
+  const regeneration = store.prepareRegeneration(chat.id, assistant.extra!.messageId as string, assistant.mes);
+  const transaction = new WorldTransaction(store.readWorld(chat.id)!, 1);
+  transaction.execute(purchase);
+  const worldB = transaction.commit();
+  regeneration.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "买剑回答", send_date: new Date().toISOString(), extra: { messageId: "assistant-script-buy" } }],
+    { ...regeneration.metadata, [WORLD_STATE_KEY]: worldB });
+  const script = store.prepareScript(chat.id, store.revisionId(chat.id));
+  script.metadata.variables = { scriptTouched: true };
+  script.commit();
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 10);
+  const userLine = store.readDocument(chat.id)!.lines.find((line) => line.is_user)!;
+  assert.ok((userLine.extra!._pitavernBeforeTurn as { metadata: Record<string, unknown> }).metadata[WORLD_STATE_KEY]);
+  const catalog = userLine.extra!._pitavernReplies as { versions: Array<{ state?: Record<string, unknown> }> };
+  assert.ok(catalog.versions.some((version) => version.state?.[WORLD_STATE_KEY]));
+  const current = store.readDocument(chat.id)!.lines.filter((line) => !line.is_user && !line.is_system).at(-1)!;
+  const again = store.prepareRegeneration(chat.id, current.extra!.messageId as string, current.mes);
+  assert.ok(again.metadata[WORLD_STATE_KEY]);
+  again.commit([{ name: "世界向导", is_user: false, is_system: false, mes: "脚本后回答", send_date: new Date().toISOString(), extra: { messageId: "assistant-script-after" } }], again.metadata);
+  assert.ok(store.readWorld(chat.id));
+  // 重生成回到该回合前检查点，因此恢复的是购买前余额；关键是世界没有被脚本删除。
+  assert.equal(store.readWorld(chat.id)!.snapshot.money.player, 20);
+});
