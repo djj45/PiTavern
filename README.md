@@ -1,6 +1,6 @@
 # PiTavern（π 酒馆）
 
-当前版本：**0.2.2**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
+当前版本：**0.3.0**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
 
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
@@ -80,6 +80,7 @@ npm run build && npm run verify:browser # 35 项真实界面验收，独立合�
 - **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史只带近 N 轮（更早靠召回）——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，「统计」实时显示（`npm run verify:takeover`）
 - **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，顶栏「主题」打开面板可自由调整界面颜色）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
 - **M7 剧情分支** ✅ 重新生成保留候选并支持多分支树：可回到任意历史回合切换候选，未选中的后续剧情/状态原样保存并可恢复；设置中可开启每次成功回复后自动追加 0–4 个候选，分支面板支持「换条路线」的本次生成指令（`npm run verify:branches`）
+- **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。暂不包含单文件 JSONL 导入 UI、自定义模板编辑器和模板热更新。
 - **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。
 
 ## 聊天操作与显示
