@@ -18,7 +18,7 @@ export function settlementTools(tools: AgentTool<any>[], view: () => WorldModelS
     },
   };
   return {
-    tools: [...tools, submit].map(tool => ({ ...tool, execute: async (...args: Parameters<typeof tool.execute>) => {
+    tools: [...tools, submit].map(tool => ({ ...tool, executionMode: "sequential" as const, execute: async (...args: Parameters<typeof tool.execute>) => {
       signal.throwIfAborted();
       if (plan) { invalid = true; throw new Error("计划已提交，禁止继续执行工具"); }
       return tool.execute(...args);

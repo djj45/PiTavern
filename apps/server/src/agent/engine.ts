@@ -209,6 +209,9 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
         return { action: "end" };
       }
       if (options.completion === "settlement") {
+        const calls = turn.message.content.filter(c => c.type === "toolCall");
+        const submitted = calls.findIndex(c => c.name === "submit_narrative_plan");
+        if (submitted >= 0 && submitted !== calls.length - 1) throw new Error("叙事计划必须是最后一个工具调用");
         if (options.settlementComplete?.()) return { action: "end" };
         if (turnCount >= MAX_TURNS || !turn.toolResults.length) throw new Error("结算未提交有效叙事计划");
         return undefined;
