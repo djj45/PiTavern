@@ -782,6 +782,13 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     }
   });
 
+  app.post("/api/chat/rewrite", async (req, res) => {
+    try {
+      if (!req.body || typeof req.body.chatId !== "string") throw new Error("正文重写参数无效");
+      res.json(await sessions.rewrite(req.body));
+    } catch (cause) { res.status(400).json({ error: cause instanceof Error ? cause.message : "正文重写失败" }); }
+  });
+
   app.get("/api/chat/activity", (req, res) => {
     try {
       const chatId = String(req.query.chatId ?? "");

@@ -6,7 +6,7 @@ import { TOOL_META } from "../chatItems.ts";
 export const GENERATION_STATUS: Record<GenerationRecordDto["status"], string> = {
   running: "生成中", succeeded: "成功", failed: "失败", aborted: "已停止", interrupted: "服务中断",
 };
-const KIND = { send: "发送", regenerate: "重新生成", script: "脚本生成", retry: "重试" };
+const KIND = { send: "发送", regenerate: "重新生成", script: "脚本生成", retry: "重试", rewrite: "只重写正文" };
 const number = (value: number) => value.toLocaleString("zh-CN");
 
 export function ContextDiagnostics({ context }: { context: ContextDiagnosticsDto }) {
@@ -133,6 +133,8 @@ export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; 
           <p className="text-sm">{KIND[run.kind]} · {GENERATION_STATUS[run.status]} · {run.provider} / {run.model}</p>
           {run.error && <p className="break-words text-xs text-amber-300">{run.error}</p>}
           <p className="text-xs text-tavern-dim">接口回传：输入 {number(run.usage.input)} · 输出 {number(run.usage.output)} · 缓存读取 {number(run.usage.cacheRead)} · 缓存写入 {number(run.usage.cacheWrite)} · 合计 {number(run.usage.totalTokens)} tokens。{run.usage.responsesWithUsage}/{run.usage.responses} 次模型响应含非零用量。</p>
+          {run.failureCode && <p className="text-xs text-amber-300">失败位置：{run.stages?.at(-1)?.phase} · {{budget:"输入超预算",output:"正文无效",conflict:"聊天已变化",plan:"叙事计划无效",provider:"模型请求失败"}[run.failureCode]}</p>}
+          {run.stages && <section aria-label="双阶段用量" className="space-y-2 text-xs"><h3>阶段与接口回传用量</h3>{run.stages.map((stage,index)=><details key={index} className="rounded border border-tavern-border p-2"><summary className="cursor-pointer break-words">{{settling:"结算",validating:"校验叙事",rendering:"生成正文",committing:"提交"}[stage.phase]} · {GENERATION_STATUS[stage.status]} · {Math.max(0,Date.parse(stage.finishedAt ?? new Date().toISOString())-Date.parse(stage.startedAt))}ms · {stage.model} · 输入 {number(stage.usage.input)} / 输出 {number(stage.usage.output)} tokens</summary>{stage.context && <div className="mt-2"><ContextDiagnostics context={stage.context}/></div>}</details>)}</section>}
           {run.context ? <ContextDiagnostics context={run.context} /> : <p className="text-xs text-tavern-dim">尚无请求诊断，可能在组装上下文前已结束。</p>}
           <section><h3 className="mb-2 text-sm">本次工具活动 · {run.tools.length} 次</h3>
             {run.tools.map((tool) => <details key={tool.key} className="mb-2 rounded border border-tavern-border p-2 text-xs">

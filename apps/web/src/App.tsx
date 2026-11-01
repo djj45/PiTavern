@@ -173,7 +173,7 @@ export function App() {
       });
       return true;
     }
-    if (!socket.send({ type: "chat.send", chatId: activeChat.id, text, speakers })) {
+    if (!socket.send({ type: "chat.send", chatId: activeChat.id, text, speakers, ...(activeChat.page ? {requestId:crypto.randomUUID(),revision:activeChat.page.revision} : {}) })) {
       showNotice("消息未发送：服务未连接，请重连后重试");
       return false;
     }
@@ -241,10 +241,25 @@ export function App() {
     if (!latest || isToolItem(latest)) return;
     const note = instruction?.trim();
     if (socket.send({ type: "chat.regenerate", chatId: activeChat.id, messageId: latest.id, expectedText: latest.text,
-      ...(note ? { instruction: note } : {}) })) {
+      ...(note ? { instruction: note } : {}), ...(activeChat.page ? {requestId:crypto.randomUUID(),revision:activeChat.page.revision} : {}) })) {
       dispatch({ type: "pending", chatId: activeChat.id });
     } else showNotice("服务未连接，请重连后重试");
   }, [activeChat, socket.send, showNotice]);
+
+  const rewriteInFlight = useRef(false);
+  const rewrite = useCallback(async (instruction: string): Promise<boolean> => {
+    const chat = activeChatRef.current, eligibility = chat?.rewrite;
+    if (!chat || !eligibility?.enabled || !eligibility.messageId || chat.pending || chat.streamingText !== null || rewriteInFlight.current) return false;
+    rewriteInFlight.current = true;
+    dispatch({type:"pending",chatId:chat.id});
+    try {
+      await api.rewrite({chatId:chat.id,messageId:eligibility.messageId,candidate:eligibility.candidate ?? 0,
+        revision:eligibility.revision,requestId:crypto.randomUUID(),instruction});
+      showNotice("已新增文字候选，世界与知识保持不变");
+      return true;
+    } catch(error) { showNotice((error as Error).message); dispatch({type:"chat.error",chatId:chat.id,message:(error as Error).message}); return false; }
+    finally { rewriteInFlight.current = false; sendRef.current({type:"chat.sync",chatId:chat.id}); }
+  }, [showNotice]);
 
   const stopGeneration = useCallback(() => {
     if (activeChatId && !socket.send({ type: "chat.abort", chatId: activeChatId })) showNotice("服务未连接，暂时无法停止生成");
@@ -324,7 +339,7 @@ export function App() {
           appearance={connection?.appearance}
           streamingText={activeChat?.pending ? "" : activeChat?.streamingText ?? null}
           onSwitchBranchPath={switchBranchPath} onSelectGreeting={selectGreeting} onLoadOlder={loadOlder} loadingOlder={loadingHistoryFor === activeChatId} onRestored={restored} onWorldChanged={worldChanged}
-          onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} disabled={!connection?.defaultModel} maintenance={!!maintenance} connected={socket.connected} />
+          onSend={sendMessage} onStop={stopGeneration} onEdit={editMessage} onRegenerate={regenerate} onRewrite={rewrite} disabled={!connection?.defaultModel} maintenance={!!maintenance} connected={socket.connected} />
         {panelOpen && (
           <ActivityPanel
             chatId={activeChat?.id}

@@ -194,7 +194,7 @@ export interface GenerationRecordDto {
   id: string;
   version: number;
   userMessageId: string;
-  kind: "send" | "regenerate" | "retry" | "script";
+  kind: "send" | "regenerate" | "retry" | "script" | "rewrite";
   provider: string;
   model: string;
   startedAt: string;
@@ -603,7 +603,13 @@ export interface ChatImportResultDto {
   warnings: string[];
 }
 
+export interface RewriteRequestDto {
+  chatId: string; messageId: string; candidate: number; revision: string; requestId: string; instruction: string;
+}
+export interface RewriteEligibilityDto { enabled: boolean; reason?: string; messageId?: string; candidate?: number; revision: string }
+
 export interface ChatSnapshotDto {
+  rewrite?: RewriteEligibilityDto;
   generationPhase?: GenerationPhase;
   id: string;
   character: string;
@@ -659,8 +665,8 @@ export interface AuthorNoteSnapshotDto {
 // ---------------------------------------------------------------- WS 协议
 
 export type ClientMessage =
-  | { type: "chat.send"; chatId: string; text: string; speakers?: string[] }
-  | { type: "chat.regenerate"; chatId: string; messageId: string; expectedText: string; instruction?: string }
+  | { type: "chat.send"; chatId: string; text: string; speakers?: string[]; requestId?: string; revision?: string }
+  | { type: "chat.regenerate"; chatId: string; messageId: string; expectedText: string; instruction?: string; requestId?: string; revision?: string }
   | { type: "chat.abort"; chatId: string }
   | { type: "chat.sync"; chatId: string }
   | { type: "ping" };

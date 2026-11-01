@@ -33,19 +33,23 @@ export function attachWebSocket(server: http.Server, sessions: SessionManager): 
       }
       if (!message || typeof message !== "object") return;
       if ("chatId" in message && typeof message.chatId !== "string") return;
+      if ("requestId" in message && (typeof message.requestId !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(message.requestId) || !("revision" in message) || typeof message.revision !== "string")) {
+        ws.send(JSON.stringify({ type: "chat.error", chatId: "chatId" in message ? message.chatId : "", message: "请求标识或 revision 无效" })); return;
+      }
+      const request = "requestId" in message && message.requestId && "revision" in message && message.revision ? {requestId:message.requestId,revision:message.revision} : undefined;
       switch (message.type) {
         case "ping":
           ws.send(JSON.stringify({ type: "pong" }));
           break;
         case "chat.send":
-          if (typeof message.text === "string" && message.text.trim() && message.text.length <= 1_000_000) void sessions.send(message.chatId, message.text, message.speakers);
+          if (typeof message.text === "string" && message.text.trim() && message.text.length <= 1_000_000) void sessions.send(message.chatId, message.text, message.speakers, request);
           else ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: "消息不能为空且不能超过 100 万字符" }));
           break;
         case "chat.regenerate":
           if (typeof message.messageId === "string" && typeof message.expectedText === "string" &&
               (message.instruction === undefined || (typeof message.instruction === "string" && message.instruction.length <= 4000))) {
             const instruction = typeof message.instruction === "string" && message.instruction.trim() ? message.instruction.trim() : undefined;
-            void sessions.regenerate(message.chatId, message.messageId, message.expectedText, instruction);
+            void sessions.regenerate(message.chatId, message.messageId, message.expectedText, instruction, request);
           } else ws.send(JSON.stringify({ type: "chat.error", chatId: message.chatId, message: "重生成参数无效" }));
           break;
         case "chat.abort":

@@ -14,6 +14,7 @@ import type {
   ChatImportResultDto,
   ChatPageDto,
   ChatSnapshotDto,
+  RewriteRequestDto,
   ChatSummaryDto,
   CharacterCardDeleteResultDto,
   CharacterCardEditorDto,
@@ -86,6 +87,7 @@ function isChatImportPreview(value: unknown): value is ChatImportPreviewDto {
 }
 
 export const api = {
+  rewrite: (input: RewriteRequestDto) => fetch("/api/chat/rewrite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }).then(r => json<{replayed:boolean;revision:string}>(r)),
   startLibraryBackupJob: (options: { action: "export" | "import" | "restore"; includeSettings?: boolean; previewId?: string; applySettings?: boolean }) => fetch("/api/library-backup/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) }).then((r) => json<LibraryBackupJobDto>(r)),
   libraryBackupJob: (id: string, signal?: AbortSignal) => fetch("/api/library-backup/jobs/" + encodeURIComponent(id), { signal }).then((r) => json<LibraryBackupJobDto>(r)),
   cancelLibraryBackupJob: (id: string) => fetch("/api/library-backup/jobs/" + encodeURIComponent(id) + "/cancel", { method: "POST" }).then((r) => json<LibraryBackupJobDto>(r)),

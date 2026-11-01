@@ -1,4 +1,4 @@
-import type { GroupChatDto, ChatMessageDto, ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, GreetingChoicesDto, BranchPointDto, ServerEvent } from "@pitavern/shared";
+import type { GenerationPhase, RewriteEligibilityDto, GroupChatDto, ChatMessageDto, ChatActivityDto, ChatDisplayDto, ChatPageDto, ReplyChoicesDto, GreetingChoicesDto, BranchPointDto, ServerEvent } from "@pitavern/shared";
 import type { WorldChatStateDto } from "@pitavern/shared/world";
 import { isToolItem, type ChatItem } from "./chatItems.ts";
 export interface UsageStats {
@@ -22,6 +22,8 @@ export interface ChatState {
   streamingText: string | null;
   /** 当前生成的服务端开始时间；用于流式气泡计时。 */
   generationStartedAt?: string;
+  generationPhase?: GenerationPhase;
+  rewrite?: RewriteEligibilityDto;
   pending: boolean;
   usage: UsageStats;
   /** 接管模式的状态投影 */
@@ -73,6 +75,7 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       id: snapshot.id, character: snapshot.character, group: snapshot.group, memberDisplays: snapshot.memberDisplays, streamingCharacter: snapshot.streamingCharacter, stagedMessages: snapshot.stagedMessages, items, page, replyChoices: snapshot.replyChoices, branchChoices: snapshot.branchChoices, greetingChoices: snapshot.greetingChoices,
       streamingText: snapshot.running ? snapshot.streamingText : null,
       generationStartedAt: snapshot.running ? snapshot.generationStartedAt : undefined,
+      generationPhase: snapshot.running ? snapshot.generationPhase : undefined, rewrite: snapshot.rewrite,
       pending: false, activity, activityError: snapshot.activityError, display: snapshot.display, world: snapshot.world,
       usage: activity ? { ...activity.usage, turns: activity.turns } : previous?.usage ?? EMPTY_USAGE,
       ...(snapshot.projection ? { projection: snapshot.projection } : {}),
@@ -81,6 +84,9 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
   if (!previous) return state;
   let chat = previous;
   switch (event.type) {
+    case "chat.phase":
+      chat = { ...chat, generationPhase: event.phase };
+      break;
     case "chat.activity":
       if (chat.activity && chat.activity.revision > event.activity.revision) return state;
       chat = { ...chat, activity: event.activity, activityError: undefined, usage: { ...event.activity.usage, turns: event.activity.turns } };
@@ -117,7 +123,7 @@ export function chatReducer(state: ChatsState, event: ChatAction): ChatsState {
       chat = { ...chat, streamingText: "", stagedMessages: [], items: [...chat.items, event.message] };
       break;
     case "chat.finished":
-      chat = { ...chat, pending: false, streamingText: null, generationStartedAt: undefined, stagedMessages: [], items: chat.items.map((item) =>
+      chat = { ...chat, pending: false, streamingText: null, generationStartedAt: undefined, generationPhase: undefined, stagedMessages: [], items: chat.items.map((item) =>
         isToolItem(item) && item.status === "running" ? { ...item, status: "error", summary: "本轮已结束" } : item) };
       break;
     case "chat.error":

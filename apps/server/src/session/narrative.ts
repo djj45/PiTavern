@@ -90,3 +90,32 @@ export function narrativePrompt(packet: NarrativePacket, view: WorldModelSnapsho
     authoritativeState: view, visibleEvents: packet.events, suggestedPlan: packet.plan,
     writingRequest: { originalInput: packet.writing.input, originalDirection: packet.writing.direction, rewriteDirection: instruction } });
 }
+
+export const REQUEST_KEY = "_pitavernGenerationRequest";
+export interface GenerationRequest { requestId: string; revision: string }
+export function requestFingerprint(value: unknown): string { return worldContentHash(value); }
+/** Only committed reply metadata counts as a receipt; never user/model prose. */
+export function findGenerationRequest(source: string, id: string, fingerprint: string): boolean {
+  let found = false;
+  const walk = (value: unknown, depth = 0): void => {
+    if (depth > 64 || !value || typeof value !== "object") return;
+    if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1); return; }
+    const object = value as Record<string, unknown>;
+    const extra = object.extra as Record<string, unknown> | undefined;
+    const receipt = extra?.[REQUEST_KEY] as {id?:unknown;hash?:unknown} | undefined;
+    if (object.is_user === false && receipt?.id === id) {
+      if (receipt.hash !== fingerprint) throw new Error("请求 ID 已用于其他内容");
+      found = true;
+    }
+    for (const [key, child] of Object.entries(object)) {
+      if (key === "continuation" && Array.isArray(child)) for (const raw of child) {
+        if (typeof raw === "string") { try { walk(JSON.parse(raw), depth + 1); } catch (error) { if (error instanceof SyntaxError) continue; throw error; } }
+      }
+      else if (key !== "extra" || object.is_user === true) walk(child, depth + 1);
+      // Assistant extras contain no candidate trees; walking them could mistake
+      // arbitrary authored data for a committed reply receipt.
+    }
+  };
+  for (const line of source.split("\n")) if (line.trim()) walk(JSON.parse(line));
+  return found;
+}

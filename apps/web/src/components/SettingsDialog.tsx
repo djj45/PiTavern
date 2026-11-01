@@ -71,6 +71,8 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
   const [scanDepth, setScanDepth] = useState(connection?.worldInfo?.scanDepth ?? 2);
   const [recursionSteps, setRecursionSteps] = useState(connection?.worldInfo?.recursionSteps ?? 0);
   const [outputProtocol, setOutputProtocol] = useState<"native" | "game_tool">(connection?.outputProtocol ?? "native");
+  const [twoStage, setTwoStage] = useState(connection?.twoStage ?? false);
+  const [renderRetries, setRenderRetries] = useState(connection?.renderRetries ?? 0);
   const [protocolStrict, setProtocolStrict] = useState(connection?.protocolStrict ?? true);
   const [compressionEnabled, setCompressionEnabled] = useState(connection?.compression?.enabled ?? true);
   const [keepFullTurns, setKeepFullTurns] = useState(connection?.compression?.keepFullTurns ?? 6);
@@ -201,7 +203,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
         useGroupScoring,
       },
       vectors,
-      outputProtocol,
+      outputProtocol, twoStage, renderRetries,
       protocolStrict,
       compression: { enabled: compressionEnabled, keepFullTurns },
       takeover: { recentTurns, stateProjection },
@@ -265,7 +267,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
 
   const autoSaveKey = JSON.stringify({
     providers, defaultProvider, defaultModel, stDataDir, personaName, personaDescription, contextMode, activePreset, activeWorlds,
-    scanDepth, recursionSteps, outputProtocol, protocolStrict, compressionEnabled, keepFullTurns, recentTurns, stateProjection,
+    scanDepth, recursionSteps, outputProtocol, twoStage, renderRetries, protocolStrict, compressionEnabled, keepFullTurns, recentTurns, stateProjection,
     autoGenerate, minActivations, minActivationsDepthMax, budgetTokens, useGroupScoring, vectors, speechColor, dialogueColor, dialoguePairs,
   });
   useEffect(() => {
@@ -307,6 +309,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
     worldInfo: value.worldInfo,
     vectors: value.vectors,
     outputProtocol: value.outputProtocol,
+    twoStage: value.twoStage ?? false, renderRetries: value.renderRetries ?? 0,
     protocolStrict: value.protocolStrict,
     compression: value.compression,
     takeover: value.takeover,
@@ -800,6 +803,12 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
               强制工具防截断
               <span className="block text-xs text-tavern-dim">正文必须走 game_content 工具（原生 function calling 取代伪 JSON 预填）</span>
             </button>
+          </div>
+          <div className="mb-3 rounded border border-tavern-border p-3 text-xs">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={twoStage} onChange={e => setTwoStage(e.target.checked)} />可选双阶段生成</label>
+            <p className="mt-2 text-tavern-dim">默认关闭。单人、世界已启用、工具开启、Chat Completions 与原生文本使用先结算再写正文；三种上下文模式均支持。群聊、文本补全、game_tool、无世界或只读世界沿用原流程。两阶段使用同一模型，会增加请求数。</p>
+            <label className="mt-2 flex items-center gap-2">正文请求失败重试次数<select aria-label="正文请求失败重试次数" value={renderRetries} onChange={e=>setRenderRetries(Number(e.target.value))} className="rounded bg-tavern-bg p-1"><option value={0}>0</option><option value={1}>1</option><option value={2}>2</option></select></label>
+            <p className="mt-1 text-tavern-dim">同次运行重试只写正文；空白、非法工具调用、预算超限与停止不重试。</p>
           </div>
           {outputProtocol === "game_tool" && (
             <label className="mb-2 flex items-center gap-2 text-xs text-tavern-dim">

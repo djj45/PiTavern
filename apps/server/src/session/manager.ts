@@ -1,5 +1,5 @@
 import { createNarrativeAgent, settlementTools } from "../agent/narrative.ts";
-import { createNarrative, NARRATIVE_KEY, SETTLEMENT_INSTRUCTION } from "./narrative.ts";
+import { createNarrative, validateNarrative, NARRATIVE_KEY, SETTLEMENT_INSTRUCTION, REQUEST_KEY, findGenerationRequest, requestFingerprint, type GenerationRequest } from "./narrative.ts";
 import { executeScript, type ScriptResult } from "../script/interpreter.ts";
 import { readGroup, groupSpeakers } from "../stdata/groups.ts";
 import { withImportedScenario } from "../stdata/card-import.ts";
@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, GenerationPhase, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, GenerationPhase, RewriteRequestDto, RewriteEligibilityDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatMigrationPreviewDto, type WorldChatMigrationResultDto, type WorldChatStateDto, type WorldTemplateRecord, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction, createWorldTemplateRecord } from "../world/index.ts";
 import { planChatWorldMigration } from "../world/chat-migration.ts";
@@ -376,6 +376,7 @@ export class SessionManager {
       running: session?.running ?? false, streamingText: session?.streamingText ?? "",
       ...(session?.running && session.generation?.startedAt ? { generationStartedAt: session.generation.startedAt } : {}),
       ...(session?.running && session.generation?.stages?.length ? { generationPhase: session.generation.stages.at(-1)!.phase } : {}),
+      rewrite: this.rewriteEligibility(chatId),
       activity, activityError,
       world: this.worldView(document.metadata),
       memberDisplays: Object.fromEntries((readGroup(document.metadata)?.members ?? []).map((name) => [name, this.displayConfig(name, document.metadata, document.lines)])),
@@ -601,12 +602,91 @@ export class SessionManager {
     }
   }
 
-  send(chatId: string, text: string, speakers?: string[]): Promise<void> {
-    return this.generate(chatId, text, undefined, speakers);
+  send(chatId: string, text: string, speakers?: string[], request?: GenerationRequest): Promise<void> {
+    return this.generate(chatId, text, undefined, speakers, undefined, request);
   }
 
-  regenerate(chatId: string, messageId: string, expectedText: string, instruction?: string): Promise<void> {
-    return this.generate(chatId, "", { messageId, expectedText }, undefined, instruction);
+  regenerate(chatId: string, messageId: string, expectedText: string, instruction?: string, request?: GenerationRequest): Promise<void> {
+    return this.generate(chatId, "", { messageId, expectedText }, undefined, instruction, request);
+  }
+
+  private rewriteSource(chatId: string) {
+    const document = this.chats.readDocument(chatId);
+    if (!document) throw new Error("聊天不存在");
+    if (readGroup(document.metadata)) throw new Error("正文重写暂不支持群聊");
+    const world = this.chats.readWorld(chatId);
+    if (!world || world.capability.mode !== "enabled" || !this.config.toolsEnabled) throw new Error("正文重写需要已启用的世界");
+    const model = resolveModel(this.models(), this.config);
+    if (model.api !== "openai-completions" || this.config.outputProtocol !== "native") throw new Error("正文重写仅支持 Chat Completions 与原生文本");
+    const last = document.lines.at(-1);
+    if (!last || last.is_user || last.is_system || !last.mes.trim()) throw new Error("只能重写活动路径末尾的回复");
+    const view = buildPlayerWorldView(world.snapshot, world.template);
+    const source = document.lines.slice(0, -1);
+    const packet = validateNarrative(last.extra?.[NARRATIVE_KEY], document.metadata, source, view);
+    return { document, world, model, last, view, source, packet, candidate: replyChoices(document.lines)?.selected ?? 0 };
+  }
+
+  private rewriteEligibility(chatId: string): RewriteEligibilityDto {
+    const revision = this.chats.revisionId(chatId);
+    try {
+      const source = this.rewriteSource(chatId);
+      return { enabled: true, messageId: String(source.last.extra!.messageId), candidate: source.candidate, revision };
+    } catch (cause) {
+      return { enabled: false, revision, reason: cause instanceof Error ? cause.message : "叙事数据包无效" };
+    }
+  }
+
+  async rewrite(input: RewriteRequestDto): Promise<{ replayed: boolean; revision: string }> {
+    const {chatId} = input;
+    if (typeof input.messageId !== "string" || !Number.isSafeInteger(input.candidate) || input.candidate < 0 ||
+        typeof input.revision !== "string" || typeof input.instruction !== "string" || input.instruction.length > 4000 ||
+        typeof input.requestId !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(input.requestId)) throw new Error("正文重写参数无效");
+    if (this.writeBlocked) throw new Error(this.writeBlocked);
+    if (this.isStreaming(chatId) || this.sessions.get(chatId)?.autoBranching) throw new Error("生成中，请先停止或等待完成");
+    const hash = requestFingerprint(input);
+    if (findGenerationRequest(this.chats.readSource(chatId).source, input.requestId, hash)) return { replayed: true, revision: this.chats.revisionId(chatId) };
+    if (this.chats.revisionId(chatId) !== input.revision) throw new Error("聊天已变化，请同步后重写");
+    const current = this.rewriteSource(chatId);
+    if (current.last.extra?.messageId !== input.messageId || current.candidate !== input.candidate) throw new Error("选中回复已变化，请同步后重写");
+    const transaction = this.chats.prepareRegeneration(chatId, input.messageId, current.last.mes);
+    const session = this.ensureSession(chatId, current.last.name);
+    const model = current.model, config = structuredClone(this.config), generated: StChatLine[] = [];
+    const generation: GenerationRecordDto = {
+      id: this.activity.createId(chatId), version: 0, userMessageId: current.packet.turnId, kind: "rewrite",
+      provider: model.provider, model: model.id, startedAt: new Date().toISOString(), status: "running", usage: emptyUsage(), tools: [], knowledgeKey: current.view.knowledgeKey,
+    };
+    session.character = current.last.name; session.running = true; session.aborted = false;
+    session.controller = new AbortController(); session.streamingText = ""; session.staged = [];
+    session.generation = generation;
+    let committed = false;
+    try {
+      this.saveActivity(chatId, generation);
+      this.emit({ type: "chat.regenerating", chatId, startedAt: generation.startedAt });
+      this.stage(chatId, "validating");
+      await this.renderProse(chatId, { models: this.models(), model, chatId,
+        thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
+        tokenCounter: createTokenCounter(model.id, config.providers.find(p=>p.id===model.provider)?.models.find(m=>m.id===model.id)?.tokenizer),
+        onContext: context => { generation.context = context; const phase = generation.stages?.at(-1); if (phase) phase.context = context; this.saveActivity(chatId, generation); },
+        packet: current.packet, view: current.view, history: current.source.slice(0,-1), instruction: input.instruction }, generated, config.renderRetries);
+      session.controller.signal.throwIfAborted();
+      this.stage(chatId, "committing");
+      for (const line of generated) line.extra = { ...line.extra, [NARRATIVE_KEY]: current.packet, [REQUEST_KEY]: { id: input.requestId, hash } };
+      transaction.commit(generated, current.document.metadata);
+      committed = true;
+      return { replayed: false, revision: this.chats.revisionId(chatId) };
+    } catch (cause) {
+      generation.failureCode = generation.context?.overBudget ? "budget" : this.chats.revisionId(chatId) !== input.revision ? "conflict" : "output";
+      generation.error = session.aborted ? undefined : "正文重写未完成，已保留原正文与状态。";
+      throw new Error(session.aborted ? "正文重写已停止" : generation.error);
+    } finally {
+      generation.status = committed ? "succeeded" : session.aborted ? "aborted" : "failed"; generation.finishedAt = new Date().toISOString();
+      const stage = generation.stages?.at(-1); if (stage) { stage.status = generation.status; stage.finishedAt = generation.finishedAt; }
+      session.running = false; session.agent = null; session.controller = null; session.staged = []; session.streamingText = "";
+      try { this.saveActivity(chatId, generation); } finally {
+        session.generation = null;
+        this.changed(chatId); this.emit({ type: "chat.finished", chatId });
+      }
+    }
   }
 
   private async renderProse(chatId: string, options: Parameters<typeof createNarrativeAgent>[0], generated: StChatLine[], retries: number): Promise<void> {
@@ -646,7 +726,7 @@ export class SessionManager {
   }
 
   /** Both normal sends and regeneration stage state and replies until the entire turn succeeds. */
-  private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }, requestedSpeakers?: string[], instruction?: string): Promise<void> {
+  private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }, requestedSpeakers?: string[], instruction?: string, request?: GenerationRequest): Promise<void> {
     if (this.writeBlocked) {
       this.emit({ type: "chat.error", chatId, message: this.writeBlocked });
       return;
@@ -670,6 +750,9 @@ export class SessionManager {
     let committed = false;
     let autoCount = 0;
     try {
+      const requestHash = request ? requestFingerprint({ kind: replacement ? "regenerate" : "send", text, replacement, requestedSpeakers, instruction, request }) : undefined;
+      if (request && findGenerationRequest(this.chats.readSource(chatId).source, request.requestId, requestHash!)) return;
+      if (request && this.chats.revisionId(chatId) !== request.revision) throw new Error("聊天已变化，请同步后重试");
       const config = structuredClone(this.config);
       if (!replacement) autoCount = config.branches.autoGenerate;
       const stored = this.chats.readDocument(chatId);
@@ -858,6 +941,7 @@ export class SessionManager {
         if (twoStage) this.stage(chatId, "committing");
         pendingMetadata._pitavernEnforcement = structuredClone(session.enforcement);
         if (worldTransaction) pendingMetadata[WORLD_STATE_KEY] = worldTransaction.commit();
+        if (request) for (const line of generated) line.extra = { ...line.extra, [REQUEST_KEY]: { id: request.requestId, hash: requestHash } };
         transaction.commit(generated, pendingMetadata);
         committed = true;
         if (!regeneration) for (const line of generated) this.emit({ type: "chat.done", chatId, message: chatMessages([line])[0] });

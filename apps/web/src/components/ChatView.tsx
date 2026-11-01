@@ -1,3 +1,4 @@
+import { RewriteDialog } from "./RewriteDialog.tsx";
 import { ScriptDialog } from "./ScriptDialog.tsx";
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import type { BranchPathStepDto, BranchSwitchResultDto, ChatAppearanceDto, ChatDisplayDto, ChatMessageDto, DialoguePairDto, ReasoningLevel } from "@pitavern/shared";
@@ -94,6 +95,7 @@ interface ChatViewProps {
   onStop: () => void;
   onEdit: (messageId: string, text: string, expectedText: string) => Promise<boolean>;
   onRegenerate: (instruction?: string) => void;
+  onRewrite?: (instruction: string) => Promise<boolean>;
   onSwitchBranchPath: (path: BranchPathStepDto[], revision?: string) => Promise<BranchSwitchResultDto | null>;
   onSelectGreeting: (selected: number) => Promise<void>;
   onLoadOlder: () => Promise<boolean>;
@@ -239,8 +241,9 @@ const History = memo(function History({ items, avatarUrl, onEdit, busy, scrollRo
   </VirtualRow>)}</>;
 });
 
-export function ChatView({ chat, personaName, models, currentModel, onModelChange, thinkingLevel, onThinkingLevelChange, appearance, streamingText, onSend, onStop, onEdit, onRegenerate,
+export function ChatView({ chat, personaName, models, currentModel, onModelChange, thinkingLevel, onThinkingLevelChange, appearance, streamingText, onSend, onStop, onEdit, onRegenerate, onRewrite,
   onSwitchBranchPath, onSelectGreeting, onLoadOlder, loadingOlder, onRestored, onWorldChanged, disabled, maintenance = false, connected }: ChatViewProps) {
+  const [rewriteFor, setRewriteFor] = useState<string | null>(null);
   const [responder, setResponder] = useState("");
   useEffect(() => setResponder(""), [chat?.id]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -370,7 +373,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
                   } as CSSProperties}>
                   <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-tavern-dim">
                     <span className={"inline-block h-1.5 w-1.5 animate-pulse rounded-full " + (streamingText ? "bg-emerald-400" : "bg-tavern-accent")} />
-                    <span>{streamingText ? "生成中" : "思考中"}</span>
+                    <span>{chat.generationPhase === "settling" ? "正在结算" : chat.generationPhase === "validating" ? "正在校验叙事" : chat.generationPhase === "rendering" ? "正在生成正文" : chat.generationPhase === "committing" ? "正在提交" : streamingText ? "生成中" : "思考中"}</span>
                     <GenerationTimer startedAt={chat.generationStartedAt} />
                   </div>
                   <MessageContent text={streamingText ?? ""} placement={RegexPlacement.AI_OUTPUT} depth={0}
@@ -531,11 +534,15 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
                   onClick={() => onRegenerate()}
                   disabled={locked || disabled || !canRegenerate}
                   aria-label="重新生成回复"
-                  title="重新生成回复（成功后保留为候选分支）"
+                  title="从回合前检查点重新结算，成功后新增剧情候选"
                   className="rounded-lg border border-tavern-border px-2.5 py-1.5 text-sm text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text disabled:opacity-40"
                 >
-                  ↻
+                  ↻ 重新生成
                 </button>
+                {onRewrite && <button type="button" onClick={() => setRewriteFor(chat.id)}
+                  disabled={locked || disabled || !chat.rewrite?.enabled} aria-label="只重写正文"
+                  title={chat.rewrite?.reason ?? "保持世界、知识与时间，新增文字候选"}
+                  className="rounded-lg border border-tavern-border px-2.5 py-1.5 text-xs text-tavern-dim disabled:opacity-40">只重写正文</button>}
                 {isStreaming ? (
                   <button
                     type="button"
@@ -560,6 +567,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
           </div>
         </div>
       </div>
+      {rewriteFor === chat.id && onRewrite && <RewriteDialog busy={locked} onRewrite={onRewrite} onStop={onStop} onClose={() => setRewriteFor(null)} />}
       {backupsFor === chat.id && <BackupDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setBackupsFor(null)} onRestored={onRestored} />}
       {noteFor === chat.id && <AuthorNoteDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setNoteFor(null)} />}
       {worldOpen && chat.page?.revision && <WorldDialog key={chat.id} chatId={chat.id} revision={chat.page.revision} world={chat.world} messageCount={chat.page.total} busy={locked} onClose={() => setWorldOpen(false)} onChanged={onWorldChanged} onOpenBackups={() => { setWorldOpen(false); setBackupsFor(chat.id); }} />}
