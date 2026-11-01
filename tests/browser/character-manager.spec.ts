@@ -109,18 +109,18 @@ test('选择卡、编辑描述/默认开场白/备用开场白/标签并保存�
   await dialog.getByLabel('默认开场白', { exact: true }).fill('新的开场白：{{user}}推门而入。');
   await dialog.getByRole('button', { name: '添加备用开场白' }).click();
   await dialog.getByRole('textbox', { name: '备用开场白 1' }).fill('备用开场白：雨夜。');
-  await dialog.getByLabel('标签', { exact: true }).fill('旅行者, 合成标签');
+  await dialog.getByLabel('标签', { exact: true }).fill('历史,架空\n剧情，冒险');
   await expect(dialog.getByText('有未保存修改')).toBeVisible();
 
   await dialog.getByRole('button', { name: '保存角色卡' }).click();
   await expect(dialog.getByRole('status')).toContainText('已保存角色卡「持久向导」');
-  await expect(dialog.getByRole('button', { name: '编辑角色卡 持久向导' })).toContainText('旅行者');
+  await expect(dialog.getByRole('button', { name: '编辑角色卡 持久向导' })).toContainText('历史,架空');
 
   let stored = await card(request, app.baseURL, '持久向导');
   expect(stored.description).toBe('新的描述：月光下的酒馆');
   expect(stored.firstMes).toBe('新的开场白：{{user}}推门而入。');
   expect(stored.alternateGreetingTexts).toEqual(['备用开场白：雨夜。']);
-  expect(stored.tags).toEqual(['旅行者', '合成标签']);
+  expect(stored.tags).toEqual(['历史,架空', '剧情，冒险']);
   expect(stored.characterBookEntries).toBe(1);
   expect(stored.chatCount).toBe(0);
 
@@ -134,7 +134,7 @@ test('选择卡、编辑描述/默认开场白/备用开场白/标签并保存�
   await expect(dialog.getByLabel('描述', { exact: true })).toHaveValue('新的描述：月光下的酒馆');
   await expect(dialog.getByLabel('默认开场白', { exact: true })).toHaveValue('新的开场白：{{user}}推门而入。');
   await expect(dialog.getByRole('textbox', { name: '备用开场白 1' })).toHaveValue('备用开场白：雨夜。');
-  await expect(dialog.getByLabel('标签', { exact: true })).toHaveValue('旅行者, 合成标签');
+  await expect(dialog.getByLabel('标签', { exact: true })).toHaveValue('历史,架空\n剧情，冒险');
   await dialog.getByRole('button', { name: '关闭角色卡管理' }).click();
 
   // 同数据目录重启服务后仍然保留。
@@ -143,7 +143,7 @@ test('选择卡、编辑描述/默认开场白/备用开场白/标签并保存�
   await dialog.getByRole('button', { name: '编辑角色卡 持久向导' }).click();
   await expect(dialog.getByLabel('描述', { exact: true })).toHaveValue('新的描述：月光下的酒馆');
   await expect(dialog.getByRole('textbox', { name: '备用开场白 1' })).toHaveValue('备用开场白：雨夜。');
-  await expect(dialog.getByLabel('标签', { exact: true })).toHaveValue('旅行者, 合成标签');
+  await expect(dialog.getByLabel('标签', { exact: true })).toHaveValue('历史,架空\n剧情，冒险');
   stored = await card(request, restarted, '持久向导');
   expect(stored.alternateGreetingTexts).toEqual(['备用开场白：雨夜。']);
 
@@ -353,7 +353,7 @@ test('角色卡管理在 390px 手机宽度可操作且无水平溢出', async (
   await dialog.getByLabel('描述', { exact: true }).fill('手机端编辑的描述');
   await dialog.getByRole('button', { name: '添加备用开场白' }).click();
   await dialog.getByRole('textbox', { name: '备用开场白 9' }).fill('手机端新增的备用开场白');
-  await dialog.getByLabel('标签', { exact: true }).fill('手机, 移动端');
+  await dialog.getByLabel('标签', { exact: true }).fill('手机\n移动端');
   await dialog.getByRole('button', { name: '保存角色卡' }).click();
   await expect(dialog.getByRole('status')).toContainText('已保存角色卡「多开局向导」');
   await expect(dialog.getByRole('textbox', { name: '备用开场白 9' })).toHaveValue('手机端新增的备用开场白');

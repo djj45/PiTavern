@@ -30,7 +30,15 @@ function target(record: WorldTemplateRecord): WorldTemplateMigrationTargetDto {
 
 function hashPlan(from: WorldTemplateRecord, to: WorldTemplateRecord, changes: WorldTemplateChangeDto[], snapshot: WorldSnapshot | undefined): string {
   return createHash("sha256").update(JSON.stringify({
-    from: from.contentHash, to: to.contentHash, changes, snapshot,
+    from: {
+      contentHash: from.contentHash, name: from.name ?? "", description: from.description ?? "",
+      templateVersion: from.template.templateVersion, rulesVersion: from.template.rulesVersion,
+    },
+    to: {
+      contentHash: to.contentHash, name: to.name ?? "", description: to.description ?? "",
+      templateVersion: to.template.templateVersion, rulesVersion: to.template.rulesVersion,
+    },
+    changes, snapshot,
   })).digest("hex");
 }
 
@@ -93,8 +101,10 @@ export function diffWorldTemplateRecords(from: WorldTemplateRecord, to: WorldTem
     changes.push(change); blocking.push(change);
   }
   if ((from.name ?? "") !== (to.name ?? "") || (from.description ?? "") !== (to.description ?? "")) {
+    const descriptionChanged = (from.description ?? "") !== (to.description ?? "");
     changes.push(modifiedChange("template", to.template.templateId, to.name || to.template.templateId,
-      "名称/描述：" + (from.name || from.template.templateId) + " → " + (to.name || to.template.templateId)));
+      "名称/描述：" + (from.name || from.template.templateId) + " → " + (to.name || to.template.templateId)
+      + (descriptionChanged ? "；描述已更新" : "")));
   }
   if (from.template.rulesVersion !== to.template.rulesVersion) {
     const supported = to.template.rulesVersion === WORLD_RULES_VERSION;
@@ -118,28 +128,46 @@ export function planWorldSnapshotMigration(snapshotInput: unknown, from: WorldTe
   const blocking = [...diff.blocking];
   const warnings = [...diff.warnings];
   let snapshot: WorldSnapshot | undefined;
+  let noOp = false;
   const fail = (detail: string): void => {
     const change = { ...modifiedChange("template", to.template.templateId, "快照迁移", detail), blocking: true };
     changes.push(change); blocking.push(change);
   };
   try {
-    if (from.contentHash !== to.contentHash) {
-      const source = parseWorldSnapshot(snapshotInput);
-      if (source.templateHash !== from.contentHash) fail("聊天快照引用的模板版本与源记录不一致");
-      else {
+    const source = parseWorldSnapshot(snapshotInput);
+    if (source.templateHash !== from.contentHash) fail("聊天快照引用的模板版本与源记录不一致");
+    else {
+      // 源记录本身也必须可重建；否则未知/被篡改的旧模板可能绕过目标校验。
+      const sourceCheck = createWorldTemplateRecord(from.template, { name: from.name, description: from.description });
+      if (sourceCheck.contentHash !== from.contentHash) fail("源模板内容哈希不匹配");
+      else if (from.template.rulesVersion !== WORLD_RULES_VERSION) {
+        const change = {
+          ...modifiedChange("rules", String(from.template.rulesVersion), "源规则版本",
+            "源规则版本 " + from.template.rulesVersion + " 不受当前运行时支持"),
+          blocking: true,
+        };
+        changes.push(change); blocking.push(change);
+      } else {
         const targetCheck = createWorldTemplateRecord(to.template, { name: to.name, description: to.description });
         if (targetCheck.contentHash !== to.contentHash) fail("目标模板内容哈希不匹配");
-        else {
+        else if (from.contentHash === to.contentHash && diff.changes.length === 0) {
+          noOp = true;
+          warnings.push("目标版本与当前世界模板相同，无需迁移。");
+        } else {
           const next = structuredClone(source);
           next.templateHash = to.contentHash;
           next.templateVersion = to.template.templateVersion;
           next.rulesVersion = to.template.rulesVersion;
-          for (const actor of to.template.actors) {
-            if (next.actors[actor.id]) continue;
-            const locationId = to.template.initial.locationId;
-            next.actors[actor.id] = { id: actor.id, locationId, status: "alive" };
-            next.money[actor.id] = 0;
-            warnings.push("新增角色「" + actor.name + "」以新模板初始地点创建 alive 状态。");
+          if (from.contentHash !== to.contentHash) {
+            for (const actor of to.template.actors) {
+              if (next.actors[actor.id]) continue;
+              const locationId = to.template.initial.locationId;
+              next.actors[actor.id] = { id: actor.id, locationId, status: "alive" };
+              next.money[actor.id] = 0;
+              warnings.push("新增角色「" + actor.name + "」以新模板初始地点创建 alive 状态。");
+            }
+          } else {
+            warnings.push("仅更新发布名称/描述/版本元数据，世界数值保持不变。");
           }
           next.scene.presentActorIds = presentActorIds(next.actors, next.scene.locationId);
           const parsed = parseWorldSnapshot(next);
@@ -149,26 +177,12 @@ export function planWorldSnapshotMigration(snapshotInput: unknown, from: WorldTe
           else snapshot = parsed;
         }
       }
-    } else {
-      warnings.push("目标版本与当前世界模板相同，无需迁移。");
     }
   } catch (error) {
     fail("快照/模板校验失败：" + (error instanceof Error ? error.message : String(error)));
   }
-  if (!blocking.length && from.contentHash === to.contentHash) {
-    const change = { ...modifiedChange("template", to.template.templateId, "目标版本", "目标与当前版本相同"), blocking: true };
-    changes.push(change); blocking.push(change);
-  }
-  if (snapshot) {
-    // 迁移只改模板引用/新增角色状态，不重置已有世界数值。
-    const unchanged = snapshot.money;
-    if (blocking.length) snapshot = undefined;
-    else {
-      // Use the validated snapshot; keep for readability.
-      void unchanged;
-    }
-  }
-  return { changes, blocking, warnings, ...(snapshot && !blocking.length ? { snapshot } : {}), applyable: blocking.length === 0, previewHash: hashPlan(from, to, changes, snapshot) };
+  if (blocking.length) snapshot = undefined;
+  return { changes, blocking, warnings, ...(snapshot ? { snapshot } : {}), applyable: !noOp && blocking.length === 0, previewHash: hashPlan(from, to, changes, snapshot) };
 }
 
 /** 面向 API 的预览；chatId 由调用方提供，快照数量由聊天层补齐。 */

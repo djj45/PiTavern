@@ -40,7 +40,7 @@ function formFromEditor(editor: CharacterCardEditorDto): CardForm {
     systemPrompt: editor.systemPrompt,
     postHistoryInstructions: editor.postHistoryInstructions,
     alternateGreetings: [...editor.alternateGreetingTexts],
-    tagsText: editor.tags.join(", "),
+    tagsText: editor.tags.join("\n"),
   };
 }
 
@@ -63,7 +63,7 @@ function fieldsFromForm(form: CardForm): CharacterCardFieldsDto {
     systemPrompt: form.systemPrompt,
     postHistoryInstructions: form.postHistoryInstructions,
     alternateGreetings: cleanGreetings(form.alternateGreetings),
-    tags: cleanTags(form.tagsText.split(/[,，]/)),
+    tags: cleanTags(form.tagsText.split(/\r?\n/)),
   };
 }
 
@@ -427,9 +427,9 @@ export default function CharacterManagerDialog({ onClose, onChanged }: Character
         {textArea("systemPrompt", "系统提示")}
         {textArea("postHistoryInstructions", "历史后指令")}
 
-        <label className="block min-w-0 text-xs text-tavern-dim">标签（逗号分隔）
-          <input aria-label="标签" className={fieldClass} maxLength={100000} disabled={busy}
-            value={form.tagsText} placeholder="标签1, 标签2"
+        <label className="block min-w-0 text-xs text-tavern-dim">标签（每行一个，可包含逗号）
+          <textarea aria-label="标签" className={fieldClass} rows={3} maxLength={100000} disabled={busy}
+            value={form.tagsText} placeholder={"历史,架空\n剧情，冒险"}
             onChange={(event) => setForm((current) => current ? { ...current, tagsText: event.target.value } : current)} />
         </label>
 

@@ -46,6 +46,8 @@
 - 初始金额/位置/库存变化不写入已有快照；新增实体初始状态按新模板 `initial` 推导。
 - 所有快照在同一轮聊天 JSONL 替换中写入；不能只改活动路径。
 - 新模板完整记录写入 `chat_metadata._pitavernWorldTemplates`；旧记录不删除。
+- 只改名称/描述（内容哈希不变）的发布也必须可迁移：更新聊天内嵌模板版本元数据，不重置世界数值；完全相同的目标只提示无需迁移。
+- 源记录必须能由自身正文重新计算出一致的 contentHash，且源 rulesVersion 必须是运行时支持版本；否则在读取目标前阻断。
 - 本次迁移不新增世界审计事件；需要区分时可依赖模板版本/hash 变化。
 
 ## 4. 冲突、生成和原子性
@@ -71,7 +73,7 @@
 
 - 预览：`POST /api/chat/world/migrate/preview`，`{ chatId, targetHash }`；返回 from/to 摘要、changes、blocking、warnings、迁移后快照摘要、需要更新快照数量。
 - 应用：`POST /api/chat/world/migrate/apply`，`{ chatId, targetHash, expectedRevision, previewHash }`；重新计算计划，previewHash 不一致拒绝；成功返回新 revision、备份 ID 和变更摘要。
-- 版本差异分为 location/actor/item/template/initial/rules；每条包含 id、名称、变更类型、旧/新值摘要和是否阻断。
+- 版本差异分为 location/actor/item/template/initial/rules；每条包含 id、名称、变更类型、旧/新值摘要和是否阻断。预览哈希覆盖 from/to 的名称、描述、模板/规则版本和变更，描述单独变化也会改变 previewHash。
 - 首版不提供“迁移所有聊天”入口。
 
 ## 7. 0.6.0 验收
@@ -80,7 +82,8 @@
 - 新增角色/地点/物品：迁移后快照可读、新实体初始状态明确；旧分支切回仍使用新版本。
 - 删除/改 ID：预览阻断，不写聊天。
 - 改初始金额/位置/库存：预览仅影响新聊天，已有世界数值不变。
-- 未知规则版本：阻断。
+- 未知目标或源规则版本、源模板正文与 contentHash 不符：阻断。
+- 仅名称/描述发布：预览可应用，previewHash 随描述变化；完全相同的版本只提示无需迁移。
 - 生成中、revision 冲突、模板 hash 变化：拒绝且不改变聊天。
 - 迁移→重启→备份恢复→再迁移；旧模板记录保留。
 - 真实供应商/大库保持 `not_requested`/未验边界。

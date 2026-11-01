@@ -102,7 +102,51 @@ assert.equal(rulesPlan.applyable, false);
 assert.ok(rulesPlan.blocking.some((change) => change.entity === "rules"));
 check("未支持规则版本阻断迁移");
 
-// 源/目标不一致与预览哈希
+// 仅发布名称/描述：内容哈希不变，但迁移仍应可应用并更新元数据。
+const metadataRecord = createWorldTemplateRecord(baseTemplate, { name: "迁移世界·元数据", description: "描述第二版" });
+assert.equal(metadataRecord.contentHash, base.contentHash);
+const metadataPlan = planWorldSnapshotMigration(snapshot, base, metadataRecord);
+assert.equal(metadataPlan.applyable, true);
+assert.ok(metadataPlan.snapshot);
+assert.equal(metadataPlan.snapshot!.templateHash, base.contentHash);
+assert.equal(metadataPlan.blocking.length, 0);
+assert.ok(metadataPlan.changes.some((change) => change.entity === "template" && change.detail?.includes("描述已更新")));
+const descriptionA = createWorldTemplateRecord(baseTemplate, { name: "迁移世界", description: "描述 A" });
+const descriptionB = createWorldTemplateRecord(baseTemplate, { name: "迁移世界", description: "描述 B" });
+assert.notEqual(
+  buildMigrationPreview("chats/world.jsonl", snapshot, base, descriptionA).previewHash,
+  buildMigrationPreview("chats/world.jsonl", snapshot, base, descriptionB).previewHash,
+  "仅描述变化也必须改变预览哈希",
+);
+check("仅名称/描述发布：同内容哈希仍可迁移，预览哈希随描述变化");
+
+// 源规则未知 / 源模板正文被篡改：必须在读取目标前阻断。
+const sourceUnknownTemplate = clone(baseTemplate);
+sourceUnknownTemplate.templateVersion = 2; sourceUnknownTemplate.rulesVersion = 999;
+const sourceUnknown = createWorldTemplateRecord(sourceUnknownTemplate, { name: "旧版未知规则" });
+const sourceUnknownSnapshot = { ...snapshot, templateHash: sourceUnknown.contentHash, templateVersion: 2, rulesVersion: 999 };
+const sourceUnknownPlan = planWorldSnapshotMigration(sourceUnknownSnapshot, sourceUnknown, priceRecord);
+assert.equal(sourceUnknownPlan.applyable, false);
+assert.equal(sourceUnknownPlan.snapshot, undefined);
+assert.ok(sourceUnknownPlan.blocking.some((change) => change.entity === "rules" && change.detail?.includes("999")));
+const sourceBroken: WorldTemplateRecord = {
+  ...base,
+  template: { ...base.template, locations: base.template.locations.map((location, index) => index === 0 ? { ...location, name: "被篡改的酒馆" } : location) },
+};
+assert.equal(sourceBroken.contentHash, base.contentHash);
+const sourceBrokenPlan = planWorldSnapshotMigration(snapshot, sourceBroken, priceRecord);
+assert.equal(sourceBrokenPlan.applyable, false);
+assert.ok(sourceBrokenPlan.blocking.some((change) => change.detail?.includes("源模板内容哈希不匹配")));
+check("源规则未知或源模板正文与哈希不符：阻断，不信任源记录");
+
+// 完全相同的记录是 no-op，不再用阻断项表示。
+const noopPlan = planWorldSnapshotMigration(snapshot, base, base);
+assert.equal(noopPlan.applyable, false);
+assert.equal(noopPlan.snapshot, undefined);
+assert.equal(noopPlan.blocking.length, 0);
+assert.ok(noopPlan.warnings.some((warning) => warning.includes("无需迁移")));
+check("目标与当前完全一致：仅提示无需迁移，不产生阻断项");
+
 const mismatch = planWorldSnapshotMigration({ ...snapshot, templateHash: "0".repeat(64) }, base, priceRecord);
 assert.equal(mismatch.applyable, false);
 const previewA = buildMigrationPreview("chats/world.jsonl", snapshot, base, priceRecord);
