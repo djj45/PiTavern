@@ -2,10 +2,9 @@ import type { WorldKnownFact, WorldModelSnapshot, WorldSnapshot, WorldTemplate }
 import { worldContentHash } from "./hash.ts";
 import { validateWorldReferences } from "./schema.ts";
 
-export function actorKnows(snapshot: WorldSnapshot, template: WorldTemplate, actorId: string, factId: string): boolean {
-  return !!snapshot.actors[actorId] && (template.facts?.some(f=>f.id===factId && f.visibility==="public") === true
-    || snapshot.publishedFactIds?.includes(factId) === true || snapshot.knowledge?.some(k=>k.actorId===actorId && k.factId===factId) === true);
-}
+import {actorKnows} from "./conditions.ts";
+export {actorKnows} from "./conditions.ts";
+import {visibleQuests} from "./quest-view.ts";
 
 /** Exact allowlist: no complete knowledge table, private notes, or interaction rules cross this boundary. */
 export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTemplate | undefined, actorId: string): WorldModelSnapshot {
@@ -20,11 +19,19 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
     return [{id:f.id,text:f.text,source:structuredClone(source)}];
   }) : [];
   const visible = new Set(knownFacts.map(f=>f.id));
+  const quests = visibleQuests(snapshot, usable, actorId);
+  const questIds = new Set(quests.map(q=>q.id));
   const recentEvents = snapshot.recentEvents.flatMap(e=>{
+    if (e.type.startsWith("quest_")) {
+      if(!usable || !e.questId || !questIds.has(e.questId) || e.actorId!==actorId) return [];
+      const q=quests.find(q=>q.id===e.questId)!;
+      return [{id:e.id,commandId:e.commandId,turn:e.turn,type:e.type,actorId,questId:q.id,...(e.stageId?{stageId:e.stageId}:{}),worldTimeMinutes:e.worldTimeMinutes,summary:`${q.name}：${e.type==="quest_accept"?"已接取":e.type==="quest_complete"?"已完成":"阶段已完成"}`}];
+    }
+    if(e.questId!==undefined || e.stageId!==undefined) return [];
     if (!e.type.startsWith("knowledge_")) {
       // Malformed/imported audit records must not smuggle structured knowledge
       // through a hard-state event, even when the world is read-only.
-      if (snapshot.schemaVersion === 2 && (e.factId !== undefined || e.interactionId !== undefined)) return [];
+      if (snapshot.schemaVersion >= 2 && (e.factId !== undefined || e.interactionId !== undefined)) return [];
       return [structuredClone(e)];
     }
     if (!usable || !e.factId || !visible.has(e.factId) || (e.type === "knowledge_learn" && e.actorId !== actorId)) return [];
@@ -36,6 +43,7 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
     schemaVersion:snapshot.schemaVersion,revision:snapshot.revision,templateHash:snapshot.templateHash,
     templateVersion:snapshot.templateVersion,rulesVersion:snapshot.rulesVersion,clockMinutes:snapshot.clockMinutes,
     scene:structuredClone(snapshot.scene),actors:structuredClone(snapshot.actors),money:structuredClone(snapshot.money),inventory:structuredClone(snapshot.inventory),
+    ...(snapshot.schemaVersion===3?{quests,questKey:worldContentHash({actorId,quests})}:{}),
     recentEvents,viewpointId:actorId,knownFacts,publicInteractions,
     knowledgeKey:worldContentHash({actorId,knownFacts,publicInteractions}),
   };

@@ -32,9 +32,10 @@ export function createInitialWorldSnapshot(input: WorldTemplateRecord): WorldSna
     templateHash: record.contentHash, templateVersion: template.templateVersion, rulesVersion: template.rulesVersion,
     clockMinutes: 0,
     scene: { locationId: template.initial.locationId, presentActorIds: presentActorIds(actors, template.initial.locationId) },
-    actors, money: Object.fromEntries(template.actors.map((entry) => [entry.id, entry.id === template.initial.actorId ? template.initial.money : 0])),
+    actors, money: Object.fromEntries(template.actors.map((entry) => [entry.id, entry.id === template.initial.actorId ? template.initial.money : (template.initial.actorMoney?.find(m=>m.actorId===entry.id)?.money ?? 0)])),
     inventory: structuredClone(template.initial.inventory), recentEvents: [],
-    ...(template.schemaVersion === 2 ? {knowledge: (template.initial.knowledge ?? []).map(k=>({...k,source:{type:"initial" as const,turn:0}})),publishedFactIds:[]} : {}),
+    ...(template.schemaVersion === 3 ? {questStates:[]} : {}),
+    ...(template.schemaVersion >= 2 ? {knowledge: (template.initial.knowledge ?? []).map(k=>({...k,source:{type:"initial" as const,turn:0}})),publishedFactIds:[]} : {}),
   };
 }
 

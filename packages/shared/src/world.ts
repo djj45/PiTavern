@@ -48,10 +48,11 @@ export interface WorldInitialState {
   money: number;
   inventory: WorldInventoryEntry[];
   knowledge?: WorldInitialKnowledge[];
+  actorMoney?: Array<{actorId: string; money: number}>;
 }
 
 export interface WorldTemplate {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   templateId: string;
   templateVersion: number;
   rulesVersion: number;
@@ -61,6 +62,7 @@ export interface WorldTemplate {
   initial: WorldInitialState;
   facts?: WorldFactDefinition[];
   interactions?: WorldInteractionDefinition[];
+  quests?: WorldQuestDefinition[];
 }
 
 /** 模板内容哈希是模板身份；模板更新产生新记录，不覆盖旧记录。 */
@@ -88,7 +90,9 @@ export interface WorldEvent {
   id: string;
   commandId: string;
   turn: number;
-  type: "move" | "purchase" | "transfer" | "advance_time" | "knowledge_learn" | "knowledge_publish";
+  type: "move" | "purchase" | "transfer" | "advance_time" | "knowledge_learn" | "knowledge_publish" | "quest_accept" | "quest_advance" | "quest_complete";
+  questId?: string;
+  stageId?: string;
   factId?: string;
   interactionId?: string;
   actorId?: string;
@@ -105,7 +109,7 @@ export interface WorldEvent {
  * recentEvents 只做审计，不用于重放恢复。
  */
 export interface WorldSnapshot {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   revision: number;
   templateHash: string;
   templateVersion: number;
@@ -118,6 +122,7 @@ export interface WorldSnapshot {
   recentEvents: WorldEvent[];
   knowledge?: WorldKnowledgeEntry[];
   publishedFactIds?: string[];
+  questStates?: WorldQuestState[];
 }
 
 /** 聊天级模板表；旧模板记录必须保留，快照才能持续执行旧规则。 */
@@ -242,7 +247,7 @@ export interface WorldTemplateExportDto {
 }
 
 
-export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules" | "fact" | "interaction";
+export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules" | "fact" | "interaction" | "quest";
 export type WorldTemplateChangeAction = "added" | "removed" | "modified";
 
 /** 0.6.0 模板迁移差异；blocking 变更禁止应用。 */
@@ -376,10 +381,18 @@ export type WorldInteractionEffect =
 export interface WorldInteractionDefinition { id: string; name: string; description?: string; conditions: WorldInteractionCondition[]; effects: WorldInteractionEffect[] }
 export interface WorldKnownFact { id: string; text: string; source: WorldKnowledgeSource | {type: "public"; turn: number} }
 /** Model DTO: never add complete knowledge relations or template rules here. */
-export interface WorldModelSnapshot extends Omit<WorldSnapshot, "knowledge" | "publishedFactIds"> {
+export interface WorldModelSnapshot extends Omit<WorldSnapshot, "knowledge" | "publishedFactIds" | "questStates"> {
   viewpointId: string;
   knowledgeKey: string;
   knownFacts: WorldKnownFact[];
   publicInteractions: Array<{id: string; name: string}>;
+  questKey?: string;
+  quests?: WorldQuestView[];
 }
 export interface WorldInteractionResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; knownFacts?: WorldKnownFact[] }
+
+export interface WorldQuestStage { id: string; objective: string; conditions: WorldInteractionCondition[]; delivery?: {toActorId: string; itemId: string; quantity: number} }
+export interface WorldQuestDefinition { id: string; name: string; description?: string; openConditions: WorldInteractionCondition[]; stages: WorldQuestStage[]; reward: {fromActorId: string; money: number; items: Array<{itemId: string; quantity: number}>} }
+export interface WorldQuestState { questId: string; status: "active" | "completed"; acceptedTurn: number; completedStages: Array<{stageId: string; turn: number}>; completedTurn?: number }
+export interface WorldQuestView { id: string; name: string; status: "available" | "active" | "completed"; currentStage?: {id: string; objective: string}; completedStages: Array<{id: string; objective: string; turn: number}> }
+export interface WorldQuestResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; quests?: WorldQuestView[] }

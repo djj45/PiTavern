@@ -61,14 +61,25 @@ const effect = Type.Union([
 ]);
 const interaction = Type.Object({id,name:Type.String({minLength:1,maxLength:100}),description:Type.Optional(Type.String({maxLength:2000})),conditions:Type.Array(condition,{maxItems:16}),effects:Type.Array(effect,{minItems:1,maxItems:16})},strict);
 const eventV2 = Type.Object({...event.properties, type:Type.Union([...event.properties.type.anyOf,Type.Literal("knowledge_learn"),Type.Literal("knowledge_publish")]),factId:Type.Optional(id),interactionId:Type.Optional(id)},strict);
-export const WorldTemplateSchema = Type.Union([templateV1,Type.Object({...templateV1.properties,
+const templateV2 = Type.Object({...templateV1.properties,
   schemaVersion:Type.Literal(2), facts:Type.Array(fact,{maxItems:256}), interactions:Type.Array(interaction,{maxItems:128}),
   initial:Type.Object({...templateV1.properties.initial.properties,knowledge:Type.Array(Type.Object(relation,strict),{maxItems:2048})},strict),
-},strict)]);
-export const WorldSnapshotSchema = Type.Union([snapshotV1,Type.Object({...snapshotV1.properties,
+},strict);
+const snapshotV2 = Type.Object({...snapshotV1.properties,
   schemaVersion:Type.Literal(2),knowledge:Type.Array(Type.Object({...relation,source},strict),{maxItems:2048}),
   publishedFactIds:Type.Array(id,{maxItems:256,uniqueItems:true}),recentEvents:Type.Array(eventV2,{maxItems:WORLD_MAX_RECENT_EVENTS}),
-},strict)]);
+},strict);
+const questItem = Type.Object({itemId:id,quantity},strict);
+const quest = Type.Object({id,name:Type.String({minLength:1,maxLength:100}),description:Type.Optional(Type.String({maxLength:2000})),
+  openConditions:Type.Array(condition,{maxItems:16}),stages:Type.Array(Type.Object({id,objective:Type.String({minLength:1,maxLength:1000}),conditions:Type.Array(condition,{maxItems:16}),
+    delivery:Type.Optional(Type.Object({toActorId:id,itemId:id,quantity},strict))},strict),{minItems:1,maxItems:8}),
+  reward:Type.Object({fromActorId:id,money,items:Type.Array(questItem,{maxItems:16})},strict)},strict);
+const questState = Type.Object({questId:id,status:Type.Union([Type.Literal("active"),Type.Literal("completed")]),acceptedTurn:integer(),
+  completedStages:Type.Array(Type.Object({stageId:id,turn:integer()},strict),{maxItems:8}),completedTurn:Type.Optional(integer())},strict);
+const eventV3 = Type.Object({...eventV2.properties,type:Type.Union([...eventV2.properties.type.anyOf,Type.Literal("quest_accept"),Type.Literal("quest_advance"),Type.Literal("quest_complete")]),questId:Type.Optional(id),stageId:Type.Optional(id)},strict);
+export const WorldTemplateSchema = Type.Union([templateV1,templateV2,Type.Object({...templateV2.properties,schemaVersion:Type.Literal(3),quests:Type.Array(quest,{maxItems:64}),
+  initial:Type.Object({...templateV2.properties.initial.properties,actorMoney:Type.Array(Type.Object({actorId:id,money},strict),{maxItems:256})},strict)},strict)]);
+export const WorldSnapshotSchema = Type.Union([snapshotV1,snapshotV2,Type.Object({...snapshotV2.properties,schemaVersion:Type.Literal(3),questStates:Type.Array(questState,{maxItems:64}),recentEvents:Type.Array(eventV3,{maxItems:WORLD_MAX_RECENT_EVENTS})},strict)]);
 
 const commandSchemas = {
   move_to: Type.Object({ commandId: id, type: Type.Literal("move_to"), actorId: id, locationId: id }, strict),
@@ -127,7 +138,7 @@ export function parseWorldTemplate(input: unknown): WorldTemplate {
   if (!actors.has(template.initial.actorId)) invalid("初始玩家角色未声明");
   if (!template.locations.some((entry) => entry.id === template.initial.locationId)) invalid("初始地点未声明");
   checkInventory(template.initial.inventory, actors, new Set(template.items.map((entry) => entry.id)));
-  if (template.schemaVersion === 2) {
+  if (template.schemaVersion >= 2) {
     const facts = new Set(template.facts!.map(f => f.id));
     const interactions = template.interactions!;
     unique(template.facts!.map(f=>f.id), "事实 ID"); unique(interactions.map(i=>i.id), "交互 ID");
@@ -143,6 +154,24 @@ export function parseWorldTemplate(input: unknown): WorldTemplate {
       for (const e of i.effects) {
         if (!facts.has(e.factId) || ("actorId" in e && !actors.has(e.actorId)) || ("fromActorId" in e && e.fromActorId !== undefined && !actors.has(e.fromActorId))) invalid("交互效果引用无效");
       }
+    }
+  }
+  if (template.schemaVersion === 3) {
+    unique(template.quests!.map(q=>q.id),"任务 ID");
+    unique(template.initial.actorMoney!.map(m=>m.actorId),"初始金额角色");
+    for (const m of template.initial.actorMoney!) if (!actors.has(m.actorId) || m.actorId === template.initial.actorId) invalid("初始NPC金额角色无效");
+    const npc = (id:string) => {if (!actors.has(id) || id === template.initial.actorId) invalid("任务NPC引用无效");};
+    const item = (id:string) => {if (!template.items.some(i=>i.id===id)) invalid("任务物品引用无效");};
+    for (const q of template.quests!) {
+      npc(q.reward.fromActorId); unique(q.stages.map(s=>s.id),"任务阶段 ID");unique(q.reward.items.map(i=>i.itemId),"奖励物品");q.reward.items.forEach(i=>item(i.itemId));
+      for (const c of [...q.openConditions,...q.stages.flatMap(s=>s.conditions)]) {
+        if ("actorId" in c && !actors.has(c.actorId)) invalid("任务角色引用无效");
+        if ("factId" in c && !template.facts!.some(f=>f.id===c.factId)) invalid("任务事实引用无效");
+        if ("itemId" in c) item(c.itemId);
+        if ("locationId" in c && !template.locations.some(l=>l.id===c.locationId)) invalid("任务地点引用无效");
+        if (c.type === "npc_present") npc(c.actorId);
+      }
+      q.stages.forEach((s,i)=>{if(s.delivery){if(i!==q.stages.length-1) invalid("只有最终阶段可交付");npc(s.delivery.toActorId);item(s.delivery.itemId);}});
     }
   }
   return template;
@@ -170,13 +199,22 @@ export function parseWorldSnapshot(input: unknown): WorldSnapshot {
       if (key !== undefined && !Object.hasOwn(snapshot.actors, key)) invalid("事件引用了未声明角色");
     }
   }
-  if (snapshot.schemaVersion === 2) {
+  if (snapshot.schemaVersion >= 2) {
     checkKnowledge(snapshot.knowledge!,new Set(actorIds));
     for (const entry of snapshot.knowledge!) if (entry.source.turn < 0 || (entry.source.fromActorId && !snapshot.actors[entry.source.fromActorId])) invalid("获知来源无效");
     for (const e of snapshot.recentEvents) {
       if (e.type.startsWith("knowledge_") && (!e.factId || !e.interactionId || (e.type === "knowledge_learn" && !e.actorId))) invalid("知识事件缺少来源");
       if (!e.type.startsWith("knowledge_") && (e.factId !== undefined || e.interactionId !== undefined)) invalid("普通事件不能携带知识引用");
     }
+  }
+  if (snapshot.schemaVersion === 3) {
+    unique(snapshot.questStates!.map(q=>q.questId),"任务进度");
+    for (const q of snapshot.questStates!) {
+      unique(q.completedStages.map(s=>s.stageId),"完成阶段");
+      let turn=q.acceptedTurn;for(const s of q.completedStages){if(s.turn<turn)invalid("任务阶段回合倒退");turn=s.turn;}
+      if ((q.status === "completed") !== (q.completedTurn !== undefined) || (q.completedTurn !== undefined && q.completedTurn !== turn)) invalid("任务完成记录无效");
+    }
+    for(const e of snapshot.recentEvents) if(e.type.startsWith("quest_") ? (!e.questId || !e.actorId || (e.type!=="quest_accept" && !e.stageId)) : (e.questId!==undefined || e.stageId!==undefined)) invalid("任务事件来源无效");
   }
   return snapshot;
 }
@@ -195,12 +233,19 @@ export function validateWorldReferences(snapshot: WorldSnapshot, template: World
   }
   if (snapshot.scene.locationId !== snapshot.actors[template.initial.actorId].locationId) invalid("当前场景必须跟随玩家位置");
   checkInventory(snapshot.inventory, actors, items);
-  if (snapshot.schemaVersion === 2) {
+  if (snapshot.schemaVersion >= 2) {
     const facts = new Set(template.facts!.map(f=>f.id)), interactions = new Set(template.interactions!.map(i=>i.id));
     checkKnowledge(snapshot.knowledge!,actors,facts);
     if (snapshot.publishedFactIds!.some(id=>!facts.has(id))) invalid("公开事实引用无效");
     for (const k of snapshot.knowledge!) if (k.source.interactionId && !interactions.has(k.source.interactionId)) invalid("获知交互来源不存在");
     for (const e of snapshot.recentEvents) if ((e.factId && !facts.has(e.factId)) || (e.interactionId && !interactions.has(e.interactionId))) invalid("知识事件引用无效");
+  }
+  if (snapshot.schemaVersion === 3) {
+    for(const state of snapshot.questStates!){
+      const q=template.quests!.find(q=>q.id===state.questId);
+      if(!q || state.completedStages.some((s,i)=>s.stageId!==q.stages[i]?.id) || (state.status === "completed" ? state.completedStages.length!==q.stages.length : state.completedStages.length>=q.stages.length)) invalid("任务进度与模板不一致");
+    }
+    for(const e of snapshot.recentEvents) if(e.questId){const q=template.quests!.find(q=>q.id===e.questId);if(!q || (e.stageId && !q.stages.some(s=>s.id===e.stageId)) || e.actorId!==template.initial.actorId) invalid("任务事件引用无效");}
   }
   if (snapshot.recentEvents.some((entry) => entry.itemId !== undefined && !items.has(entry.itemId))) invalid("事件物品与模板不一致");
 }
