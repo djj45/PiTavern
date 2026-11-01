@@ -1,0 +1,585 @@
+{
+  "format": "pitavern-world-template",
+  "version": 1,
+  "name": "雾港最后一盏灯",
+  "description": "单人港城调查：修灯、引航、核验证据。v4 日程；无硬性截止时间。",
+  "template": {
+    "schemaVersion": 4,
+    "templateId": "fogharbor-last-light",
+    "templateVersion": 1,
+    "rulesVersion": 1,
+    "locations": [
+      {
+        "id": "hall",
+        "name": "潮声公所",
+        "description": "夜间议事厅，墙上挂着港图与告示栏。各条街道在这里会合。"
+      },
+      {
+        "id": "workshop",
+        "name": "铜鸥工坊",
+        "description": "乔砚经营的维修铺，窗台上排列着玻璃与铜环。"
+      },
+      {
+        "id": "lighthouse",
+        "name": "北灯塔",
+        "description": "沿堤岸可达的灯塔，石阶潮湿；这里可以检查灯座。"
+      },
+      {
+        "id": "pier",
+        "name": "旧栈桥",
+        "description": "引水员等船的木栈桥，系船柱旁有一口值夜钟。"
+      },
+      {
+        "id": "archive",
+        "name": "潮汐档案室",
+        "description": "公所对外开放的旧档案室，值班簿按日期装订。"
+      }
+    ],
+    "actors": [
+      {
+        "id": "player",
+        "name": "外港调查员",
+        "description": "受托来到雾港的调查员；姓名和背景由玩家决定。"
+      },
+      {
+        "id": "lin",
+        "name": "林照",
+        "description": "港务书记。说话谨慎，习惯将亲眼所见与推测分开。"
+      },
+      {
+        "id": "qiao",
+        "name": "乔砚",
+        "description": "工坊匠人。言辞直接，先看工具和材料，再谈传闻。"
+      },
+      {
+        "id": "yan",
+        "name": "燕迟",
+        "description": "年轻引水员。紧张时会搓绳结，熟悉港湾航线。"
+      }
+    ],
+    "items": [
+      {
+        "id": "warrant",
+        "name": "调查委托书",
+        "price": 0,
+        "description": "公所出具的调查凭据。"
+      },
+      {
+        "id": "lens",
+        "name": "聚光片",
+        "price": 18,
+        "description": "与北灯灯座规格相符的备件。"
+      },
+      {
+        "id": "repair_receipt",
+        "name": "维修交接单",
+        "price": 0,
+        "description": "维修任务完成的纸质回执，交互时出示。"
+      },
+      {
+        "id": "rescue_receipt",
+        "name": "救援登记副本",
+        "price": 0,
+        "description": "船只引导任务完成后的登记凭据。"
+      }
+    ],
+    "initial": {
+      "actorId": "player",
+      "locationId": "hall",
+      "money": 30,
+      "inventory": [
+        {
+          "ownerId": "player",
+          "itemId": "warrant",
+          "quantity": 1
+        },
+        {
+          "ownerId": "qiao",
+          "itemId": "lens",
+          "quantity": 3
+        },
+        {
+          "ownerId": "qiao",
+          "itemId": "repair_receipt",
+          "quantity": 1
+        },
+        {
+          "ownerId": "yan",
+          "itemId": "rescue_receipt",
+          "quantity": 1
+        }
+      ],
+      "knowledge": [
+        {
+          "actorId": "yan",
+          "factId": "testimony"
+        }
+      ],
+      "actorMoney": [
+        {
+          "actorId": "lin",
+          "money": 50
+        },
+        {
+          "actorId": "qiao",
+          "money": 40
+        },
+        {
+          "actorId": "yan",
+          "money": 40
+        }
+      ]
+    },
+    "facts": [
+      {
+        "id": "commission",
+        "text": "雾港的北灯熄灭，白鹭号尚未入港。你受港务公所委托查明情况；修复灯光和查明原因是两件可以分别完成的事。",
+        "visibility": "public"
+      },
+      {
+        "id": "survey",
+        "text": "灯座没有烧毁，聚光片边缘却有平整的新切口。更换一片聚光片即可恢复信号；这不是自然风损。",
+        "visibility": "restricted"
+      },
+      {
+        "id": "testimony",
+        "text": "燕迟承认昨晚受人雇用运走一箱旧灯具。收货人的袖口缝着三道银线，货单盖着港务副监卢晦的私印；他没有亲眼见到副监本人。",
+        "visibility": "restricted"
+      },
+      {
+        "id": "ledger",
+        "text": "值班簿记载：卢晦以检修为名撤走备用聚光片，领取了双倍采购款。记录只能证明挪用与停灯安排，不能证明他希望船只沉没。",
+        "visibility": "restricted"
+      },
+      {
+        "id": "lamp",
+        "text": "乔砚核验交付记录后装好聚光片，北灯恢复稳定的三短一长信号。沿岸的引水线重新可见。",
+        "visibility": "restricted"
+      },
+      {
+        "id": "rescue",
+        "text": "燕迟核验救援登记：白鹭号循灯靠泊，船员全部上岸。船长留下的记录证明该船曾在雾中等待信号，没有遭到袭击。",
+        "visibility": "restricted"
+      },
+      {
+        "id": "disclosure",
+        "text": "林照将值班簿摘录与署名证词贴在公所告示栏：卢晦的停灯安排与采购挪用应交公开听证；动机和法律责任仍待调查。雾港得到了能被核查的答案。",
+        "visibility": "restricted"
+      }
+    ],
+    "interactions": [
+      {
+        "id": "inspect_lamp",
+        "name": "检查北灯灯座",
+        "conditions": [
+          {
+            "type": "at_location",
+            "locationId": "lighthouse"
+          }
+        ],
+        "effects": [
+          {
+            "type": "learn",
+            "actorId": "player",
+            "factId": "survey"
+          }
+        ]
+      },
+      {
+        "id": "ask_yan",
+        "name": "向燕迟出示委托书并核对昨夜航程",
+        "conditions": [
+          {
+            "type": "npc_present",
+            "actorId": "yan"
+          },
+          {
+            "type": "has_item",
+            "itemId": "warrant",
+            "quantity": 1
+          }
+        ],
+        "effects": [
+          {
+            "type": "learn",
+            "actorId": "player",
+            "factId": "testimony",
+            "fromActorId": "yan"
+          }
+        ]
+      },
+      {
+        "id": "read_register",
+        "name": "查阅灯务值班簿",
+        "conditions": [
+          {
+            "type": "at_location",
+            "locationId": "archive"
+          },
+          {
+            "type": "has_item",
+            "itemId": "warrant",
+            "quantity": 1
+          }
+        ],
+        "effects": [
+          {
+            "type": "learn",
+            "actorId": "player",
+            "factId": "ledger"
+          }
+        ]
+      },
+      {
+        "id": "confirm_light",
+        "name": "在灯塔请乔砚核验维修交接单",
+        "conditions": [
+          {
+            "type": "at_location",
+            "locationId": "lighthouse"
+          },
+          {
+            "type": "npc_present",
+            "actorId": "qiao"
+          },
+          {
+            "type": "has_item",
+            "itemId": "repair_receipt",
+            "quantity": 1
+          }
+        ],
+        "effects": [
+          {
+            "type": "learn",
+            "actorId": "player",
+            "factId": "lamp"
+          }
+        ]
+      },
+      {
+        "id": "confirm_arrival",
+        "name": "向燕迟核验救援登记",
+        "conditions": [
+          {
+            "type": "at_location",
+            "locationId": "pier"
+          },
+          {
+            "type": "npc_present",
+            "actorId": "yan"
+          },
+          {
+            "type": "has_item",
+            "itemId": "rescue_receipt",
+            "quantity": 1
+          }
+        ],
+        "effects": [
+          {
+            "type": "learn",
+            "actorId": "player",
+            "factId": "rescue"
+          }
+        ]
+      },
+      {
+        "id": "post_notice",
+        "name": "在公所请林照公开经核查的材料",
+        "conditions": [
+          {
+            "type": "at_location",
+            "locationId": "hall"
+          },
+          {
+            "type": "npc_present",
+            "actorId": "lin"
+          },
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "testimony"
+          },
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "ledger"
+          },
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "rescue"
+          }
+        ],
+        "effects": [
+          {
+            "type": "publish",
+            "factId": "disclosure"
+          }
+        ]
+      }
+    ],
+    "quests": [
+      {
+        "id": "repair",
+        "name": "让北灯重新亮起",
+        "openConditions": [],
+        "stages": [
+          {
+            "id": "inspect",
+            "objective": "前往北灯塔检查灯座，确认需要的备件",
+            "conditions": [
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "survey"
+              }
+            ]
+          },
+          {
+            "id": "deliver",
+            "objective": "向在场的乔砚交付一片聚光片；可在工坊购买",
+            "conditions": [
+              {
+                "type": "npc_present",
+                "actorId": "qiao"
+              }
+            ],
+            "delivery": {
+              "toActorId": "qiao",
+              "itemId": "lens",
+              "quantity": 1
+            }
+          }
+        ],
+        "reward": {
+          "fromActorId": "qiao",
+          "money": 12,
+          "items": [
+            {
+              "itemId": "repair_receipt",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      {
+        "id": "investigate",
+        "name": "雾中的两份证据",
+        "openConditions": [],
+        "stages": [
+          {
+            "id": "witness",
+            "objective": "携带委托书向燕迟核对昨夜航程",
+            "conditions": [
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "testimony"
+              }
+            ]
+          },
+          {
+            "id": "record",
+            "objective": "到潮汐档案室查阅灯务值班簿",
+            "conditions": [
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "ledger"
+              }
+            ]
+          },
+          {
+            "id": "report",
+            "objective": "带着两份线索回公所向林照报备",
+            "conditions": [
+              {
+                "type": "at_location",
+                "locationId": "hall"
+              },
+              {
+                "type": "npc_present",
+                "actorId": "lin"
+              },
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "testimony"
+              },
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "ledger"
+              }
+            ]
+          }
+        ],
+        "reward": {
+          "fromActorId": "lin",
+          "money": 8,
+          "items": []
+        }
+      },
+      {
+        "id": "guide_ship",
+        "name": "把船接回家",
+        "openConditions": [
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "lamp"
+          }
+        ],
+        "stages": [
+          {
+            "id": "guide",
+            "objective": "灯亮后到旧栈桥与燕迟登记引航",
+            "conditions": [
+              {
+                "type": "at_location",
+                "locationId": "pier"
+              },
+              {
+                "type": "npc_present",
+                "actorId": "yan"
+              },
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "lamp"
+              }
+            ]
+          }
+        ],
+        "reward": {
+          "fromActorId": "yan",
+          "money": 20,
+          "items": [
+            {
+              "itemId": "rescue_receipt",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      {
+        "id": "public_record",
+        "name": "让事实留在岸上",
+        "openConditions": [
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "rescue"
+          },
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "testimony"
+          },
+          {
+            "type": "knows_fact",
+            "actorId": "player",
+            "factId": "ledger"
+          }
+        ],
+        "stages": [
+          {
+            "id": "publish",
+            "objective": "回公所请林照公开核验材料，再完成记录",
+            "conditions": [
+              {
+                "type": "at_location",
+                "locationId": "hall"
+              },
+              {
+                "type": "npc_present",
+                "actorId": "lin"
+              },
+              {
+                "type": "knows_fact",
+                "actorId": "player",
+                "factId": "disclosure"
+              }
+            ]
+          }
+        ],
+        "reward": {
+          "fromActorId": "lin",
+          "money": 0,
+          "items": []
+        }
+      }
+    ],
+    "schedules": [
+      {
+        "id": "lin_route",
+        "actorId": "lin",
+        "description": "作者日程；每日重复，不是限时失败机制。",
+        "points": [
+          {
+            "minuteOfDay": 5,
+            "locationId": "lighthouse"
+          },
+          {
+            "minuteOfDay": 120,
+            "locationId": "hall"
+          },
+          {
+            "minuteOfDay": 180,
+            "locationId": "lighthouse"
+          },
+          {
+            "minuteOfDay": 1380,
+            "locationId": "hall"
+          }
+        ]
+      },
+      {
+        "id": "qiao_route",
+        "actorId": "qiao",
+        "description": "作者日程；每日重复，不是限时失败机制。",
+        "points": [
+          {
+            "minuteOfDay": 5,
+            "locationId": "workshop"
+          },
+          {
+            "minuteOfDay": 90,
+            "locationId": "lighthouse"
+          },
+          {
+            "minuteOfDay": 120,
+            "locationId": "workshop"
+          },
+          {
+            "minuteOfDay": 1380,
+            "locationId": "hall"
+          }
+        ]
+      },
+      {
+        "id": "yan_route",
+        "actorId": "yan",
+        "description": "作者日程；每日重复，不是限时失败机制。",
+        "points": [
+          {
+            "minuteOfDay": 5,
+            "locationId": "pier"
+          },
+          {
+            "minuteOfDay": 40,
+            "locationId": "archive"
+          },
+          {
+            "minuteOfDay": 60,
+            "locationId": "pier"
+          },
+          {
+            "minuteOfDay": 1380,
+            "locationId": "hall"
+          }
+        ]
+      }
+    ]
+  }
+}

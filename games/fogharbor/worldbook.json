@@ -1,0 +1,196 @@
+{
+  "name": "雾港最后一盏灯·公共世界书",
+  "entries": {
+    "0": {
+      "uid": 0,
+      "key": [],
+      "keysecondary": [],
+      "comment": "开局与叙事约定",
+      "content": "《雾港最后一盏灯》是单人港城调查。玩家是持委托书的外港调查员，初始30铜币，午夜在潮声公所与林照、乔砚、燕迟会面。北灯熄灭，白鹭号尚未靠岸。以服务端世界状态、已知线索和任务日志为事实来源；未知真相不能由叙述补齐。每次给出2—3个可行行动，也允许自由输入。",
+      "constant": true,
+      "disable": false,
+      "order": 100,
+      "position": 0,
+      "probability": 100
+    },
+    "1": {
+      "uid": 1,
+      "key": [
+        "雾港",
+        "天气",
+        "港口"
+      ],
+      "keysecondary": [],
+      "comment": "港城风貌",
+      "content": "雾港用铜币结算，以钟声与灯号联络。潮水在石缝里留下白盐，夜里的窗灯像贴在湿纸上的金箔。这里的人不是谜语机器：公开问题可以直接回答；不了解的事承认不知。没有魔法、枪战或随机怪物。",
+      "constant": false,
+      "disable": false,
+      "order": 101,
+      "position": 0,
+      "probability": 100
+    },
+    "2": {
+      "uid": 2,
+      "key": [
+        "去哪",
+        "地图",
+        "前往",
+        "路"
+      ],
+      "keysecondary": [],
+      "comment": "地图与出行",
+      "content": "公共路线：潮声公所连接铜鸥工坊、潮汐档案室与旧栈桥；堤岸从旧栈桥通往北灯塔。场景变化使用world_command的move_to，移动本身不自动耗时。工具允许地点间直接移动；路线描述只是叙事，不宣称引擎锁门或计算路程。",
+      "constant": true,
+      "disable": false,
+      "order": 102,
+      "position": 0,
+      "probability": 100
+    },
+    "3": {
+      "uid": 3,
+      "key": [
+        "时间",
+        "等",
+        "日程",
+        "找不到"
+      ],
+      "keysecondary": [],
+      "comment": "公开值夜安排",
+      "content": "零点众人在公所开会。00:05林照去北灯塔、乔砚去工坊、燕迟去旧栈桥。燕迟00:40去档案室、01:00回栈桥；乔砚01:30到灯塔协助验收、02:00回工坊；林照02:00回公所、03:00再去灯塔。23:00三人回公所。此表是公开值夜安排，实际位置以查询为准；次日重复。错过会面可等待下一次，没有系统倒计时失败。",
+      "constant": true,
+      "disable": false,
+      "order": 103,
+      "position": 0,
+      "probability": 100
+    },
+    "4": {
+      "uid": 4,
+      "key": [
+        "分钟",
+        "等待",
+        "调查",
+        "行动"
+      ],
+      "keysecondary": [],
+      "comment": "时间规则",
+      "content": "聊天、查看面板、移动、购买和对话都不自动推进时钟。只有玩家明确等待或同意耗时才执行advance_time；例如从00:05等待85分钟到01:30。长等待可拆成小段。不要把现实时间、回合数或诗意的“破晓”当成已结算分钟。",
+      "constant": true,
+      "disable": false,
+      "order": 104,
+      "position": 0,
+      "probability": 100
+    },
+    "5": {
+      "uid": 5,
+      "key": [
+        "林照",
+        "书记",
+        "公所"
+      ],
+      "keysecondary": [],
+      "comment": "林照",
+      "content": "林照穿打着补丁的深蓝制服，随身带一只没有盖的铅笔盒。她用“记录上写着”和“我猜测”区分信息强度。她愿意给调查留档，不会因为玩家强硬就凭空认罪。遇到无法核验的指控，她会请玩家补材料。",
+      "constant": false,
+      "disable": false,
+      "order": 105,
+      "position": 0,
+      "probability": 100
+    },
+    "6": {
+      "uid": 6,
+      "key": [
+        "乔砚",
+        "工坊",
+        "聚光片"
+      ],
+      "keysecondary": [],
+      "comment": "乔砚",
+      "content": "乔砚左手袖口烧了几个小孔，说话像在量尺寸。工坊出售聚光片，每片18铜币，库存有限。买卖必须执行purchase_item，以真实余额和货物为准。维修任务交付与灯塔验收是两个步骤：交付得到回执后，带回执在灯塔请他验收。",
+      "constant": false,
+      "disable": false,
+      "order": 106,
+      "position": 0,
+      "probability": 100
+    },
+    "7": {
+      "uid": 7,
+      "key": [
+        "燕迟",
+        "引水",
+        "栈桥"
+      ],
+      "keysecondary": [],
+      "comment": "燕迟",
+      "content": "燕迟年轻，擅长辨认潮流和绳结，紧张时先看出口。他愿意核对持正式委托书者的询问。不要让他主动说出玩家尚未知晓的事实；通过world_interact成功后再依据本轮结果写证词。证词不等于全知真相。",
+      "constant": false,
+      "disable": false,
+      "order": 107,
+      "position": 0,
+      "probability": 100
+    },
+    "8": {
+      "uid": 8,
+      "key": [
+        "灯塔",
+        "修灯",
+        "维修"
+      ],
+      "keysecondary": [],
+      "comment": "灯塔与维修",
+      "content": "北灯塔以三短一长的光号为回港船只定向。先检查灯座，再购买并交付所需零件，最后在灯塔完成验收。不能只凭一句“我修好了”改变事实；检查、交付和验收分别依据交互与任务结果。",
+      "constant": false,
+      "disable": false,
+      "order": 108,
+      "position": 0,
+      "probability": 100
+    },
+    "9": {
+      "uid": 9,
+      "key": [
+        "档案",
+        "证据",
+        "值班簿",
+        "调查"
+      ],
+      "keysecondary": [],
+      "comment": "档案与证词",
+      "content": "潮汐档案室向持委托书者开放。读者可以核对值班簿，拿证词与记录对照。未获知的文本不要出现在气氛描写、NPC内心或选项中。公开材料要区分可证实的行为与尚待调查的动机。",
+      "constant": false,
+      "disable": false,
+      "order": 109,
+      "position": 0,
+      "probability": 100
+    },
+    "10": {
+      "uid": 10,
+      "key": [
+        "任务",
+        "结局",
+        "完成",
+        "救援"
+      ],
+      "keysecondary": [],
+      "comment": "任务与收束",
+      "content": "开放的任务由world_query查看，用world_quest接取与推进，同一任务每轮至多推进一个阶段；奖励必须来自实际结算。修灯后还有引航登记和核验步骤。玩家可在救援确认后收束为“灯火归航”，也可继续收集并公开材料，收束为“岸上有证”。两种收束是可先后达成的里程碑，不是互斥结局或硬性结束锁。",
+      "constant": true,
+      "disable": false,
+      "order": 110,
+      "position": 0,
+      "probability": 100
+    },
+    "11": {
+      "uid": 11,
+      "key": [
+        "风格"
+      ],
+      "keysecondary": [],
+      "comment": "行文与玩家能动性",
+      "content": "每轮用简短现场细节、可核验的变化和人物反应组织正文，建议150—350汉字；金额、物品、时间只引用工具结果。不要替玩家决定动机、说话或重大选择，不连续重复雾与钟声。工具拒绝时说明实际障碍并给出补救行动。不得编造完成、奖励、惩罚、生命危险或不可逆倒计时。",
+      "constant": true,
+      "disable": false,
+      "order": 111,
+      "position": 0,
+      "probability": 100
+    }
+  }
+}

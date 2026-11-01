@@ -23,12 +23,13 @@ interface ChatWorldSnapshot {
   world?: { templateName: string; snapshot: WorldSnapshot };
 }
 
-const test = base.extend<{ app: AppFixture }>({
-  app: async ({}, use, info) => {
+const test = base.extend<{ app: AppFixture; worldTools: boolean }>({
+  worldTools: [false, { option: true }],
+  app: async ({ worldTools }, use, info) => {
     const runDir = fs.mkdtempSync(path.join(process.env.PITAVERN_BROWSER_RUN!, `fixture-${info.workerIndex}-`));
     const start = async (): Promise<FixtureServer> => {
       const child = spawn(process.execPath, ['--import', 'tsx', 'apps/server/scripts/browser-fixture.ts'], {
-        cwd: process.cwd(), env: { ...process.env, PITAVERN_BROWSER_FIXTURE: runDir }, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: process.cwd(), env: { ...process.env, PITAVERN_BROWSER_FIXTURE: runDir, PITAVERN_BROWSER_TWO_STAGE: worldTools ? '1' : '0' }, stdio: ['ignore', 'pipe', 'pipe'],
       });
       let output = '';
       child.stdout?.on('data', (part) => { output += part; fs.appendFileSync(path.join(runDir, 'server.log'), part); });
@@ -614,4 +615,57 @@ for(const mobile of [false,true]) test(`玩家已知线索与独立作者入口$
 
 test('v1 草稿显式启用 v2，新增秘密与初始知情可保存发布',async({page,app,request})=>{
   const dialog=await openTemplates(page,app.baseURL);await dialog.getByLabel('新模板名').fill('新知识规则');await dialog.getByRole('button',{name:'新建空白',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('已创建空白模板');await dialog.getByRole('button',{name:'启用知识规则（v2）',exact:true}).click();await dialog.getByRole('button',{name:'添加事实',exact:true}).click();await dialog.getByLabel('事实 1 正文',{exact:true}).fill('窗台下藏着绿色账册。');await dialog.getByLabel('初始知情角色',{exact:true}).getByRole('checkbox').first().check();await dialog.getByLabel('事实 1 ID',{exact:true}).fill('ledger_clue');await expect(dialog.getByLabel('无效初始知情关系')).toContainText('fact-1');await dialog.getByRole('button',{name:'移除无效知情关系',exact:true}).click();await dialog.getByLabel('初始知情角色',{exact:true}).getByRole('checkbox').first().check();await dialog.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('草稿已保存');await dialog.getByRole('button',{name:'发布模板',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('已发布版本');const summary=(await getLibrary(request,app.baseURL)).find(e=>e.name==='新知识规则')!;const saved=await getEditor(request,app.baseURL,summary.id);expect(saved.draft.schemaVersion).toBe(2);expect(saved.draft.facts![0].visibility).toBe('restricted');expect(saved.draft.initial.knowledge).toHaveLength(1);
+});
+
+test.describe('雾港内容包', () => {
+test.use({ worldTools: true });
+for (const mobile of [false, true]) test(`雾港实际游戏资产导入、发布、新开局与玩家秘密边界${mobile ? ' 390px' : ' 桌面'}`, async ({ page, app, request }) => {
+  expect((await request.put(app.baseURL + '/api/connection', { data: { contextMode: 'takeover', outputProtocol: 'native' } })).ok()).toBeTruthy();
+  if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(app.baseURL);
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  if (mobile) await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.getByRole('button', { name: '管理角色卡', exact: true }).click();
+  const cards = page.getByRole('dialog', { name: /角色卡管理/ });
+  await cards.getByLabel('导入角色卡文件').setInputFiles(path.resolve('games/fogharbor/character.json'));
+  await expect(cards.getByRole('status')).toContainText('已导入 character.json');
+  await expect(cards.getByRole('button', { name: '编辑角色卡 雾港最后一盏灯' })).toContainText('卡内世界书 12');
+  await cards.getByRole('button', { name: '关闭角色卡管理' }).click();
+  if (mobile && !(await page.getByRole('button', { name: '关闭侧栏', exact: true }).isVisible()))
+    await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.getByRole('button', { name: '世界模板', exact: true }).click();
+  const templates = page.getByRole('dialog', { name: /世界模板/ });
+  await templates.locator('input[type=file]').setInputFiles(path.resolve('games/fogharbor/template.json'));
+  await expect(templates.getByRole('status')).toContainText('已导入');
+  await expect(templates.getByLabel('模板名称')).toHaveValue('雾港最后一盏灯');
+  await templates.getByRole('button', { name: '发布模板', exact: true }).click();
+  await expect(templates.getByRole('status')).toContainText('已发布版本');
+  const library = (await getLibrary(request, app.baseURL)).find(e => e.name === '雾港最后一盏灯')!;
+  expect(library.publishedHash).toBeTruthy();
+  await templates.getByRole('button', { name: '关闭世界模板' }).click();
+  if (mobile && !(await page.getByRole('button', { name: '关闭侧栏', exact: true }).isVisible()))
+    await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.locator('aside').getByRole('button', { name: '雾港最后一盏灯', exact: true }).click();
+  await page.getByLabel('新聊天世界模板').selectOption(library.id);
+  await page.getByRole('button', { name: /开始新对话/ }).click();
+  await expect(page.locator('main').getByText('午夜，潮声公所的钟敲完最后一下。', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  const world = page.getByRole('dialog', { name: '世界状态', exact: true });
+  await expect(world).toContainText('第1天 00:00');
+  await expect(world).toContainText('潮声公所');
+  await expect(world).not.toContainText('世界当前只读');
+  await expect(world.getByLabel('玩家任务日志')).toContainText('让北灯重新亮起');
+  await expect(world.getByLabel('玩家任务日志')).toContainText('雾中的两份证据');
+  await expect(world).not.toContainText('卢晦');
+  await expect(world).not.toContainText('岸上有证');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: path.join(app.runDir, `fogharbor-${mobile ? '390' : 'desktop'}.png`), fullPage: true });
+  await page.reload();
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  if (mobile) await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.locator('aside li').filter({ hasText: '雾港最后一盏灯' }).getByRole('button').first().click();
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '世界状态', exact: true })).toContainText('第1天 00:00');
+});
+
 });

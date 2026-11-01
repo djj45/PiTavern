@@ -1,6 +1,6 @@
 # PiTavern（π 酒馆）
 
-当前开发候选：**0.11.0**（待独立复验，正式发布版为 **0.10.0**）。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
+当前开发候选：**0.12.0**（待独立复验，正式发布版为 **0.11.0**）。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
 
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
@@ -18,6 +18,20 @@ PITAVERN_OPEN_BROWSER=0 ./start.command # 不自动打开浏览器
 ```
 
 `PITAVERN_CONFIG` 可指定其他配置文件；相对路径以项目根目录为基准。启动失败时，双击打开的窗口会保留错误信息，按回车后退出。
+
+## 0.12.0 示范游戏：《雾港最后一盏灯》
+
+原创单人港城调查：修复北灯、引船归港、核验并公开证据。包含 V3 角色卡、12 条公共世界书、v4 世界模板（5 地点、3 名 NPC、4 任务、知识揭示与每日行程），附玩家说明与作者攻略。
+
+```sh
+mkdir -p data
+npm run game:prepare -- --output "$PWD/data/fogharbor-play"
+PITAVERN_CONFIG="$PWD/data/fogharbor-play/config.json" npm start
+```
+
+目标目录必须不存在，父目录需存在。命令创建独立资料库、发布模板并准备开场聊天，不复制密钥；启动后在设置里配置模型即可游玩。也可将 [角色卡](games/fogharbor/character.json)、[世界书](games/fogharbor/worldbook.json) 和 [世界模板](games/fogharbor/template.json) 手工导入已有库。卡内已嵌入世界书，不要重复启用独立书。
+
+完整玩法、导入步骤与规则边界见 [游戏手册](games/fogharbor/README.md)。合成验收验证结算与数据边界；真实模型可玩性及叙事质量仍待人工评测。
 
 ## 开发
 
@@ -51,9 +65,10 @@ npm run verify:context # 长局基线/纯构建/分支缓存/三种模式/合成
 npm run verify:knowledge # 知识校验/视图/事务/出口/迁移/完整请求游戏（53 组）
 npm run verify:two-stage # 双阶段/正文重写/幂等/分支秘密恢复/长局/对照/坏行兼容（83 组）
 npm run verify:quests # v3任务校验/规则/三模式生成/分支迁移/边界（77 组）
-npm run verify:ci     # 27 组独立合成数据回归，不需要本机资料库或真实 API Key
+npm run verify:game   # 雾港完整游戏、三模式单/双阶段、秘密与分支恢复
+npm run verify:ci     # 29 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
-npm run build && npm run verify:browser # 70 项真实界面验收，独立合成库与本地 mock
+npm run build && npm run verify:browser # 72 项真实界面验收，独立合成库与本地 mock
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。
