@@ -1,7 +1,7 @@
 {
   "name": "pitavern",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "PiTavern — 基于 pi 运行时的 agent 化酒馆",
   "workspaces": [
     "apps/*",

@@ -330,6 +330,7 @@ function validateReplies(value: unknown, line: number, fieldPath: string, state:
         issue(state, "structure", versionPath + ".continuation 必须是字符串数组", line, versionPath + ".continuation");
       } else {
         let seen = false;
+        const continuationEntries: CandidateSequenceEntry[] = [];
         for (let rawIndex = 0; rawIndex < version.continuation.length; rawIndex++) {
           const raw = version.continuation[rawIndex];
           const continuationPath = versionPath + ".continuation[" + rawIndex + "]";
@@ -360,7 +361,9 @@ function validateReplies(value: unknown, line: number, fieldPath: string, state:
           }
           // 隐藏 continuation 是切换后的完整后续，允许包含用户消息。
           validateMessage(nested, line, continuationPath, state, depth + 1, { hidden: true });
+          continuationEntries.push({ line: nested as unknown as StChatLine, lineNumber: line, fieldPath: continuationPath });
         }
+        countNativeSwipeCandidates(continuationEntries, state);
         if (seen) state.hiddenContinuations += 1;
       }
     }
@@ -450,11 +453,22 @@ function buildWorldPreview(state: ParseState, templates: unknown): ChatImportWor
   };
 }
 
-/** 原生 swipes 与 _pitavernReplies 共用 10000 节点预算；同一用户回合已有候选目录时，swipes 是活动候选的副本，不重复计数。 */
-function countNativeSwipeCandidates(records: ChatImportRecord[], state: ParseState): void {
+interface CandidateSequenceEntry {
+  line: StChatLine;
+  lineNumber: number;
+  fieldPath: string;
+}
+
+/**
+ * 原生 swipes 与 _pitavernReplies 共用 10000 节点预算。
+ * 同一用户回合已有候选目录时，swipes 是该目录活动候选的副本，不重复计数；
+ * 活动路径与隐藏 continuation 都使用这一套规则，避免切换分支后才发现超限。
+ */
+function countNativeSwipeCandidates(entries: CandidateSequenceEntry[], state: ParseState): void {
+  if (state.nodeLimitExceeded) return;
   let turnHasCatalog = false;
-  for (const record of records) {
-    const line = record.line;
+  for (const entry of entries) {
+    const line = entry.line;
     if (line.is_system === true) continue;
     if (line.is_user === true) {
       turnHasCatalog = isPlainObject(line.extra) && Object.hasOwn(line.extra, "_pitavernReplies");
@@ -464,8 +478,7 @@ function countNativeSwipeCandidates(records: ChatImportRecord[], state: ParseSta
     if (line.swipes.length > CHAT_IMPORT_MAX_BRANCH_NODES) continue;
     const ownCatalog = isPlainObject(line.extra) && Object.hasOwn(line.extra, "_pitavernReplies");
     if (turnHasCatalog || ownCatalog) continue;
-    const lineNumber = record.rawIndex + 1;
-    addCandidateNodes(state, line.swipes.length, lineNumber, "line[" + lineNumber + "].swipes");
+    addCandidateNodes(state, line.swipes.length, entry.lineNumber, entry.fieldPath + ".swipes");
   }
 }
 
@@ -634,7 +647,11 @@ export function parseChatImportFile(input: Buffer | Uint8Array, fileNameRaw: str
   }
 
   if (!hasHeader && !records.length && !state.issueCount) issue(state, "structure", "文件没有可导入的头或消息");
-  if (!state.issueCount) countNativeSwipeCandidates(records, state);
+  if (!state.issueCount) {
+    countNativeSwipeCandidates(records.map((record) => ({
+      line: record.line, lineNumber: record.rawIndex + 1, fieldPath: "line[" + (record.rawIndex + 1) + "]",
+    })), state);
+  }
   const trailingBlank = raw.length > 1 && raw.at(-1) === "" ? 1 : 0;
   if (blankLines > trailingBlank) warn(state, "文件包含 " + (blankLines - trailingBlank) + " 个空行，已忽略。");
   const world = buildWorldPreview(state, state.headerMetadata[WORLD_TEMPLATES_KEY]);

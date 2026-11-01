@@ -1,6 +1,6 @@
 # PiTavern（π 酒馆）
 
-当前版本：**0.4.0**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
+当前版本：**0.4.1**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
 
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
@@ -106,7 +106,7 @@ npm run build && npm run verify:browser # 39 项真实界面验收，独立合�
 - **长聊天**：打开或重连先加载最近 80 条消息，向上通过「加载更早的消息」继续分页。视口外的消息保留占位高度，附近才挂载 Markdown；正在编辑的消息保持挂载。连续正文增量按 50ms 合并，结束事件前立即刷新。分页仅影响界面传输和渲染；模型历史保持完整，JSONL 导出原样返回整份聊天文件（含未选中的候选、隐藏 continuation 和世界模板表），MD 导出只包含当前活动路径的可见消息。
 - **Markdown 显示**：支持标题、列表、引用、表格、代码块、链接和 `<details><summary>` 折叠，流式正文同样渲染。显示前会以只读方式展开 `{{user}}`、`{{char}}`、`{{getvar}}` 等宏；`{{setvar}}` 等写入宏在显示层不生效。原始消息、编辑内容和 JSONL/模型上下文保持原文。HTML 经过安全过滤，不运行角色卡脚本、内联事件或任意样式；解析器按需加载。
 
-## 聊天导入（0.4.0）
+## 聊天导入（0.4.x）
 
 侧栏「＋ 导入聊天」接受单个 PiTavern / SillyTavern 聊天 JSONL：选择文件后先做只读预览，再选择一张**已有角色卡**并确认标题，通过后原子创建新聊天并立即打开。也支持无头 JSONL（首条有效行就是消息时补一个新头并警告）与原版 `swipes` / `swipe_id` 候选；文件按内容解析，扩展名不参与判断。完整契约见 [聊天导入契约](docs/CHAT_IMPORT.md)。
 

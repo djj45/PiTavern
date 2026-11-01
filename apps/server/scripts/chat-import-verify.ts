@@ -478,6 +478,23 @@ try {
   assert.equal(greetingSwipes.preview.candidates, 3);
   check("原生 swipes 单条与跨消息总数超过 10000：limit 拒绝；未超限开场候选计入预览");
 
+  const hiddenNativeContinuation: string[] = [];
+  for (let index = 0; index < 101; index++) {
+    hiddenNativeContinuation.push(JSON.stringify({ name: "旅人", is_user: true, mes: "隐藏问题" + index, extra: { messageId: "hu" + index } }));
+    hiddenNativeContinuation.push(JSON.stringify({
+      name: "世界向导", mes: "隐藏回答", swipes: Array.from({ length: 100 }, (_, swipe) => "隐藏" + swipe), swipe_id: 0,
+    }));
+  }
+  const hiddenTooMany = parseText(jsonl(chatHeader(), {
+    name: "旅人", is_user: true, mes: "入口", extra: { messageId: "root", _pitavernReplies: { selected: 0, versions: [
+      { messages: [{ name: "世界向导", mes: "当前" }] },
+      { messages: [{ name: "世界向导", mes: "隐藏" }], continuation: hiddenNativeContinuation },
+    ] } },
+  }, { name: "世界向导", mes: "当前" }));
+  assert.equal(hiddenTooMany.preview.valid, false);
+  assert.ok(hiddenTooMany.preview.errors.some((issue) => issue.code === "limit" && issue.path?.includes("continuation")), issueText(hiddenTooMany.preview));
+  check("隐藏 continuation 原生 swipes 计入候选总数：超限拒绝");
+
   /* ---------------------------------------------------------------- */
   heading("B. 服务/存储");
   const libA = createLibrary("service", ["世界向导", "另一个角色"]);
@@ -534,6 +551,40 @@ try {
   expectImportError(() => libA.service.import(Buffer.from(oversizedSwipesSource), { fileName: "超量 swipes.jsonl", character: "世界向导" }), "invalid");
   assert.deepEqual(allFiles(path.join(libA.root, "chats")), filesBeforeRejectedImports, "非法首条/超限候选不得留下聊天文件");
   check("非法首条与超限原生候选导入：拒绝且不落盘");
+
+  const hiddenRoundtrip = createLibrary("hidden-roundtrip", ["世界向导"]);
+  const smallHiddenContinuation: string[] = [];
+  for (let index = 0; index < 20; index++) {
+    smallHiddenContinuation.push(JSON.stringify({ name: "旅人", is_user: true, mes: "隐藏问题" + index, extra: { messageId: "hu" + index } }));
+    smallHiddenContinuation.push(JSON.stringify({
+      name: "世界向导", mes: "隐藏回答", swipes: Array.from({ length: 100 }, (_, swipe) => "隐藏" + swipe), swipe_id: 0,
+    }));
+  }
+  const hiddenRoundtripSource = jsonl({ user_name: "旅人", character_name: "世界向导", chat_metadata: {} }, {
+    name: "旅人", is_user: true, mes: "入口", extra: { messageId: "root", _pitavernReplies: { selected: 0, versions: [
+      { messages: [{ name: "世界向导", mes: "当前" }] },
+      { messages: [{ name: "世界向导", mes: "隐藏" }], continuation: smallHiddenContinuation },
+    ] } },
+  }, { name: "世界向导", mes: "当前" });
+  const hiddenRoundtripPreview = hiddenRoundtrip.service.preview(Buffer.from(hiddenRoundtripSource), "隐藏 分支.jsonl");
+  assert.equal(hiddenRoundtripPreview.valid, true, issueText(hiddenRoundtripPreview));
+  assert.ok(hiddenRoundtripPreview.candidates >= 2002, "隐藏分支候选未计入：" + hiddenRoundtripPreview.candidates);
+  const hiddenRoundtripImport = hiddenRoundtrip.service.import(Buffer.from(hiddenRoundtripSource), {
+    fileName: "隐藏 分支.jsonl", character: "世界向导", expectedSha256: hiddenRoundtripPreview.sha256,
+  });
+  hiddenRoundtrip.store.selectReply(hiddenRoundtripImport.id, "root", 1, hiddenRoundtrip.store.revisionId(hiddenRoundtripImport.id));
+  const hiddenExported = fs.readFileSync(hiddenRoundtrip.store.resolveChatFile(hiddenRoundtripImport.id)!, "utf8");
+  const hiddenAfterSwitch = parseText(hiddenExported, "隐藏 分支 导出.jsonl", ["世界向导"]);
+  assert.equal(hiddenAfterSwitch.preview.valid, true, issueText(hiddenAfterSwitch.preview));
+  assert.ok(hiddenAfterSwitch.preview.candidates >= 2002, "切换后候选数不一致：" + hiddenAfterSwitch.preview.candidates);
+  const hiddenRoundtripTarget = createLibrary("hidden-roundtrip-target", ["世界向导"]);
+  const hiddenReimportPreview = hiddenRoundtripTarget.service.preview(Buffer.from(hiddenExported), "隐藏 分支 导出.jsonl");
+  assert.equal(hiddenReimportPreview.valid, true, issueText(hiddenReimportPreview));
+  const hiddenReimported = hiddenRoundtripTarget.service.import(Buffer.from(hiddenExported), {
+    fileName: "隐藏 分支 导出.jsonl", character: "世界向导", expectedSha256: hiddenReimportPreview.sha256,
+  });
+  assert.ok(hiddenRoundtripTarget.store.readDocument(hiddenReimported.id));
+  check("导入→切隐藏分支→导出→再导入：隐藏原生候选与状态保留");
 
   const libHeaderless = createLibrary("headerless", ["补头角色"]);
   const headerlessImport = libHeaderless.service.import(Buffer.from(headerless), { fileName: "无头 聊天.jsonl", character: "补头角色" });
