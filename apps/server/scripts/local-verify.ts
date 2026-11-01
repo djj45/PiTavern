@@ -11,7 +11,8 @@ import { LibraryStore } from '../src/stdata/library.ts';
 import { fixtureCard } from './card-fixtures.ts';
 const repo = path.resolve(import.meta.dirname, '../../..');
 const sourceConfig = path.resolve(repo, process.env.PITAVERN_CONFIG ?? 'data/config.json');
-const source = fs.existsSync(sourceConfig) ? JSON.parse(fs.readFileSync(sourceConfig, 'utf8')) as Record<string, unknown> : {};
+const sourceConfigBefore = fs.existsSync(sourceConfig) ? fs.readFileSync(sourceConfig) : undefined;
+const source = sourceConfigBefore ? JSON.parse(sourceConfigBefore.toString('utf8')) as Record<string, unknown> : {};
 const sourceRoot = path.resolve(repo, typeof source.stDataDir === 'string' ? source.stDataDir : 'data/st');
 const hash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
 const roots = ['characters', 'chats', 'worlds', 'OpenAI Settings', 'skills', '.pitavern'];
@@ -35,6 +36,8 @@ const config = defaultConfig(); config.stDataDir = path.join(runDir, 'library-co
 for (const relative of Object.keys(baseline)) { const target = path.join(config.stDataDir, relative); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(path.join(sourceRoot, relative), target, fs.constants.COPYFILE_EXCL); }
 assert.deepEqual(inventory(config.stDataDir), baseline, '副本与读取时原资料字节一致');
 saveConfig(config);
+assert.equal(fs.existsSync(sourceConfig), sourceConfigBefore !== undefined, '验收不得创建或删除本机配置');
+if (sourceConfigBefore !== undefined) assert.deepEqual(fs.readFileSync(sourceConfig), sourceConfigBefore, '验收不得改写本机配置');
 const cards = new CharacterStore(path.join(config.stDataDir, 'characters')).listCharacters();
 const library = new LibraryStore(config.stDataDir);
 const problems: { kind: string; error: string }[] = [];
@@ -90,6 +93,7 @@ else {
   }
 }
 assert.deepEqual(inventory(config.stDataDir), baseline, '导入验收后副本原资料仍未被修改');
+if (sourceConfigBefore !== undefined) assert.deepEqual(fs.readFileSync(sourceConfig), sourceConfigBefore, '验收结束本机配置仍未改变');
 const requestedProvider = process.argv.includes('--provider');
 let provider: { status: string; reason?: string } = { status: 'not_requested', reason: '真实供应商验收需显式传入 --provider；仅发送合成短消息' };
 if (requestedProvider) {

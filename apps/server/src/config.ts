@@ -85,7 +85,10 @@ export interface TavernConfig {
   appearance: ChatAppearanceDto;
 }
 
-export const CONFIG_PATH = process.env.PITAVERN_CONFIG ?? "data/config.json";
+/** 配置文件路径在每次读写时解析，避免模块静默加载后环境变量变化仍写回默认文件。 */
+export function configPath(): string {
+  return process.env.PITAVERN_CONFIG ?? "data/config.json";
+}
 
 /** 仓库根目录（config 里的相对路径都锚定到这里，与进程 cwd 无关） */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -120,8 +123,9 @@ export function defaultConfig(): TavernConfig {
 
 export function loadConfig(): TavernConfig {
   const defaults = defaultConfig();
-  if (!fs.existsSync(resolveDataPath(CONFIG_PATH))) return defaults;
-  const raw = JSON.parse(fs.readFileSync(resolveDataPath(CONFIG_PATH), "utf8")) as Partial<TavernConfig>;
+  const file = resolveDataPath(configPath());
+  if (!fs.existsSync(file)) return defaults;
+  const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<TavernConfig>;
   return {
     ...defaults,
     ...raw,
@@ -146,7 +150,7 @@ export function loadConfig(): TavernConfig {
 }
 
 export function saveConfig(config: TavernConfig): void {
-  atomicWrite(resolveDataPath(CONFIG_PATH), `${JSON.stringify(config, null, 2)}\n`);
+  atomicWrite(resolveDataPath(configPath()), `${JSON.stringify(config, null, 2)}\n`);
 }
 
 /** 在 stDataDir 下播种 ST 兼容目录结构 */

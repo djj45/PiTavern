@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHttpApp } from "./api/http.ts";
 import { attachWebSocket } from "./api/ws.ts";
-import { loadConfig, saveConfig, seedDataDirs, resolveDataPath, CONFIG_PATH } from "./config.ts";
+import { loadConfig, saveConfig, seedDataDirs, resolveDataPath, configPath } from "./config.ts";
 import { buildModels } from "./providers/models.ts";
 import { CharacterStore } from "./stdata/characters.ts";
 import { ChatStore } from "./stdata/chats.ts";
@@ -13,8 +13,8 @@ import { SessionManager } from "./session/manager.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDistDir = path.resolve(here, "../../web/dist");
 const config = loadConfig();
-const configPath = resolveDataPath(CONFIG_PATH);
-if (!fs.existsSync(configPath)) {
+const resolvedConfigPath = resolveDataPath(configPath());
+if (!fs.existsSync(resolvedConfigPath)) {
   saveConfig(config);
 }
 const stDataDir = resolveDataPath(config.stDataDir);
