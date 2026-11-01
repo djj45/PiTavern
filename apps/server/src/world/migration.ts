@@ -118,6 +118,27 @@ export function diffWorldTemplateRecords(from: WorldTemplateRecord, to: WorldTem
   compareDefinitions("actor", from.template.actors, to.template.actors, changes, blocking);
   compareDefinitions("item", from.template.items as ItemDefinition[], to.template.items as ItemDefinition[], changes, blocking,
     (before, after) => "固定价格 " + before.price + " → " + after.price + (before.name !== after.name ? "；名称 " + before.name + " → " + after.name : ""));
+  if (from.template.schemaVersion !== to.template.schemaVersion) {
+    const change:WorldTemplateChangeDto = {entity:"template",action:"modified",label:"世界 schema",detail:`v${from.template.schemaVersion} → v${to.template.schemaVersion}`,...(to.template.schemaVersion === 1 ? {blocking:true} : {})};
+    changes.push(change); if(change.blocking) blocking.push(change);
+  }
+  const oldFacts = new Map((from.template.facts ?? []).map(f=>[f.id,f]));
+  const newFacts = new Map((to.template.facts ?? []).map(f=>[f.id,f]));
+  for (const [id,fact] of oldFacts) {
+    const next=newFacts.get(id);
+    if(!next || next.text!==fact.text || next.visibility!==fact.visibility) {
+      const change:WorldTemplateChangeDto={entity:"fact",action:next?"modified":"removed",id,label:"已有事实定义",detail:"首版不支持改写/删除事实或改变公共属性；改 ID 视为删除",blocking:true};
+      changes.push(change);blocking.push(change);
+    } else if(next.description!==fact.description) changes.push(modifiedChange("fact",id,"作者备注","仅内部备注变化"));
+  }
+  for(const [id,fact] of newFacts) if(!oldFacts.has(id)) {
+    changes.push(addedChange("fact",id,fact.visibility==="public"?"新增公共事实":"新增受限事实"));
+    warnings.push(fact.visibility==="public"?"新增公共事实对现有所有路径可见。":"新增受限事实不会授予任何旧分支；仅按未来交互获知。");
+  }
+  if(JSON.stringify(from.template.initial.knowledge ?? [])!==JSON.stringify(to.template.initial.knowledge ?? []) || from.template.schemaVersion!==to.template.schemaVersion) warnings.push("初始知情配置只影响新聊天；迁移保留各恢复点当前知识，v1 升级从空知情关系开始。");
+  if(JSON.stringify(from.template.interactions ?? [])!==JSON.stringify(to.template.interactions ?? [])) {
+    changes.push(modifiedChange("interaction","","揭示交互","规则变化只影响未来交互，不撤销既有知识；删除仍被来源引用的交互会阻断迁移"));
+  }
   compareInitial(from.template, to.template, changes, blocking, warnings);
   return { changes, blocking, warnings };
 }
@@ -154,6 +175,8 @@ export function planWorldSnapshotMigration(snapshotInput: unknown, from: WorldTe
             warnings.push("目标版本与当前世界模板相同，无需迁移。");
           } else {
             const next = structuredClone(source);
+            next.schemaVersion = to.template.schemaVersion;
+            if (source.schemaVersion === 1 && to.template.schemaVersion === 2) {next.knowledge=[];next.publishedFactIds=[];}
             next.templateHash = to.contentHash;
             next.templateVersion = to.template.templateVersion;
             next.rulesVersion = to.template.rulesVersion;
