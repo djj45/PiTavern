@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { ContextFactCache, buildCachedWorkingContext } from "../src/context/memory-cache.ts";
+import { buildWorkingContext, contentHash, type WorkingSetInput } from "../src/context/working-set.ts";
+import { ChatStore } from "../src/stdata/chats.ts";
+import { historyToAgentMessages } from "../src/agent/engine.ts";
+import { getWorldTemplate } from "../src/world/catalog.ts";
+import { createWorldTemplateRecord } from "../src/world/index.ts";
+import { planChatWorldMigration } from "../src/world/chat-migration.ts";
+import { deepBranchFixture, longContextFixture, userMessage } from "./context-fixtures.ts";
+let checks = 0; const check = (label: string) => { checks++; console.log("✓ " + label); };
+const entries = new Map<string, unknown>(); const cache = new ContextFactCache(entries, 8);
+const fixture = longContextFixture(100);
+const input: WorkingSetInput = { messages: fixture.messages, config: { enabled: true, keepFullTurns: 2 }, budget: 12000, sourceRevision: "source1" };
+const first = buildCachedWorkingContext(input, cache, "chatA"); assert.equal(first.diagnostics.cache, "rebuilt");
+const next = buildCachedWorkingContext(input, cache, "chatA"); assert.equal(next.diagnostics.cache, "hit"); assert.deepEqual(first.messages, next.messages);
+next.facts[0].text = "修改调用方副本";
+assert.deepEqual(buildCachedWorkingContext(input, cache, "chatA").messages, first.messages);
+assert.equal(buildCachedWorkingContext(input, cache, "chatB").diagnostics.cache, "rebuilt");
+const resized = buildCachedWorkingContext({ ...input, budget: 8000 }, cache, "chatA");
+assert.equal(resized.diagnostics.cache, "hit"); assert.ok(resized.stats.compressedChars <= 8000);
+check("缓存按聊天作用域隔离、输出副本独立；预算变化重新选取而非复用旧提示词");
+const live = buildCachedWorkingContext({ ...input, messages: [...fixture.messages, userMessage("当前工具链增长")] }, cache, "chatA");
+assert.equal(live.diagnostics.cache, "rebuilt", "新用户回合改变已完成历史边界");
+const grown = buildCachedWorkingContext({ ...input, messages: [...fixture.messages, { role: "system", content: "本轮尾部注入", timestamp: 0 }] }, cache, "chatA");
+assert.equal(grown.diagnostics.cache, "hit", "当前 agent loop 增长不改已完成前缀");
+for (const [key, raw] of entries) {
+  const value = raw as { algorithm: string; digest: string; facts: Array<{ text: string }> };
+  if (!value.facts.length) continue;
+  value.facts[0].text = "损坏缓存";
+  value.digest = contentHash(JSON.stringify(value.facts)); // Even a matching checksum cannot fake source offsets.
+  entries.set(key, value);
+}
+assert.equal(buildCachedWorkingContext(input, cache, "chatA").diagnostics.cache, "rebuilt");
+assert.deepEqual(buildCachedWorkingContext(input, new ContextFactCache(), "chatA").messages, first.messages);
+assert.equal(buildCachedWorkingContext({ ...input, sourceRevision: "new-revision" }, cache, "chatA").diagnostics.cache, "rebuilt");
+check("来源 revision/算法索引隔离，损坏来源即重建；缺失/重启可重建相同工作集");
+const root = path.resolve(import.meta.dirname, "../../../data/test-runs"); fs.mkdirSync(root, { recursive: true });
+const run = fs.mkdtempSync(path.join(root, "context-lifecycle-"));
+const chats = new ChatStore(run);
+const branch = chats.createChat("向导", null); const nested = deepBranchFixture(); fs.writeFileSync(branch.file, nested.source);
+function fromChat(id: string, store = chats): WorkingSetInput {
+  const doc = store.readDocument(id)!;
+  return { messages: [...historyToAgentMessages(doc.lines), userMessage("回忆选中路线的地图和线索")], config: { enabled: true, keepFullTurns: 2 }, budget: 8000,
+    sourceRevision: store.revisionId(id), world: store.readWorld(id)?.snapshot };
+}
+for (let level = 0; level < nested.steps.length; level++) {
+  const step = nested.steps[level]; chats.selectReply(branch.id, step.userMessageId, step.selected, chats.revisionId(branch.id));
+  const result = buildCachedWorkingContext(fromChat(branch.id), cache, branch.id);
+  const text = JSON.stringify(result.messages);
+  for (let selected = 0; selected <= level; selected++) assert.ok(!text.includes(`红雀${selected}。`));
+  assert.ok(text.includes(`白鸦${level}。`));
+  if (level + 1 < nested.steps.length) assert.ok(!text.includes(`白鸦${level + 1}。`), "隐藏 continuation 不进入上下文");
+}
+chats.selectReply(branch.id, nested.steps[0].userMessageId, 0, chats.revisionId(branch.id));
+const returned = buildCachedWorkingContext(fromChat(branch.id), cache, branch.id);
+assert.ok(JSON.stringify(returned.messages).includes("红雀0")); assert.ok(!JSON.stringify(returned.messages).includes("白鸦"));
+check("真实 ChatStore 逐层切入 12 层隐藏分支再切回，未选路线事实不混入");
+const game = chats.createChat("掌柜", null);
+const template = getWorldTemplate("tavern-sword");
+assert.ok(template);
+chats.initializeWorld(game.id, template);
+const user = chats.appendMessage(game.id, { name: "旅人", is_user: true, is_system: false, mes: "观察旧井。", extra: { _pitavernBeforeTurn: { metadata: chats.readMetadata(game.id) } } });
+const answer = chats.appendMessage(game.id, { name: "掌柜", is_user: false, is_system: false, mes: "风吹石墙。".repeat(200) + "发现线索：旧井地图是蓝色。" });
+const original = fs.readFileSync(game.file, "utf8");
+const before = buildCachedWorkingContext(fromChat(game.id), cache, game.id);
+assert.equal(fs.readFileSync(game.file, "utf8"), original, "预览不写聊天");
+chats.editMessage(game.id, String(answer.extra!.messageId), "发现线索：旧井地图改为金色。", answer.mes);
+const edited = buildCachedWorkingContext(fromChat(game.id), cache, game.id);
+assert.equal(edited.diagnostics.cache, "rebuilt"); assert.ok(!JSON.stringify(edited.messages).includes("地图是蓝色"));
+const backups = chats.backups(game.id).backups;
+chats.restoreBackup(game.id, backups[0].id, chats.revisionId(game.id));
+assert.equal(fs.readFileSync(game.file, "utf8"), original);
+assert.equal(buildCachedWorkingContext(fromChat(game.id), cache, game.id).diagnostics.cache, "rebuilt");
+check("编辑历史、字节一致备份恢复导致索引重建，预览不写存档");
+const transaction = chats.prepareRegeneration(game.id, String(answer.extra!.messageId), answer.mes);
+const regenInput = { ...fromChat(game.id), messages: historyToAgentMessages([...transaction.history, transaction.user]) };
+assert.ok(!JSON.stringify(buildCachedWorkingContext(regenInput, cache, game.id).messages).includes("地图是蓝色"));
+transaction.commit([{ name: "掌柜", is_user: false, is_system: false, mes: "发现反转：地图其实是绿色。", send_date: "", extra: { messageId: "regenerated" } }], transaction.metadata);
+assert.equal(buildCachedWorkingContext(fromChat(game.id), cache, game.id).diagnostics.cache, "rebuilt");
+check("重生成只使用回合前路径，旧候选正文不作为当前历史");
+const target = createWorldTemplateRecord({ ...structuredClone(template), templateVersion: template.templateVersion + 1, items: template.items.map((i) => ({ ...i, price: i.price + 1 })) });
+const read = chats.readSource(game.id); const migration = planChatWorldMigration(read.source, target); assert.equal(migration.applyable, true);
+chats.applyWorldMigration(game.id, read.revision, migration.sourceHash, migration.nextSource!);
+const migrated = buildCachedWorkingContext(fromChat(game.id), cache, game.id);
+assert.equal(migrated.diagnostics.cache, "rebuilt"); assert.ok(JSON.stringify(migrated.messages).includes(target.contentHash));
+const restarted = new ChatStore(run);
+assert.deepEqual(buildWorkingContext(fromChat(game.id, restarted)).messages, migrated.messages);
+assert.ok(user.extra?.messageId && before.messages.length);
+check("模板迁移后不复用旧缓存；服务重启按当前存档重建一致结果");
+console.log(`${checks} 项通过；保留数据：${run}`);

@@ -4,6 +4,7 @@ import type { Api, Message, Model, Models, SystemMessage, Usage } from "@earendi
 import type { BridgeSampling } from "../context/bridge.ts";
 import type { CompressionConfig } from "../context/compression.ts";
 import { compressHistory } from "../context/compression.ts";
+import type { ContextFactCache } from "../context/memory-cache.ts";
 import { createTokenCounter, inputBudget, measureContext, type TokenCounter } from "../context/tokens.ts";
 import { INSTRUCT_TEMPLATES, type ContextAssemblyDto, type ContextDiagnosticsDto, type InstructTemplate, type ReasoningLevel } from "@pitavern/shared";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
@@ -47,8 +48,9 @@ export function historyToAgentMessages(lines: StChatLine[]): Message[] {
   const messages: Message[] = [];
   for (const line of lines) {
     if (line.is_system || !line.mes.trim()) continue;
+    const timestamp = Number.isFinite(Date.parse(line.send_date)) ? Date.parse(line.send_date) : 0;
     if (line.is_user) {
-      messages.push({ role: "user", content: line.mes, timestamp: Date.now() });
+      messages.push({ role: "user", content: line.mes, timestamp });
     } else {
       // 导入的历史没有真实 provider 元数据，填充占位字段以满足 AssistantMessage 结构
       messages.push({
@@ -59,7 +61,7 @@ export function historyToAgentMessages(lines: StChatLine[]): Message[] {
         model: "imported",
         usage: ZERO_USAGE,
         stopReason: "stop",
-        timestamp: Date.now(),
+        timestamp,
       });
     }
   }
@@ -86,6 +88,8 @@ export interface TavernAgentOptions {
   protocolStrict?: boolean;
   /** M4 历史压缩（transformContext 挂载） */
   compression?: CompressionConfig;
+  contextFactCache?: ContextFactCache;
+  contextSourceRevision?: string;
   tokenCounter?: TokenCounter;
   instruct?: InstructTemplate;
   contextAssembly?: ContextAssemblyDto;

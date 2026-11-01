@@ -80,7 +80,7 @@ export function completeToolGroups(messages: AgentMessage[]): boolean {
   return pending.size === 0;
 }
 
-function textParts(message: AgentMessage): Array<{ part: string; text: string }> {
+export function textParts(message: AgentMessage): Array<{ part: string; text: string }> {
   if (!conversation(message)) return [];
   if (typeof message.content === "string") return [{ part: "content", text: message.content }];
   return message.content.flatMap((block, index) => {
@@ -166,17 +166,22 @@ function withAuthority(messages: AgentMessage[], world?: WorldSnapshot): AgentMe
 }
 
 /** Pure, deterministic working-set construction. Original messages and world are never mutated. */
-export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: ContextFact[]): WorkingSetResult {
-  const measure = input.measure ?? contextChars;
+export function prepareWorkingSources(input: WorkingSetInput) {
   const messages = withAuthority(input.messages, input.world);
   const archived = input.config.enabled ? input.archived ?? [] : [];
   const sources = [...archived, ...messages];
   const offset = archived.length;
-  const sourceHash = contextSourceHash(sources, input.sourceRevision);
-  const originalChars = contextChars(sources);
   const users = messages.flatMap((m, i) => m.role === "user" ? [i] : []);
   const keep = Number.isFinite(input.config.keepFullTurns) ? Math.max(1, Math.floor(input.config.keepFullTurns)) : 6;
   const tailStart = users.length > keep ? users[users.length - keep] : 0;
+  return { messages, archived, sources, offset, users, tailStart };
+}
+
+export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: ContextFact[]): WorkingSetResult {
+  const measure = input.measure ?? contextChars;
+  const { messages, archived, sources, offset, users, tailStart } = prepareWorkingSources(input);
+  const sourceHash = contextSourceHash(sources, input.sourceRevision);
+  const originalChars = contextChars(sources);
   const shouldCompress = input.config.enabled && (archived.length > 0 || measure(messages) > input.budget);
   const turns: number[] = []; let turn = 0;
   for (const message of sources) { if (message.role === "user") turn++; turns.push(turn); }

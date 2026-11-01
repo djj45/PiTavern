@@ -43,9 +43,10 @@ import { branchPoints, replyChoices, stateFields, validEnforcement } from "../st
 import { greetingCatalog } from "../stdata/greetings.ts";
 import { ActivityStore, emptyUsage } from "../stdata/activity.ts";
 import { createTokenCounter } from "../context/tokens.ts";
+import { ContextFactCache } from "../context/memory-cache.ts";
 import { globalRegex } from "../stdata/library.ts";
 
-type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext">;
+type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext" | "contextFactCache" | "contextSourceRevision">;
 
 export class WorldChatMigrationConflictError extends Error {
   constructor(message: string) { super(message); this.name = "WorldChatMigrationConflictError"; }
@@ -82,6 +83,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, ChatSession>();
   private readonly listeners = new Set<(event: ServerEvent) => void>();
   private readonly activity: ActivityStore;
+  private readonly contextFactCache = new ContextFactCache();
   /** 0.5.0 模板库：编辑器、新聊天版本选择与自定义名称都从这里读。 */
   readonly worldTemplateLibrary: WorldTemplateLibrary;
   private maintenanceMessage: string | null = null;
@@ -518,7 +520,7 @@ export class SessionManager {
           };
           session.generation = generation; this.saveActivity(chatId, generation);
           const provider = config.providers.find((item) => item.id === model.provider);
-          const hooks: ContextHooks = { tokenCounter: createTokenCounter(model.id, provider?.models.find((m) => m.id === model.id)?.tokenizer), instruct: provider?.instruct, onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); } };
+          const hooks: ContextHooks = { contextFactCache: this.contextFactCache, contextSourceRevision: this.chats.revisionId(chatId), tokenCounter: createTokenCounter(model.id, provider?.models.find((m) => m.id === model.id)?.tokenizer), instruct: provider?.instruct, onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); } };
           const env: MacroEnv = { char: name, user: config.persona.name, personaDescription: config.persona.description, variables,
             lastUserMessage: transaction.lines.findLast((line) => line.is_user)?.mes };
           const lines = transaction.lines.map((line) => group && !line.is_system ? { ...line, mes: "[" + line.name + "]: " + line.mes } : line);
@@ -662,6 +664,8 @@ export class SessionManager {
       this.saveActivity(chatId, generation);
       const provider = config.providers.find((item) => item.id === model.provider);
       const contextHooks: ContextHooks = {
+        contextFactCache: this.contextFactCache,
+        contextSourceRevision: this.chats.revisionId(chatId),
         tokenCounter: createTokenCounter(model.id, provider?.models.find((item) => item.id === model.id)?.tokenizer),
         instruct: provider?.instruct,
         onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); },
