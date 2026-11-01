@@ -102,9 +102,18 @@ export function createWorldCommandTool(ctx: ToolContext): AgentTool<ReturnType<t
   };
 }
 
+export function createWorldInteractTool(ctx:ToolContext):AgentTool<any> {
+  const parameters = Type.Object({interactionId:Type.String({minLength:1,maxLength:128})},{additionalProperties:false});
+  return {name:"world_interact",label:"世界交互",description:"选择 world_query 返回的公共交互 ID。由服务端检查地点、在场人物、持有物和知识条件；不能自行设置任何角色已知的事实。成功仅暂存，整轮成功后提交，失败或停止撤销。",parameters,
+    execute:async(_id,params)=>{
+      const result = ctx.world?.transaction.interact(params) ?? {status:"rejected",summary:"当前无法完成该交互。",revision:0};
+      return {content:text(JSON.stringify(result)),details:{summary:result.summary,revision:result.revision},isError:result.status==="rejected"};
+    }};
+}
+
 export function createWorldTools(ctx: ToolContext): AgentTool<any>[] {
   if (!ctx.world) return [];
   const mode = ctx.world.state.capability.mode;
-  if (mode === "enabled") return [createWorldQueryTool(ctx), createWorldCommandTool(ctx)];
+  if (mode === "enabled") return [createWorldQueryTool(ctx), createWorldCommandTool(ctx), ...(ctx.world.state.template?.schemaVersion===2?[createWorldInteractTool(ctx)]:[])];
   return mode === "read-only" ? [createWorldQueryTool(ctx)] : [];
 }
