@@ -1,0 +1,41 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import {WORLD_MAX_CLOCK_MINUTES} from "@pitavern/shared/world";
+import {createWorldTemplateRecord,createInitialWorldSnapshot} from "../src/world/state.ts";
+import {advanceSchedules,ScheduleAdvanceError} from "../src/world/schedules.ts";
+import {presentActorIds} from "../src/world/schema.ts";
+const raw=JSON.parse(fs.readFileSync(new URL('./fixtures/schedule-tavern.json',import.meta.url),'utf8'));
+const record=createWorldTemplateRecord(raw),initial=createInitialWorldSnapshot(record);
+let checks=0;const check=(s:string)=>{checks++;console.log('✓ '+s);};
+const advance=(s=initial,t=30)=>advanceSchedules(s,record.template,t);
+const progress=(s:any)=>s.scheduleStates[0];
+const unchanged=JSON.stringify({initial,record});
+const at9=advance(initial,9);assert.deepEqual(at9.events,[]);assert.equal(at9.snapshot.actors.innkeeper.locationId,'tavern');assert.equal(progress(at9.snapshot).lastOccurrenceAt,undefined);
+const at10=advance(at9.snapshot,10);assert.equal(at10.snapshot.actors.innkeeper.locationId,'square');assert.deepEqual(at10.snapshot.scene.presentActorIds,['bystander','player']);assert.equal(progress(at10.snapshot).lastOccurrenceAt,10);
+const at11=advance(at10.snapshot,11);assert.deepEqual(at11.events,[]);assert.equal(progress(at11.snapshot).processedThrough,11);check('(旧,新]边界，恰到一次，查询和后续非触发分钟不重跑');
+const once=advance(initial,30),split=advance(at10.snapshot,30);assert.deepEqual(once.snapshot,split.snapshot);assert.deepEqual(once.events.map(e=>e.worldTimeMinutes),[10,30]);assert.deepEqual(split.events.map(e=>e.worldTimeMinutes),[30]);assert.ok(once.questViewsChanged);assert.equal(once.snapshot.actors.innkeeper.locationId,'tavern');
+assert.deepEqual(advance(initial,30),once);assert.equal(JSON.stringify({initial,record}),unchanged);check('一次/分次玩法状态相同、纯函数确定且输入不变；同命令离开再返回累计视角');
+const midnight=advance(once.snapshot,1440);assert.deepEqual(midnight.events,[]);assert.equal(progress(midnight.snapshot).lastOccurrenceAt,30);
+const nextDay=advance(midnight.snapshot,1450);assert.deepEqual(nextDay.events.map(e=>e.worldTimeMinutes),[1450]);assert.equal(nextDay.snapshot.actors.innkeeper.locationId,'square');
+const multi=advance(initial,2890);assert.deepEqual(multi.events.map(e=>e.worldTimeMinutes),[10,30,1450,1470,2890]);check('跨午夜不伪造触发，多日逐点执行');
+const midnightTemplate=structuredClone(raw);midnightTemplate.schedules[0].points[0].minuteOfDay=0;
+const mr=createWorldTemplateRecord(midnightTemplate),mi=createInitialWorldSnapshot(mr);assert.equal(mi.actors.innkeeper.locationId,'tavern');
+const zero=advanceSchedules(mi,mr.template,1440);assert.deepEqual(zero.events.map(e=>[e.worldTimeMinutes,e.type]),[[30,'schedule_skip'],[1440,'schedule_move']]);check('每日零点首次1440执行，创建时不根据日程摆放NPC');
+const exactly=advance(initial,184320);assert.equal(exactly.events.length,256);assert.equal(progress(exactly.snapshot).lastOccurrenceAt,182910);
+for(const status of ['alive','dead','inactive'] as const){const s=structuredClone(initial);s.actors.innkeeper.status=status;s.scene.presentActorIds=presentActorIds(s.actors,s.scene.locationId);const before=JSON.stringify(s);assert.throws(()=>advance(s,184330),(e:any)=>e instanceof ScheduleAdvanceError&&e.code==='SCHEDULE_LIMIT');assert.equal(JSON.stringify(s),before);}
+check('256点全部返回，257点预检拒绝；死亡/停用点同样占预算且无部分状态');
+for(const status of ['dead','inactive'] as const){const s=structuredClone(at9.snapshot);s.actors.innkeeper.status=status;s.scene.presentActorIds=presentActorIds(s.actors,s.scene.locationId);const skipped=advance(s,10);assert.equal(skipped.events[0].skipReason,status);assert.equal(skipped.snapshot.actors.innkeeper.status,status);assert.equal(skipped.snapshot.actors.innkeeper.locationId,'tavern');assert.equal(progress(skipped.snapshot).lastOccurrenceAt,10);
+ skipped.snapshot.actors.innkeeper.status='alive';skipped.snapshot.scene.presentActorIds=presentActorIds(skipped.snapshot.actors,'tavern');const alive=advance(skipped.snapshot,11);assert.equal(alive.events.length,0);const at30=advance(alive.snapshot,30);assert.equal(at30.events[0].skipReason,'already_there');assert.equal(advance(at30.snapshot,1450).snapshot.actors.innkeeper.locationId,'square');}
+check('死亡/inactive只消费不复活，恢复alive不补跑，已在目的地也消费');
+const newAt10=structuredClone(initial);newAt10.clockMinutes=10;newAt10.scheduleStates=[{scheduleId:'innkeeper_daily',activatedAt:10,processedThrough:10}];
+const newly=advance(newAt10,30);assert.deepEqual(newly.events.map(e=>e.worldTimeMinutes),[30]);assert.equal(newly.events[0].skipReason,'already_there');check('在触发当刻启用仅执行未来点，不补跑当刻');
+const same=structuredClone(raw);same.schedules.push({id:'a_bystander',actorId:'bystander',points:[{minuteOfDay:10,locationId:'square'}]});
+const sr=createWorldTemplateRecord(same),si=createInitialWorldSnapshot(sr),ordered=advanceSchedules(si,sr.template,10);assert.deepEqual(ordered.events.map(e=>e.scheduleId),['a_bystander','innkeeper_daily']);assert.deepEqual(ordered.snapshot.scene.presentActorIds,['player']);
+same.schedules.reverse();same.schedules.forEach((s:any)=>s.points.reverse());const rr=createWorldTemplateRecord(same),ri=createInitialWorldSnapshot(rr),reordered=advanceSchedules(ri,rr.template,10);
+assert.deepEqual(reordered.events,ordered.events);assert.deepEqual(reordered.snapshot.actors,ordered.snapshot.actors);check('同刻按ID确定排序，与模板数组排列无关');
+for(const t of [0,-1,0.5,WORLD_MAX_CLOCK_MINUTES+1])assert.throws(()=>advance(initial,t));
+const empty=structuredClone(raw);empty.schedules=[];const er=createWorldTemplateRecord(empty),ei=createInitialWorldSnapshot(er);assert.equal(advanceSchedules(ei,er.template,WORLD_MAX_CLOCK_MINUTES).snapshot.clockMinutes,WORLD_MAX_CLOCK_MINUTES);
+for(const mutate of [(s:any)=>s.scheduleStates[0].processedThrough=1,(s:any)=>s.scheduleStates=[],(s:any)=>s.templateHash='0'.repeat(64),(s:any)=>s.actors.innkeeper.locationId='missing']){const s=structuredClone(initial);mutate(s);const before=JSON.stringify(s);assert.throws(()=>advance(s,30));assert.equal(JSON.stringify(s),before);}
+check('非法目标、溢出、损坏进度和来源全部拒绝，不扫描超长区间或修改输入');
+const trimmed=structuredClone(exactly.snapshot);trimmed.recentEvents=[];const resumed=advance(trimmed,184330);assert.equal(resumed.events.length,1);assert.equal(resumed.events[0].worldTimeMinutes,184330);check('不依赖近期事件恢复游标，无事件也只执行未来一次');
+console.log(`${checks} 组日程纯规则检查通过`);
