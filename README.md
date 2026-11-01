@@ -44,7 +44,8 @@ npm run verify:regex-isolation # 提示词正则隔离、超时与取消回滚
 npm run verify:library-maintenance # 便携设置、任务进度、取消和归档管理
 npm run verify:chat-import # 单文件聊天 JSONL 导入专项（预览/重复/角色关联/原子落盘）
 npm run verify:world-templates # 0.5.0 模板库草稿/发布/版本选择/冲突/备份/编辑器
-npm run verify:ci     # 20 组独立合成数据回归，不需要本机资料库或真实 API Key
+npm run verify:world-migration # 0.6.0 模板迁移规划（差异/阻断/快照预览）
+npm run verify:ci     # 21 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
 npm run build && npm run verify:browser # 46 项真实界面验收，独立合成库与本地 mock
 ```
@@ -83,6 +84,7 @@ npm run build && npm run verify:browser # 46 项真实界面验收，独立合�
 - **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，顶栏「主题」打开面板可自由调整界面颜色）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
 - **M7 剧情分支** ✅ 重新生成保留候选并支持多分支树：可回到任意历史回合切换候选，未选中的后续剧情/状态原样保存并可恢复；设置中可开启每次成功回复后自动追加 0–4 个候选，分支面板支持「换条路线」的本次生成指令（`npm run verify:branches`）
 - **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。0.4.0 提供单文件聊天 JSONL 导入 UI；0.5.0 提供世界模板编辑器与版本选择，已有聊天更新模板（热更新）仍属 0.6.0。
+- **0.6.0（开发中）** 已有聊天更新模板的迁移规划：版本差异、删除/改 ID 阻断、价格/新增实体/初始状态语义、迁移后快照预览（`npm run verify:world-migration`，8 项）。聊天批量快照迁移/API/UI 仍在开发。契约见 [模板迁移契约](docs/WORLD_TEMPLATE_MIGRATION.md)。
 - **0.5.0** 世界模板库：草稿/冲突、不可变发布版本、从内置复制、导入/导出、整库备份恢复、新聊天精确版本选择，以及地点/角色/物品/初始状态编辑器与初始世界预览（`npm run verify:world-templates`，16 项）。已有聊天更新模板仍属 0.6.0。契约见 [世界模板契约](docs/WORLD_TEMPLATES.md)。
 - **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。
 
@@ -202,7 +204,7 @@ npm run build && npm run verify:browser # 46 项真实界面验收，独立合�
 
 ## 持续集成
 
-GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括世界引擎、M4、接管、M6、会话回归、兼容、模型列表、备用开场白、聊天操作、剧情分支、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容、群聊脚本与聊天导入、世界模板库（20 组），全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消、模型列表获取与草稿连接、开局翻页与窗口同步、多分支切换与自动候选、侧栏置顶/重命名/归档/删除、推理等级、空白连接默认隐藏、设置自动保存/重置、逐模型测试、顶栏即时提示、聊天配色、无框模型选择、导入聊天、世界模板编辑器和 390px 手机布局（46 项）；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
+GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括世界引擎、M4、接管、M6、会话回归、兼容、模型列表、备用开场白、聊天操作、剧情分支、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容、群聊脚本与聊天导入、世界模板库、模板迁移（21 组），全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消、模型列表获取与草稿连接、开局翻页与窗口同步、多分支切换与自动候选、侧栏置顶/重命名/归档/删除、推理等级、空白连接默认隐藏、设置自动保存/重置、逐模型测试、顶栏即时提示、聊天配色、无框模型选择、导入聊天、世界模板编辑器和 390px 手机布局（46 项）；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
 
 ## 架构
 

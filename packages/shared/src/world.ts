@@ -234,6 +234,48 @@ export interface WorldTemplateExportDto {
   template: WorldTemplate;
 }
 
+
+export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules";
+export type WorldTemplateChangeAction = "added" | "removed" | "modified";
+
+/** 0.6.0 模板迁移差异；blocking 变更禁止应用。 */
+export interface WorldTemplateChangeDto {
+  entity: WorldTemplateChangeEntity;
+  action: WorldTemplateChangeAction;
+  id?: string;
+  label: string;
+  detail?: string;
+  blocking?: boolean;
+}
+
+export interface WorldTemplateMigrationTargetDto {
+  contentHash: string;
+  templateId: string;
+  templateVersion: number;
+  rulesVersion: number;
+  name?: string;
+}
+
+/** 迁移预览；snapshot 仅在无阻断时给出。 */
+export interface WorldTemplateMigrationPreviewDto {
+  chatId: string;
+  from: WorldTemplateMigrationTargetDto;
+  to: WorldTemplateMigrationTargetDto;
+  changes: WorldTemplateChangeDto[];
+  blocking: WorldTemplateChangeDto[];
+  warnings: string[];
+  applyable: boolean;
+  snapshotCount: number;
+  previewHash: string;
+  snapshot?: WorldSnapshot;
+}
+
+export interface WorldTemplateMigrationResultDto {
+  revision: string;
+  backupId: string;
+  changes: WorldTemplateChangeDto[];
+}
+
 export interface WorldTemplateSummaryDto {
   id: string;
   name: string;

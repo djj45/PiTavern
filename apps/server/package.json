@@ -29,7 +29,8 @@
     "verify:group-script": "tsx scripts/group-script-verify.ts",
     "verify:branches": "tsx scripts/branch-tree-verify.ts",
     "verify:chat-import": "tsx scripts/chat-import-verify.ts",
-    "verify:world-templates": "tsx scripts/world-template-verify.ts"
+    "verify:world-templates": "tsx scripts/world-template-verify.ts",
+    "verify:world-migration": "tsx scripts/world-migration-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",
