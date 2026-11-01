@@ -27,7 +27,10 @@ import { discoverModels, ModelDiscoveryError } from "../providers/discovery.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { CharacterStore } from "../stdata/characters.ts";
 import type { ChatStore } from "../stdata/chats.ts";
-import type { SessionManager } from "../session/manager.ts";
+import {
+  WorldChatMigrationBlockedError, WorldChatMigrationConflictError, WorldChatMigrationTargetNotFoundError,
+  type SessionManager,
+} from "../session/manager.ts";
 import { LibraryStore } from "../stdata/library.ts";
 import { LibraryBackupStore } from "../stdata/library-backup.ts";
 import { attachLibraryBackupJobs, backupControlPath } from "./library-backup-jobs.ts";
@@ -100,6 +103,16 @@ function characterCardError(res: Response, error: unknown): void {
   if (error instanceof CharacterCardNotFoundError) { res.status(404).json({ error: error.message }); return; }
   if (error instanceof CharacterCardConflictError) { res.status(409).json({ error: error.message }); return; }
   res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+}
+
+function worldMigrationError(res: Response, error: unknown): void {
+  if (error instanceof WorldChatMigrationTargetNotFoundError) { res.status(404).json({ error: error.message }); return; }
+  if (error instanceof WorldChatMigrationConflictError) { res.status(409).json({ error: error.message }); return; }
+  if (error instanceof WorldChatMigrationBlockedError) { res.status(422).json({ error: error.message, preview: error.preview }); return; }
+  const message = error instanceof Error ? error.message : String(error);
+  if (/聊天不存在/.test(message)) { res.status(404).json({ error: message }); return; }
+  if (/请先停止|请先停止所有聊天|维护|已变化|重新预览|重新同步/.test(message)) { res.status(409).json({ error: message }); return; }
+  res.status(500).json({ error: message });
 }
 
 function worldTemplateError(res: Response, error: unknown): void {
@@ -977,6 +990,33 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       else sessions.initializeChatWorld(chatId, templateId, revision, allowExisting ?? true);
       res.json({ ok: true });
     } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post("/api/chat/world/migrate/preview", (req, res) => {
+    const { chatId, targetHash } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof targetHash !== "string") {
+      res.status(400).json({ error: "迁移预览参数无效" });
+      return;
+    }
+    try {
+      const preview = sessions.previewChatWorldMigration(chatId, targetHash);
+      if (!preview.applyable && !preview.noop) {
+        res.status(422).json({ error: preview.blocking.length ? "存在不能安全迁移的世界快照" : "该聊天尚未启用世界", preview });
+        return;
+      }
+      res.json(preview);
+    } catch (error) { worldMigrationError(res, error); }
+  });
+
+  app.post("/api/chat/world/migrate/apply", (req, res) => {
+    const { chatId, targetHash, expectedRevision, previewHash } = req.body ?? {};
+    if ([chatId, targetHash, expectedRevision, previewHash].some((value) => typeof value !== "string")) {
+      res.status(400).json({ error: "迁移应用参数无效" });
+      return;
+    }
+    try {
+      res.json(sessions.applyChatWorldMigration(chatId, targetHash, expectedRevision, previewHash));
+    } catch (error) { worldMigrationError(res, error); }
   });
 
   app.post("/api/chat/world/correct", (req, res) => {

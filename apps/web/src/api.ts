@@ -34,6 +34,8 @@ import type {
   LibraryHistoryPreviewDto,
 } from "@pitavern/shared";
 import type {
+  WorldChatMigrationPreviewDto,
+  WorldChatMigrationResultDto,
   WorldSnapshot,
   WorldTemplate,
   WorldTemplateEditorDto,
@@ -194,6 +196,13 @@ export const api = {
   deleteWorldTemplate: (id: string) => fetch("/api/world/template-library/" + encodeURIComponent(id), { method: "DELETE" })
     .then((r) => json<{ ok: boolean }>(r)),
   worldTemplateExportUrl: (id: string) => "/api/world/template-library/" + encodeURIComponent(id) + "/export",
+  previewWorldMigration: (chatId: string, targetHash: string) => fetch("/api/chat/world/migrate/preview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, targetHash }),
+  }).then((r) => json<WorldChatMigrationPreviewDto>(r)),
+  applyWorldMigration: (chatId: string, targetHash: string, expectedRevision: string, previewHash: string) => fetch("/api/chat/world/migrate/apply", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, targetHash, expectedRevision, previewHash }),
+  }).then((r) => json<WorldChatMigrationResultDto>(r)),
   initializeWorld: (chatId: string, templateId: string, revision: string, allowExisting = true) =>
     fetch("/api/chat/world/initialize", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, templateId, revision, allowExisting }) }).then((r) => json<{ ok: boolean }>(r)),

@@ -6,10 +6,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
-import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatStateDto, type WorldTemplateRecord, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
-import { WorldState, WorldTransaction } from "../world/index.ts";
+import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatMigrationPreviewDto, type WorldChatMigrationResultDto, type WorldChatStateDto, type WorldTemplateRecord, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
+import { WorldState, WorldTransaction, createWorldTemplateRecord } from "../world/index.ts";
+import { planChatWorldMigration } from "../world/chat-migration.ts";
 import { worldDigest } from "../world/digest.ts";
 import { getWorldTemplate, worldTemplateName, worldTemplateSummaries } from "../world/catalog.ts";
+import { migrationTarget } from "../world/migration.ts";
 import { WorldTemplateLibrary } from "../world/template-library.ts";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
@@ -44,6 +46,18 @@ import { createTokenCounter } from "../context/tokens.ts";
 import { globalRegex } from "../stdata/library.ts";
 
 type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext">;
+
+export class WorldChatMigrationConflictError extends Error {
+  constructor(message: string) { super(message); this.name = "WorldChatMigrationConflictError"; }
+}
+
+export class WorldChatMigrationBlockedError extends Error {
+  constructor(message: string, readonly preview: WorldChatMigrationPreviewDto) { super(message); this.name = "WorldChatMigrationBlockedError"; }
+}
+
+export class WorldChatMigrationTargetNotFoundError extends Error {
+  constructor(message: string) { super(message); this.name = "WorldChatMigrationTargetNotFoundError"; }
+}
 
 /** 单个聊天的运行时：Agent 引用 + 事件转发 + 召回限次冷却计数 */
 class ChatSession {
@@ -207,6 +221,64 @@ export class SessionManager {
   /** 0.5.0 版本选择：按不可变 contentHash 精确初始化聊天。 */
   initializeChatWorldByHash(chatId: string, contentHash: string, revision: string, allowExisting = true): void {
     this.initializeChatWorldRecord(chatId, this.worldTemplateLibrary.resolveHash(contentHash), revision, allowExisting);
+  }
+
+  private migrationTarget(targetHash: string): WorldTemplateRecord {
+    try {
+      return this.worldTemplateLibrary.resolveHash(targetHash);
+    } catch {
+      const summary = worldTemplateSummaries().find((entry) => entry.contentHash === targetHash);
+      const template = summary ? getWorldTemplate(summary.id) : undefined;
+      if (!summary || !template) throw new WorldChatMigrationTargetNotFoundError("目标模板版本不存在或已删除");
+      return createWorldTemplateRecord(template, { name: summary.name, description: summary.description });
+    }
+  }
+
+  /** M2/M4：只读规划；不写聊天，不创建备份。 */
+  previewChatWorldMigration(chatId: string, targetHash: string): WorldChatMigrationPreviewDto {
+    const target = this.migrationTarget(targetHash);
+    const { source, revision } = this.chats.readSource(chatId);
+    const plan = planChatWorldMigration(source, target);
+    return {
+      chatId, revision, sourceHash: plan.sourceHash, target: migrationTarget(target),
+      locations: plan.locations, counts: plan.counts, blocking: plan.blocking, warnings: plan.warnings,
+      applyable: plan.applyable, noop: plan.noop, previewHash: plan.previewHash,
+    };
+  }
+
+  /** M3/M4：重新规划、验证 previewHash，再备份并一次替换整份聊天。 */
+  applyChatWorldMigration(chatId: string, targetHash: string, expectedRevision: string, expectedPreviewHash: string): WorldChatMigrationResultDto {
+    this.assertIdle();
+    const target = this.migrationTarget(targetHash);
+    const { source, revision } = this.chats.readSource(chatId);
+    if (revision !== expectedRevision) throw new WorldChatMigrationConflictError("聊天已变化，请重新预览后再应用");
+    const plan = planChatWorldMigration(source, target);
+    if (plan.previewHash !== expectedPreviewHash) {
+      throw new WorldChatMigrationConflictError("预览已过期（聊天或目标模板发生变化），请重新预览");
+    }
+    const targetDto = migrationTarget(target);
+    if (!plan.hasWorld) {
+      throw new WorldChatMigrationBlockedError("该聊天尚未启用世界，不能迁移模板", {
+        chatId, revision, sourceHash: plan.sourceHash, target: targetDto, locations: plan.locations,
+        counts: plan.counts, blocking: plan.blocking, warnings: plan.warnings, applyable: false, noop: false, previewHash: plan.previewHash,
+      });
+    }
+    if (!plan.applyable) {
+      if (plan.noop) {
+        return { revision, target: targetDto, counts: plan.counts, previewHash: plan.previewHash, noop: true };
+      }
+      throw new WorldChatMigrationBlockedError("存在不能安全迁移的世界快照", {
+        chatId, revision, sourceHash: plan.sourceHash, target: targetDto, locations: plan.locations,
+        counts: plan.counts, blocking: plan.blocking, warnings: plan.warnings, applyable: false, noop: false, previewHash: plan.previewHash,
+      });
+    }
+    if (!plan.nextSource) throw new WorldChatMigrationBlockedError("迁移计划没有产生写入内容", {
+      chatId, revision, sourceHash: plan.sourceHash, target: targetDto, locations: plan.locations,
+      counts: plan.counts, blocking: plan.blocking, warnings: plan.warnings, applyable: false, noop: false, previewHash: plan.previewHash,
+    });
+    const applied = this.chats.applyWorldMigration(chatId, revision, plan.sourceHash, plan.nextSource);
+    this.changed(chatId);
+    return { revision: applied.revision, backupId: applied.backupId, target: targetDto, counts: plan.counts, previewHash: plan.previewHash, noop: false };
   }
 
   /** M4：手工修正当前世界快照；只允许同一模板/规则版本，并同步活动分支候选。 */
