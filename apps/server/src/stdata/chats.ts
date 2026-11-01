@@ -505,16 +505,46 @@ export class ChatStore {
     }
   }
 
+  /** 读取原始 JSONL 与当前 revision；迁移规划只读这里，不逐快照写盘。 */
+  readSource(chatId: string): { source: string; revision: string } {
+    const file = this.resolveChatFile(chatId);
+    if (!file || !fs.existsSync(file)) throw new Error("聊天不存在");
+    const revision = this.revisionId(chatId);
+    const source = fs.readFileSync(file, "utf8");
+    if (this.revisionId(chatId) !== revision) throw new Error("聊天已变化，请刷新后重试");
+    return { source, revision };
+  }
+
+  /** M3：先备份，再一次性替换整份 JSONL；调用方负责重新规划并校验 previewHash。 */
+  applyWorldMigration(chatId: string, expectedRevision: string, expectedSourceHash: string, nextSource: string): { revision: string; backupId: string } {
+    if (this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请重新预览后重试");
+    const file = this.resolveChatFile(chatId);
+    if (!file || !fs.existsSync(file)) throw new Error("聊天不存在");
+    const source = fs.readFileSync(file, "utf8");
+    if (createHash("sha256").update(source).digest("hex") !== expectedSourceHash) {
+      throw new Error("聊天内容已变化，请重新预览后重试");
+    }
+    if (nextSource === source) throw new Error("迁移没有产生任何变化，不能创建备份");
+    const backupId = this.replaceSource(chatId, source, nextSource, true);
+    if (!backupId) throw new Error("迁移没有产生任何变化，不能创建备份");
+    return { revision: this.revisionId(chatId), backupId };
+  }
+
+  /** 写迁移前备份；备份失败时调用方不得替换聊天。 */
+  private backupSource(chatId: string, source: string): string {
+    const dir = this.backupDir(chatId);
+    fs.mkdirSync(dir, { recursive: true });
+    const id = Date.now() + "-" + randomUUID() + ".jsonl";
+    fs.writeFileSync(path.join(dir, id), source, { flag: "wx", mode: 0o600 });
+    return id;
+  }
+
   /** Compare against the captured source before replacing it; never overwrite an external edit. */
-  private replaceSource(chatId: string, expected: string, next: string, backup = true): void {
+  private replaceSource(chatId: string, expected: string, next: string, backup = true): string | undefined {
     const file = this.resolveChatFile(chatId);
     if (!file || fs.readFileSync(file, "utf8") !== expected) throw new Error("聊天已被其他窗口或程序修改，请刷新后重试");
-    if (next === expected) return;
-    if (backup) {
-      const dir = this.backupDir(chatId);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, Date.now() + "-" + randomUUID() + ".jsonl"), expected, { flag: "wx", mode: 0o600 });
-    }
+    if (next === expected) return undefined;
+    const backupId = backup ? this.backupSource(chatId, expected) : undefined;
     const temporary = file + "." + randomUUID() + ".tmp";
     try {
       fs.writeFileSync(temporary, next, { flag: "wx", mode: fs.statSync(file).mode });
@@ -526,6 +556,7 @@ export class ChatStore {
     this.documents.delete(file);
     this.summaries.delete(file);
     this.branchIndexes.delete(file);
+    return backupId;
   }
 
   /** Read raw lines so unknown ST fields, alternate replies and damaged lines survive edits. */
