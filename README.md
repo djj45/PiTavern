@@ -1,6 +1,6 @@
 # PiTavern（π 酒馆）
 
-当前版本：**0.6.0**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
+当前版本：**0.7.0**。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
 
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
@@ -47,22 +47,23 @@ npm run verify:world-templates # 0.5.0 模板库草稿/发布/版本选择/冲�
 npm run verify:world-migration # 0.6.0 单快照模板迁移规划（差异/阻断/预览）
 npm run verify:chat-migration # 0.6.0 整聊天迁移（全分支规划/原子应用/API）
 npm run verify:character-cards # 角色卡管理（列表/编辑/复制/删除/导出）
-npm run verify:ci     # 23 组独立合成数据回归，不需要本机资料库或真实 API Key
+npm run verify:context # 长局基线/纯构建/分支缓存/三种模式/合成游戏（28 组检查）
+npm run verify:ci     # 24 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
-npm run build && npm run verify:browser # 58 项真实界面验收，独立合成库与本地 mock
+npm run build && npm run verify:browser # 59 项真实界面验收，独立合成库与本地 mock
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。
 
 接管模式的状态投影通过增量事件更新。工具活动和模型回传用量按生成独立保存，重新生成、刷新或重启后仍可查看。角色卡、常驻世界书与历史中的宏在组装时展开；开场白随首轮保留，直到首轮离开历史窗口。全局世界书可直接在各上下文模式下导入和启用。
 
-三种上下文模式统一在 Agent 层压缩完整旧轮次，保留当前工具调用链，并为输出预留预算。已知模型使用 `cl100k_base` / `o200k_base` tokenizer；未知模型明确回退到字符和 UTF-8 字节估算。设置中选中模型后，可填写实际上下文长度、最大输出和计数方式，中转模型别名可手动指定编码器。聊天封装和工具协议开销仍是估算，不能替代供应商账单。文本补全计数包含完整 instruct 模板。输入预算扣除输出上限和剩余空间的 10% 余量；即使关闭压缩，超预算请求也会在发送前终止。
+三种上下文模式统一使用纯函数上下文构建器：世界快照决定硬状态，事件解释变化，旧剧情以带消息/轮次/内容哈希和原文区间的结构化摘录保留线索。完整聊天仍保存在 JSONL；只压缩发送内容，当前工具链和最近轮次完整保留。已完成旧工具结果转为来源可查的回执，压缩不执行工具。缓存只存在于内存，绑定活动路径来源、聊天修订和算法版本；切分支、编辑、重生成、模板迁移、备份恢复和重启后按来源重建。规则提取可能遗漏语义，预算不足会显示省略数量。详见 [上下文契约](docs/CONTEXT_CONTRACT.md)。已知模型使用 `cl100k_base` / `o200k_base` tokenizer；未知模型明确回退到字符和 UTF-8 字节估算。设置中选中模型后，可填写实际上下文长度、最大输出和计数方式，中转模型别名可手动指定编码器。聊天封装和工具协议开销仍是估算，不能替代供应商账单。文本补全计数包含完整 instruct 模板。输入预算扣除输出上限和剩余空间的 10% 余量；即使关闭压缩，超预算请求也会在发送前终止。
 
 ### 生成记录与上下文诊断
 
 右上角「统计」→「生成记录与上下文诊断」，可分页查看每次发送、重新生成或重试的结果、已回传 token 用量和工具活动。对话轮次按当前聊天中的用户消息统计；生成次数包含成功、失败、取消和服务中断的尝试。未回传的用量无法补算，导入聊天及功能启用前的历史也不会伪造统计。模型分多次调用时累计所有已收到的用量，切换候选或恢复备份不会回滚已发生的消耗。
 
-诊断展示本次生成最近一次请求的计数方式、输出预留、输入预算、压缩前后 token、压缩轮数和消息数，以及系统提示、对话/工具结果、工具声明和封装的占用。世界书组装记录列出注入、预算过滤、未命中、禁用、概率、计时条件和缺少预设插入位置等原因；每次保留前 200 条诊断，筛选不会重新执行宏或扫描。接管模式还显示历史窗口省略的消息数。
+诊断展示本次生成最近一次请求的计数方式、输出预留、输入预算、压缩前后 token、压缩轮数和消息数，以及系统提示、对话/工具结果、工具声明和封装的占用。世界书组装记录列出注入、预算过滤、未命中、禁用、概率、计时条件和缺少预设插入位置等原因；每次保留前 200 条诊断，筛选不会重新执行宏或扫描。接管模式还显示历史窗口省略的消息数。“长局记忆诊断”展示历史保留/压缩范围、摘录来源、缓存状态、固定区/受保护区/历史线索预算和省略数量。字符量、估算 tokens、tokenizer 计数与供应商已回传用量分别标注；超预算时显示不可拆分区域的具体原因。
 
 记录独立保存在 `<stDataDir>/.pitavern/activity/<聊天 ID 的 sha256>/`，按每次生成原子更新；服务重启会将未结束记录标为中断，并保留此前收到的工具结果和用量。JSONL/MD 聊天导出不包含这些记录，完整迁移可使用「资料库 → 备份与迁移」。验证：`npm run verify:activity`、`npm run verify:chat-ux`。
 
@@ -81,12 +82,14 @@ npm run build && npm run verify:browser # 58 项真实界面验收，独立合�
 - **M1 行走骨架** ✅ pi Agent 引擎 + 中转接入 + WS 流式 + ST 人物卡/聊天读写 + 基础聊天 UI
 - **M2 桥接组装器** ✅ ST 预设兼容组装（prompt_order 引擎 / 宏核心集 / 世界书扫描递归 / 提示词正则 / 深度注入 / 采样透传），猫神预设实测对齐（`npm run verify:bridge`）
 - **M3 工具四件套** ✅ worldbook_search（片段→refs 两级检索）/ tavern_recall_history（query 片段 + turn 全文）/ tavern_read_variables（ST chat_metadata.variables 兼容）/ tavern_read_skill_reference；召回限次（每轮≤6）与冷却（全文召回后 10 轮）由**运行时强制**；UI 工具卡片流 + 用量/召回面板（`npm run verify:tools`）
-- **M4 输出协议 + 历史压缩** ✅ game_tool 模式：`game_content`（正文，MANDATORY）+ `tavern_think`（思维链）双工具原生 function calling 取代伪 JSON 预填；consumeToolCalls 还原落库（mes 正文 + extra.thinking/summary）；参数流式宽松提取（toolcall_delta 实时渲染正文）；`tool_choice=required` 可透传；历史压缩 transformContext（超预算时旧轮 summary 优先折叠为 |用户|/|游戏剧情| 块，UI/落库永远全文）（`npm run verify:m4`）
-- **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史只带近 N 轮（更早靠召回）——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，「统计」实时显示（`npm run verify:takeover`）
+- **M4 输出协议 + 历史压缩** ✅ game_tool 模式：`game_content`（正文，MANDATORY）+ `tavern_think`（思维链）双工具原生 function calling 取代伪 JSON 预填；consumeToolCalls 还原落库（mes 正文 + extra.thinking/summary）；参数流式宽松提取（toolcall_delta 实时渲染正文）；`tool_choice=required` 可透传；历史压缩 transformContext（0.7.0 起按预算保留带来源的结构化摘录，UI/落库永远全文）（`npm run verify:m4`）
+- **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史近 N 轮完整保留，0.7.0 起更早历史进入来源摘录候选集并支持召回——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，「统计」实时显示（`npm run verify:takeover`）
 - **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，顶栏「主题」打开面板可自由调整界面颜色）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
 - **M7 剧情分支** ✅ 重新生成保留候选并支持多分支树：可回到任意历史回合切换候选，未选中的后续剧情/状态原样保存并可恢复；设置中可开启每次成功回复后自动追加 0–4 个候选，分支面板支持「换条路线」的本次生成指令（`npm run verify:branches`）
 - **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。0.4.0 提供单文件聊天 JSONL 导入 UI；0.5.0 提供世界模板编辑器与版本选择；0.6.0 提供已有聊天更新模板（含候选/检查点迁移）。
 - **角色卡管理（0.6.0）** 侧栏「角色 → 管理」集中查看/编辑描述、性格、场景、默认/备用开场白、示例对话、系统提示、标签，复制/删除/导入/导出角色卡；名称不可改，PNG 像素与未知字段保留（`npm run verify:character-cards`，8 项）。卡内世界书/正则仍在资料库编辑。契约见 [角色卡管理契约](docs/CHARACTER_MANAGER.md)。
+- **0.7.0** 长局上下文与分支记忆：纯函数工作集、带来源事实摘录、预算分配、活动路径缓存和诊断；100/500/1000 回合固定评测与本地合成游戏闭环。M1–M5 独立提交与复验，详见 [上下文契约](docs/CONTEXT_CONTRACT.md)。
+- **后续建议** 0.8.0 公开事实/秘密/角色知识；0.9.0 可选双阶段生成与只重写正文；任务、NPC 目标和世界事件根据实际游戏验收逐项加入。
 - **0.6.0** 已有聊天更新模板：单快照差异规划（12 项）、整聊天所有分支/检查点/隐藏后续的纯规划与原子应用（`npm run verify:chat-migration`，27 项：8+6+6+7）、预览/应用 API 与 Web 更新入口。契约见 [模板迁移契约](docs/WORLD_TEMPLATE_MIGRATION.md)。
 - **0.5.0** 世界模板库：草稿/冲突、不可变发布版本、从内置复制、导入/导出、整库备份恢复、新聊天精确版本选择，以及地点/角色/物品/初始状态编辑器与初始世界预览（`npm run verify:world-templates`，16 项）。已有聊天更新模板仍属 0.6.0。契约见 [世界模板契约](docs/WORLD_TEMPLATES.md)。
 - **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。
@@ -207,7 +210,7 @@ npm run build && npm run verify:browser # 58 项真实界面验收，独立合�
 
 ## 持续集成
 
-GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括世界引擎、M4、接管、M6、会话回归、兼容、模型列表、备用开场白、聊天操作、剧情分支、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容、群聊脚本与聊天导入、世界模板库、模板迁移、整聊天迁移、角色卡管理（23 组），全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消、模型列表获取与草稿连接、开局翻页与窗口同步、多分支切换与自动候选、侧栏置顶/重命名/归档/删除、推理等级、空白连接默认隐藏、设置自动保存/重置、逐模型测试、顶栏即时提示、聊天配色、无框模型选择、导入聊天、世界模板编辑器、角色卡管理器、同哈希名称/描述迁移和 390px 手机布局（58 项）；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
+GitHub Actions 在 push／pull request 时于 Node.js 22、24 下依次执行 `npm ci`、类型检查、构建、`npm run verify:ci`，然后安装 Chromium 并运行 `npm run verify:browser`。回归入口包括世界引擎、M4、接管、M6、会话回归、兼容、模型列表、备用开场白、聊天操作、剧情分支、活动诊断、世界书显示、Markdown 渲染、资料库迁移、正则隔离、迁移事务、角色归档兼容、群聊脚本与聊天导入、世界模板库、模板迁移、整聊天迁移、角色卡管理、长局上下文（24 组），全部使用合成数据与本地模拟接口。浏览器验收覆盖保存与旧版本冲突、动态宏正则预览、真实显示超时、草稿恢复、搜索复制、编辑历史、便携迁移、上传取消、模型列表获取与草稿连接、开局翻页与窗口同步、多分支切换与自动候选、侧栏置顶/重命名/归档/删除、推理等级、空白连接默认隐藏、设置自动保存/重置、逐模型测试、顶栏即时提示、聊天配色、无框模型选择、导入聊天、世界模板编辑器、角色卡管理器、同哈希名称/描述迁移、长局来源诊断和 390px 手机布局（59 项）；每个用例启动独立合成库，失败保留截图、trace 和日志。依赖本机资料的 bridge／tools 验证不纳入该入口。失败时上传 `data/test-runs/` 供查看，保留 7 天。配置文件为 `.github/workflows/ci.yml`；远端执行结果需提交推送后查看。
 
 ## 架构
 
