@@ -6,6 +6,7 @@ import type {
   WorldTemplateLibrarySummaryDto,
   WorldTemplateSummaryDto,
 } from "@pitavern/shared/world";
+import { KnowledgeEditor } from "./KnowledgeEditor.tsx";
 import { api, ApiError } from "../api.ts";
 import { buttonClass, fieldClass } from "./libraryStyles.ts";
 
@@ -577,6 +578,8 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
             </div>
           ))}
         </section>
+
+        <KnowledgeEditor template={template} change={updateTemplate} busy={busy} />
 
         {editor.initialSnapshot
           ? <SnapshotPreview snapshot={editor.initialSnapshot} template={template} />

@@ -196,6 +196,7 @@ export interface GenerationRecordDto {
 }
 
 export interface GenerationPageDto {
+  knowledgeKey?: string;
   records: GenerationRecordDto[];
   before: string | null;
 }

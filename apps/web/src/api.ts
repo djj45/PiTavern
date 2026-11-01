@@ -37,6 +37,7 @@ import type {
   WorldChatMigrationPreviewDto,
   WorldChatMigrationResultDto,
   WorldSnapshot,
+  WorldModelSnapshot,
   WorldTemplate,
   WorldTemplateEditorDto,
   WorldTemplateLibrarySummaryDto,
@@ -169,6 +170,8 @@ export const api = {
   characterCardExportUrl: (name: string) => "/api/character-cards/" + encodeURIComponent(name) + "/export",
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
   worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),
+  previewWorldKnowledge: (template:WorldTemplate,actorId?:string) => fetch("/api/world/knowledge-preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({template,actorId})}).then(r=>json<WorldModelSnapshot>(r)),
+  worldAuthor: (chatId:string) => fetch("/api/chat/world/author",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chatId})}).then(r=>json<{snapshot:WorldSnapshot;template?:WorldTemplate}>(r)),
   worldTemplates: () => fetch("/api/world/templates").then((r) => json<WorldTemplateSummaryDto[]>(r)),
   worldTemplateLibrary: () => fetch("/api/world/template-library").then((r) => json<WorldTemplateLibrarySummaryDto[]>(r)),
   worldTemplateEditor: (id: string) => fetch("/api/world/template-library/" + encodeURIComponent(id))

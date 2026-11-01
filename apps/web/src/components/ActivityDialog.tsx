@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatActivityDto, ContextDiagnosticsDto, GenerationRecordDto } from "@pitavern/shared";
 import { api } from "../api.ts";
 import { TOOL_META } from "../chatItems.ts";
@@ -77,6 +77,8 @@ export function ContextDiagnostics({ context }: { context: ContextDiagnosticsDto
 
 export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; activity: ChatActivityDto; onClose: () => void }) {
   const [older, setOlder] = useState<GenerationRecordDto[]>([]);
+  const knowledgeKey=useRef(activity.knowledgeKey);knowledgeKey.current=activity.knowledgeKey;
+  useEffect(()=>{setOlder([]);setBefore(activity.before);setSelected(activity.records[0]?.id)},[chatId,activity.knowledgeKey]);
   const [before, setBefore] = useState(activity.before);
   const [selected, setSelected] = useState(activity.records[0]?.id);
   const [loading, setLoading] = useState(false);
@@ -101,7 +103,9 @@ export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; 
     if (!before || loading) return;
     setLoading(true); setError("");
     try {
+      const perspective=knowledgeKey.current;
       const page = await api.activity(chatId, before);
+      if(perspective!==knowledgeKey.current)return;
       setOlder((previous) => [...previous, ...page.records]); setBefore(page.before);
     } catch (cause) { setError((cause as Error).message); }
     finally { setLoading(false); }
@@ -123,6 +127,7 @@ export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; 
           {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
         </nav>
         {run ? <div className="min-w-0 space-y-4">
+          {run.contentHidden && <p className="text-xs text-tavern-dim">知识视角已变化，该记录仅显示用量与状态；上下文及工具内容已隐藏。</p>}
           <p className="text-sm">{KIND[run.kind]} · {GENERATION_STATUS[run.status]} · {run.provider} / {run.model}</p>
           {run.error && <p className="break-words text-xs text-amber-300">{run.error}</p>}
           <p className="text-xs text-tavern-dim">接口回传：输入 {number(run.usage.input)} · 输出 {number(run.usage.output)} · 缓存读取 {number(run.usage.cacheRead)} · 缓存写入 {number(run.usage.cacheWrite)} · 合计 {number(run.usage.totalTokens)} tokens。{run.usage.responsesWithUsage}/{run.usage.responses} 次模型响应含非零用量。</p>

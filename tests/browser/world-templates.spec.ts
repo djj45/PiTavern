@@ -573,3 +573,41 @@ test('长局诊断显示保留/压缩范围、来源、字符量与估算预算�
   await diagnosticsButton.click();
   await expect(dialog.getByRole('region', { name: '长局记忆诊断' })).toContainText('extractive-v1');
 });
+
+const seedKnowledge = async (request: APIRequestContext, baseURL: string) => {
+  const blank = await (await request.post(baseURL + '/api/world/template-library', {data:{action:'blank',name:'知识酒馆'}})).json() as EditorDto;
+  const template = JSON.parse(fs.readFileSync(path.resolve('apps/server/scripts/fixtures/knowledge-tavern.json'),'utf8')) as WorldTemplate;
+  template.templateId=blank.id;
+  const route=baseURL+'/api/world/template-library/'+encodeURIComponent(blank.id);
+  const saved=await (await request.put(route,{data:{revision:blank.draftRevision,name:'知识酒馆',template}})).json() as EditorDto;
+  const published=await (await request.post(route+'/publish',{data:{revision:saved.draftRevision}})).json() as EditorDto;
+  return {id:blank.id,template,published};
+};
+
+test('知识作者编辑器：事实、初始知情、揭示条件和玩家/NPC服务端预览，390px 可操作',async({page,app,request})=>{
+  const seeded=await seedKnowledge(request,app.baseURL);const secret=seeded.template.facts![1];
+  const dialog=await openTemplates(page,app.baseURL);await dialog.getByRole('button',{name:'编辑模板 知识酒馆',exact:true}).click();
+  await expect(dialog.getByLabel('事实 2 正文',{exact:true})).toHaveValue(secret.text);
+  const preview=dialog.getByLabel('知识视角预览');await preview.getByRole('button',{name:'刷新视角预览'}).click();
+  await expect(preview.getByRole('list',{name:'预览已知事实'})).toContainText('旧酒馆正在维修');await expect(preview.getByRole('list')).not.toContainText(secret.text);
+  await preview.getByLabel('知识预览视角').selectOption('actor:innkeeper');await preview.getByRole('button',{name:'刷新视角预览'}).click();await expect(preview.getByRole('list')).toContainText(secret.text);await expect(preview.getByRole('list')).not.toContainText(secret.description!);
+  await dialog.getByLabel('交互 1 条件 3 数量',{exact:true}).fill('2');await dialog.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('草稿已保存');
+  const saved=await getEditor(request,app.baseURL,seeded.id);expect(saved.draft.interactions![0].conditions[2]).toEqual({type:'has_item',itemId:'letter',quantity:2});expect(saved.draft.initial.knowledge).toEqual([{actorId:'innkeeper',factId:secret.id}]);
+  await page.setViewportSize({width:390,height:844});await dialog.getByLabel('事实 2 内部备注',{exact:true}).scrollIntoViewIfNeeded();await expect(dialog.getByLabel('事实 2 内部备注',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+});
+
+for(const mobile of [false,true]) test(`玩家已知线索与独立作者入口${mobile?'（390px）':''}：默认响应不泄露，修正后来源可见`,async({page,app,request})=>{
+  const seeded=await seedKnowledge(request,app.baseURL);const secret=seeded.template.facts![1];const authorRequests:string[]=[];page.on('request',r=>{if(r.url().endsWith('/api/chat/world/author'))authorRequests.push(r.url())});
+  if(mobile)await page.setViewportSize({width:390,height:844});await page.goto(app.baseURL);await expect(page.getByText('在线',{exact:true})).toBeVisible();if(mobile)await page.getByRole('button',{name:'菜单',exact:true}).click();await createWorldChat(page,seeded.id);
+  await page.getByRole('button',{name:'打开世界状态',exact:true}).click();let dialog=page.getByRole('dialog',{name:'世界状态',exact:true});await expect(dialog.getByLabel('已知线索')).toContainText('旧酒馆正在维修');await expect(dialog).not.toContainText(secret.text);expect(authorRequests).toHaveLength(0);
+  const chats=await (await request.get(app.baseURL+'/api/chats')).json() as Array<{id:string}>;const chat=chats.find(c=>c.id.includes('浏览器向导'))!;const route=app.baseURL+'/api/chats/'+chat.id.split('/').map(encodeURIComponent).join('/');const player=await (await request.get(route)).json();for(const value of [secret.id,secret.text,secret.description])expect(JSON.stringify(player)).not.toContain(value!);
+  await dialog.getByRole('button',{name:'作者视图（含秘密）',exact:true}).click();const author=dialog.getByLabel('作者世界视图');await author.getByText('查看完整模板与知识快照 JSON',{exact:true}).click();await expect(author).toContainText(secret.text);expect(authorRequests).toHaveLength(1);
+  await dialog.getByRole('button',{name:'关闭作者视图',exact:true}).click();await expect(dialog).not.toContainText(secret.text);
+  await dialog.getByRole('button',{name:'作者视图（含秘密）',exact:true}).click();await dialog.getByRole('button',{name:'修正状态',exact:true}).click();const area=dialog.getByLabel('世界快照 JSON',{exact:true});const raw=JSON.parse(await area.inputValue()) as WorldSnapshot;raw.knowledge!.push({actorId:'player',factId:secret.id,source:{type:'interaction',turn:1,interactionId:seeded.template.interactions![0].id,fromActorId:'innkeeper'}});await area.fill(JSON.stringify(raw));await dialog.getByRole('button',{name:'保存修正',exact:true}).click();await expect(page.getByText('世界状态已修正',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'打开世界状态',exact:true}).click();dialog=page.getByRole('dialog',{name:'世界状态',exact:true});await expect(dialog.getByLabel('已知线索')).toContainText(secret.text);await expect(dialog.getByLabel('已知线索')).toContainText('第 1 轮交互');await expect(dialog).not.toContainText(secret.description!);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+});
+
+test('v1 草稿显式启用 v2，新增秘密与初始知情可保存发布',async({page,app,request})=>{
+  const dialog=await openTemplates(page,app.baseURL);await dialog.getByLabel('新模板名').fill('新知识规则');await dialog.getByRole('button',{name:'新建空白',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('已创建空白模板');await dialog.getByRole('button',{name:'启用知识规则（v2）',exact:true}).click();await dialog.getByRole('button',{name:'添加事实',exact:true}).click();await dialog.getByLabel('事实 1 正文',{exact:true}).fill('窗台下藏着绿色账册。');await dialog.getByLabel('初始知情角色',{exact:true}).getByRole('checkbox').first().check();await dialog.getByRole('button',{name:'保存草稿',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('草稿已保存');await dialog.getByRole('button',{name:'发布模板',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('已发布版本');const summary=(await getLibrary(request,app.baseURL)).find(e=>e.name==='新知识规则')!;const saved=await getEditor(request,app.baseURL,summary.id);expect(saved.draft.schemaVersion).toBe(2);expect(saved.draft.facts![0].visibility).toBe('restricted');expect(saved.draft.initial.knowledge).toHaveLength(1);
+});

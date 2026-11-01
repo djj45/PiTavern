@@ -36,7 +36,8 @@ import { LibraryBackupStore } from "../stdata/library-backup.ts";
 import { attachLibraryBackupJobs, backupControlPath } from "./library-backup-jobs.ts";
 import { atomicWrite } from "../stdata/files.ts";
 import { ChatImportError, ChatImportService } from "../stdata/chat-import.ts";
-import { WorldValidationError } from "../world/index.ts";
+import { buildRoleWorldView } from "../world/knowledge.ts";
+import { createWorldTemplateRecord, createInitialWorldSnapshot, WorldValidationError } from "../world/index.ts";
 import { WorldChatMigrationLimitError } from "../world/chat-migration.ts";
 import { WorldTemplateConflictError, WorldTemplateNotFoundError } from "../world/template-library.ts";
 
@@ -979,6 +980,15 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   });
 
   // Explicit local-author management operation; never fetched by the default player snapshot.
+  app.post("/api/world/knowledge-preview",(req,res)=>{
+    try {
+      const record=createWorldTemplateRecord(req.body?.template), snapshot=createInitialWorldSnapshot(record);
+      const actorId=typeof req.body?.actorId === "string" ? req.body.actorId : record.template.initial.actorId;
+      if(!snapshot.actors[actorId]) {res.status(400).json({error:"预览角色不存在"});return;}
+      res.json(buildRoleWorldView(snapshot,record.template,actorId));
+    } catch {res.status(400).json({error:"模板知识规则无效，请检查事实、角色和交互引用"});}
+  });
+
   app.post("/api/chat/world/author", (req,res)=>{
     if(typeof req.body?.chatId !== "string") {res.status(400).json({error:"缺少聊天 ID"});return;}
     try {res.json(sessions.worldAuthorView(req.body.chatId));} catch {res.status(404).json({error:"无法读取作者世界"});}

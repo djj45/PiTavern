@@ -106,7 +106,7 @@ export class SessionManager {
     if(state?.snapshot.schemaVersion !== 2) return page;
     const session=this.sessions.get(chatId), staged=session?.running && session.worldTransaction?.status==="open" ? session.worldTransaction.snapshot : state.snapshot;
     const key=buildPlayerWorldView(staged,state.template).knowledgeKey;
-    return {...page,records:page.records.map(record=>{
+    return {...page,knowledgeKey:key,records:page.records.map(record=>{
       if(record.context?.workingSet?.knowledgeKey===key) return record;
       const {context:_,...rest}=record;
       return {...rest,contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
