@@ -40,6 +40,19 @@ const openWorld = async (page: Page) => {
   return dialog;
 };
 
+test('开始新对话必须先选择角色，并显示当前角色与世界', async ({ page, app }) => {
+  await page.goto(app.baseURL);
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  const start = page.getByRole('button', { name: /开始新对话/ });
+  await expect(start).toBeDisabled();
+  await expect(page.getByText('先选择一个角色，再开始新对话', { exact: true })).toBeVisible();
+  await page.locator('aside').getByRole('button', { name: '浏览器向导', exact: true }).click();
+  await expect(start).toBeEnabled();
+  await expect(start).toContainText('浏览器向导');
+  await page.getByLabel('新聊天世界模板').selectOption('tavern-sword');
+  await expect(page.getByText('世界：酒馆买剑', { exact: true })).toBeVisible();
+});
+
 test('世界模板选择、状态面板、旧聊天初始化与手工修正', async ({ page, app }) => {
   await page.goto(app.baseURL);
   await expect(page.getByText('在线', { exact: true })).toBeVisible();
@@ -85,7 +98,8 @@ test('世界模板选择、状态面板、旧聊天初始化与手工修正', as
 
   // 新建聊天时直接选择世界模板，开局即带初始快照。
   await page.getByLabel('新聊天世界模板').selectOption('tavern-sword');
-  await page.getByRole('button', { name: '＋ 开始新对话' }).click();
+  await page.locator('aside').getByRole('button', { name: '浏览器向导', exact: true }).click();
+  await page.getByRole('button', { name: /开始新对话/ }).click();
   await expect(page.getByRole('button', { name: '聊天操作', exact: true })).toBeEnabled();
   dialog = await openWorld(page);
   await expect(dialog).toContainText('酒馆买剑');
@@ -100,7 +114,8 @@ test('世界状态面板在 390px 手机宽度可用', async ({ page, app }) => 
   await expect(page.getByText('在线', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '菜单', exact: true }).click();
   await page.getByLabel('新聊天世界模板').selectOption('tavern-sword');
-  await page.getByRole('button', { name: '＋ 开始新对话' }).click();
+  await page.locator('aside').getByRole('button', { name: '浏览器向导', exact: true }).click();
+  await page.getByRole('button', { name: /开始新对话/ }).click();
   const worldButton = page.getByRole('button', { name: '打开世界状态', exact: true });
   await expect(worldButton).toBeVisible();
   await worldButton.click();

@@ -55,6 +55,7 @@ export function Sidebar({
   const [members, setMembers] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const selectedWorld = worldTemplates.find((template) => template.id === worldTemplateId);
 
   const importCards = async (files: FileList) => {
     setImporting(true);
@@ -139,14 +140,7 @@ export function Sidebar({
           >
             世界模板
           </button>
-          <button
-            type="button"
-          onClick={() => onNewChat(worldTemplateId || undefined)}
-          className="w-full rounded-md bg-tavern-accent/15 px-3 py-1.5 text-sm font-medium text-tavern-accent hover:bg-tavern-accent/25"
-        >
-          ＋ 开始新对话
-        </button>
-        <button type="button" onClick={() => { onClose(); onImportChat(); }}
+          <button type="button" onClick={() => { onClose(); onImportChat(); }}
           className="mt-2 w-full rounded border border-tavern-border px-3 py-1.5 text-sm hover:bg-tavern-raised">＋ 导入聊天</button>
         <button type="button" className="mt-2 w-full rounded border border-tavern-border px-3 py-1.5 text-sm" onClick={() => setGroupOpen((value) => !value)}>＋ 新建群聊</button>
         {groupOpen && <form aria-label="新建群聊" onSubmit={(event) => {
@@ -219,6 +213,23 @@ export function Sidebar({
                 {c.name}
               </button>
             ))}
+          </div>
+          <div className="mt-2 rounded-lg border border-tavern-accent/30 bg-tavern-accent/5 p-2">
+            <p className="mb-1 text-[11px] text-tavern-dim">
+              {selectedCharacter ? "用选中的角色开始新对话" : "先选择一个角色，再开始新对话"}
+            </p>
+            <button
+              type="button"
+              disabled={!selectedCharacter}
+              onClick={() => onNewChat(worldTemplateId || undefined)}
+              title={selectedCharacter ? "使用当前角色和上方世界模板开始新对话" : "请先在上方选择一个角色卡"}
+              className="w-full rounded-md bg-tavern-accent/15 px-3 py-2 text-left text-sm font-medium text-tavern-accent hover:bg-tavern-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {selectedCharacter ? `＋ 与「${selectedCharacter}」开始新对话` : "＋ 开始新对话（请先选择角色）"}
+            </button>
+            <p className="mt-1 break-words text-[11px] leading-4 text-tavern-dim">
+              世界：{selectedWorld?.name ?? "不启用世界"}
+            </p>
           </div>
         </section>
 

@@ -141,15 +141,15 @@ export function App() {
   }, [socket.send, showNotice]);
 
   const newChat = useCallback(async (worldTemplateId?: string) => {
-    const name = selectedCharacter ?? characters[0]?.name;
-    if (!name) { showNotice("数据目录里还没有角色卡，请先把 PNG 角色卡放入 characters/ 目录"); return; }
+    const name = selectedCharacter;
+    if (!name) { showNotice("请先在左侧选择一个角色卡，再开始新对话"); return; }
     try {
       const { id } = await api.createChat(name, undefined, worldTemplateId);
       openChat(id);
       setNavOpen(false);
       await refreshChats();
     } catch (e) { showNotice(`新建聊天失败: ${(e as Error).message}`); }
-  }, [selectedCharacter, characters, refreshChats, openChat, showNotice]);
+  }, [selectedCharacter, refreshChats, openChat, showNotice]);
 
   const selectGreeting = useCallback(async (selected: number): Promise<void> => {
     const chat = activeChatRef.current;

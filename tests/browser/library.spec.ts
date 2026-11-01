@@ -46,7 +46,7 @@ test('八个备用开局可选择和翻页，刷新保留选中正文并用于�
   await page.goto(app.baseURL);
   await page.getByRole('button', { name: '菜单', exact: true }).click();
   await page.locator('aside').getByRole('button', { name: '多开局向导', exact: true }).click();
-  await page.getByRole('button', { name: '＋ 开始新对话', exact: true }).click();
+  await page.getByRole('button', { name: /开始新对话/ }).click();
   const greetingButton = page.getByRole('button', { name: '开场白', exact: true });
   await expect(greetingButton).toBeVisible();
   await greetingButton.click();

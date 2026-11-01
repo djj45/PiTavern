@@ -90,8 +90,9 @@ const getEditor = async (request: APIRequestContext, baseURL: string, id: string
   (await request.get(`${baseURL}/api/world/template-library/${encodeURIComponent(id)}`)).json() as Promise<EditorDto>;
 
 const createWorldChat = async (page: Page, templateId: string) => {
+  await page.locator('aside').getByRole('button', { name: '浏览器向导', exact: true }).click();
   await page.getByLabel('新聊天世界模板').selectOption(templateId);
-  await page.getByRole('button', { name: '＋ 开始新对话', exact: true }).click();
+  await page.getByRole('button', { name: /开始新对话/ }).click();
   await expect(page.getByRole('button', { name: '打开世界状态', exact: true })).toBeVisible();
 };
 
@@ -378,8 +379,9 @@ test('仅修改名称后发布：新聊天使用新名称且不增加内容版�
   await dialog.getByRole('button', { name: '关闭世界模板' }).click();
   await expect(dialog).not.toBeVisible();
 
+  await page.locator('aside').getByRole('button', { name: '浏览器向导', exact: true }).click();
   await page.getByLabel('新聊天世界模板').selectOption(original.id);
-  await page.getByRole('button', { name: '＋ 开始新对话', exact: true }).click();
+  await page.getByRole('button', { name: /开始新对话/ }).click();
   await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
   const world = page.getByRole('dialog', { name: '世界状态' });
   await expect(world).toContainText('新名称');
