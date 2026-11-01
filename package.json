@@ -43,7 +43,8 @@
     "verify:world-templates": "npm run verify:world-templates -w apps/server",
     "verify:world-migration": "npm run verify:world-migration -w apps/server",
     "verify:character-cards": "npm run verify:character-cards -w apps/server",
-    "verify:chat-migration": "npm run verify:chat-migration -w apps/server"
+    "verify:chat-migration": "npm run verify:chat-migration -w apps/server",
+    "verify:context": "npm run verify:context -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

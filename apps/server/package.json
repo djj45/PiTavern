@@ -32,7 +32,8 @@
     "verify:world-templates": "tsx scripts/world-template-verify.ts",
     "verify:world-migration": "tsx scripts/world-migration-verify.ts",
     "verify:character-cards": "tsx scripts/character-cards-verify.ts",
-    "verify:chat-migration": "tsx scripts/chat-migration-verify.ts && tsx scripts/chat-migration-apply-verify.ts && tsx scripts/chat-migration-api-verify.ts && tsx scripts/chat-migration-game-verify.ts"
+    "verify:chat-migration": "tsx scripts/chat-migration-verify.ts && tsx scripts/chat-migration-apply-verify.ts && tsx scripts/chat-migration-api-verify.ts && tsx scripts/chat-migration-game-verify.ts",
+    "verify:context": "tsx scripts/context-baseline-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",
