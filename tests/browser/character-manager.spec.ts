@@ -321,6 +321,24 @@ test('从管理页导入 JSON 与 PNG 夹具后列表出现并显示格式与头
   await expect(page.locator('aside').getByRole('button', { name: '导入图片向导', exact: true })).toBeVisible();
 });
 
+test('新建空白角色卡：编辑保存后出现在侧栏和列表', async ({ page, app, request }) => {
+  const dialog = await openManager(page, app.baseURL);
+  await dialog.getByLabel('新建角色名称').fill('新建向导');
+  await dialog.getByRole('button', { name: '＋ 新建' }).click();
+  await expect(dialog.getByText('编辑：新建向导', { exact: false })).toBeVisible();
+  await dialog.getByLabel('描述').fill('新建描述');
+  await dialog.getByLabel('默认开场白').fill('新建开场白');
+  await dialog.getByRole('button', { name: '保存角色卡' }).click();
+  await expect(dialog.getByRole('status')).toContainText('已保存角色卡');
+  const created = (await cards(request, app.baseURL)).find((item) => item.name === '新建向导');
+  expect(created).toBeTruthy();
+  expect(created!.format).toBe('json');
+  expect(created!.description).toBe('新建描述');
+  expect(created!.firstMesPreview).toBe('新建开场白');
+  await dialog.getByRole('button', { name: '关闭角色卡管理' }).click();
+  await expect(page.locator('aside').getByRole('button', { name: '新建向导', exact: true })).toBeVisible();
+});
+
 test('角色卡管理在 390px 手机宽度可操作且无水平溢出', async ({ page, app }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const dialog = await openManager(page, app.baseURL, true);

@@ -114,6 +114,7 @@ export default function CharacterManagerDialog({ onClose, onChanged }: Character
   const [editor, setEditor] = useState<CharacterCardEditorDto | null>(null);
   const [form, setForm] = useState<CardForm | null>(null);
   const [copyName, setCopyName] = useState("");
+  const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -177,6 +178,25 @@ export default function CharacterManagerDialog({ onClose, onChanged }: Character
       await refreshList();
     } catch (cause) {
       setError("刷新角色卡列表失败：" + errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createCard = async () => {
+    const name = newName.trim();
+    if (!name) { setError("请输入新角色名称"); return; }
+    if (busy || !confirmDiscard("新建角色")) return;
+    setBusy(true); setError(""); setStatus("");
+    try {
+      const value = await api.createCharacterCard(name);
+      applyEditor(value);
+      setNewName("");
+      await refreshList();
+      setStatus("已新建角色卡「" + value.name + "」，请补充描述、开场白并保存");
+      onChanged();
+    } catch (cause) {
+      setError("新建角色失败：" + errorText(cause));
     } finally {
       setBusy(false);
     }
@@ -457,11 +477,19 @@ export default function CharacterManagerDialog({ onClose, onChanged }: Character
         <aside className="min-w-0 border-b border-tavern-border bg-tavern-panel/60 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="space-y-2 border-b border-tavern-border p-3">
             <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={busy || loading || !newName.trim()} onClick={() => void createCard()} className={buttonClass}>＋ 新建</button>
               <button type="button" disabled={busy || loading} onClick={() => fileInput.current?.click()} className={buttonClass}>＋ 导入</button>
               <input ref={fileInput} type="file" accept=".png,.json,.charx,.byaf" hidden aria-label="导入角色卡文件"
                 onChange={(event) => void importFile(event.target.files?.[0])} />
               <button type="button" disabled={busy || loading} onClick={() => void refresh()} className={buttonClass}>刷新列表</button>
             </div>
+            <label className="block text-xs text-tavern-dim">新建角色名称
+              <div className="mt-1 flex gap-2">
+                <input aria-label="新建角色名称" className={fieldClass} value={newName} maxLength={200} disabled={busy || loading}
+                  placeholder="输入名称后点＋新建" onChange={(event) => setNewName(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createCard(); } }} />
+              </div>
+            </label>
             <label className="block text-xs text-tavern-dim">搜索角色卡
               <input aria-label="搜索角色卡" className={fieldClass} value={query} disabled={loading}
                 placeholder="名称、标签、描述或文件名" onChange={(event) => setQuery(event.target.value)} />

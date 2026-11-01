@@ -7,6 +7,7 @@
 管理页提供：
 
 - 列出 `characters/` 下所有角色卡：头像、名称、格式、描述摘要、标签、卡内世界书条目数、世界引用、聊天数。
+- 新建空白 JSON 角色卡：输入唯一名称，生成空字段卡并进入编辑。
 - 查看/编辑常用角色卡字段：描述、性格、场景、默认开场白、备用开场白、示例对话、作者备注、系统提示、历史后指令、标签。
 - 保留 PNG 图像、V2/V3 `chara`/`ccv3` 两个数据块、未知字段和卡片扩展；JSON 卡保留原顶层结构。
 - 从管理页导入 PNG / JSON / CharX / BYAF（复用现有导入接口）。
@@ -54,6 +55,7 @@
 ## 4. API
 
 - `GET /api/character-cards`：摘要数组。
+- `POST /api/character-cards`：`{ name }` 新建空白 JSON 卡；名称/文件冲突 409。
 - `GET /api/character-cards/:name`：完整编辑 DTO + revision。
 - `PUT /api/character-cards/:name`：`{ revision, fields }`；409 冲突。
 - `POST /api/character-cards/:name/duplicate`：`{ name? }`；默认 `原名 副本`，自动避开重名。

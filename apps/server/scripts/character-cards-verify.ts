@@ -292,6 +292,19 @@ try {
   noTemporaryFiles();
   console.log("✓ JSON spec/data 与扁平结构分别编辑，顶层/未知字段和卡内世界书保留");
 
+  const created = manager.create("新建向导");
+  assert.equal(created.name, "新建向导");
+  assert.equal(created.format, "json");
+  assert.equal(created.file, "characters/新建向导.json");
+  assert.equal(created.chatCount, 0);
+  assert.equal(created.description, "");
+  assert.deepEqual(created.alternateGreetingTexts, []);
+  assert.ok(fs.existsSync(path.join(charactersDir, "新建向导.json")));
+  assert.throws(() => manager.create("新建向导"), CharacterCardConflictError);
+  assert.throws(() => manager.create("   "), /不能为空/);
+  noTemporaryFiles();
+  console.log("✓ 新建空白 JSON 角色卡：唯一文件名、空字段、重名/空名拒绝");
+
   const firstCopy = manager.duplicate("PNG向导");
   assert.equal(firstCopy.name, "PNG向导 副本");
   assert.equal(firstCopy.format, "png");
@@ -354,6 +367,17 @@ try {
   const base = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
   const cardRoute = (name: string) => base + "/api/character-cards/" + encodeURIComponent(name);
   try {
+    const createResponse = await fetch(base + "/api/character-cards", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "HTTP新建" }),
+    });
+    assert.equal(createResponse.status, 200);
+    const httpCreated = await createResponse.json() as CharacterCardEditorDto;
+    assert.equal(httpCreated.name, "HTTP新建");
+    assert.equal(httpCreated.format, "json");
+    const duplicateCreate = await fetch(base + "/api/character-cards", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "HTTP新建" }),
+    });
+    assert.equal(duplicateCreate.status, 409);
     const listResponse = await fetch(base + "/api/character-cards");
     assert.equal(listResponse.status, 200);
     const list = await listResponse.json() as CharacterCardSummaryDto[];
@@ -434,7 +458,7 @@ try {
   console.log("✓ 删除只移除角色卡文件，聊天与复制卡保留");
 
   const finalList = manager.list();
-  assert.equal(finalList.length, 5);
+  assert.equal(finalList.length, 7);
   assert.equal(finalList.find((item) => item.name === "扁平向导")!.chatCount, 0);
   assert.equal(backupNames(pngFile).length, 3);
   noTemporaryFiles();

@@ -161,6 +161,33 @@ export class CharacterCardManager {
     return this.editor(entry, buffer);
   }
 
+  /** 新建空白 JSON 角色卡；不写头像，名称唯一，文件独占创建。 */
+  create(nameInput: unknown): CharacterCardEditorDto {
+    const name = validateCardName(nameInput);
+    if (this.characters.getEntry(name)) throw new CharacterCardConflictError(`同名角色已存在：${name}`);
+    const target = this.newCardFile(name, "json");
+    if (fs.existsSync(target)) throw new CharacterCardConflictError(`角色卡文件名已存在：${path.basename(target)}`);
+    const raw = {
+      spec: "chara_card_v2", spec_version: "2.0",
+      data: {
+        name, description: "", personality: "", scenario: "", first_mes: "", mes_example: "",
+        creator_notes: "", system_prompt: "", post_history_instructions: "",
+        alternate_greetings: [], tags: [], creator: "", character_version: "", extensions: {},
+      },
+    };
+    const content = Buffer.from(JSON.stringify(raw, null, 2) + "\n");
+    try {
+      this.exclusiveWrite(target, content);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new CharacterCardConflictError(`角色卡文件名已存在：${path.basename(target)}`);
+      }
+      throw error;
+    }
+    this.characters.invalidate();
+    return this.read(name);
+  }
+
   /** 带 revision 的保存；写前备份，冲突不落盘、不产生临时文件。 */
   save(name: string, expectedRevision: string, input: unknown): CharacterCardEditorDto {
     if (typeof expectedRevision !== "string" || !expectedRevision) throw new Error("缺少角色卡版本");

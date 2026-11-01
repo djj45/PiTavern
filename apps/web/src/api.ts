@@ -147,6 +147,9 @@ export const api = {
   testVectors: () => fetch("/api/vectors/test", { method: "POST" }).then((r) => json<{ ok: boolean; dimensions: number }>(r)),
   characters: () => fetch("/api/characters").then((r) => json<CharacterDto[]>(r)),
   characterCards: () => fetch("/api/character-cards").then((r) => json<CharacterCardSummaryDto[]>(r)),
+  createCharacterCard: (name: string) => fetch("/api/character-cards", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+  }).then((r) => json<CharacterCardEditorDto>(r)),
   characterCard: (name: string) => fetch("/api/character-cards/" + encodeURIComponent(name))
     .then((r) => json<CharacterCardEditorDto>(r)),
   saveCharacterCard: (name: string, revision: string, fields: CharacterCardFieldsDto) =>

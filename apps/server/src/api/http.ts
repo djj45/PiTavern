@@ -490,6 +490,17 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     catch (error) { characterCardError(res, error); }
   });
 
+  app.post("/api/character-cards", (req, res) => {
+    if (!allowCharacterCardWrite(res)) return;
+    const { name } = req.body ?? {};
+    if (typeof name !== "string") { res.status(400).json({ error: "角色名称必须是文本" }); return; }
+    try {
+      const editor = characterCards.create(name);
+      sessions.libraryChanged();
+      res.json(editor);
+    } catch (error) { characterCardError(res, error); }
+  });
+
   app.get("/api/character-cards/:name/export", (req, res) => {
     try {
       const exported = characterCards.export(String(req.params.name));
