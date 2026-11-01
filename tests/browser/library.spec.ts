@@ -511,6 +511,10 @@ test('底部模型选择、加宽回复区、自动候选与历史分支弹窗',
   for (const name of ['STscript', '作者注释', '备份与恢复', '导出 MD', '导出 JSONL']) {
     await expect(chatMenu.getByRole('menuitem', { name, exact: true })).toBeVisible();
   }
+  const downloadPromise = page.waitForEvent('download');
+  await chatMenu.getByRole('menuitem', { name: '导出 JSONL', exact: true }).click();
+  const exportDownload = await downloadPromise;
+  expect(exportDownload.suggestedFilename()).toMatch(/\.jsonl$/);
   await page.keyboard.press('Escape');
   await expect(chatMenu).toHaveCount(0);
   await page.getByRole('button', { name: '统计', exact: true }).click();

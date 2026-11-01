@@ -1072,8 +1072,12 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     const baseName = (chatId.split("/").pop() ?? "chat").replace(/\.jsonl$/, "");
     const format = req.query.format === "jsonl" ? "jsonl" : "md";
     if (format === "jsonl" && file) {
+      const fileName = `${baseName}.jsonl`;
+      // 同时给出 ASCII filename 与 RFC 5987 filename*；部分浏览器只认前者，否则会按
+      // application/x-ndjson 的 MIME 类型保存成 .ndjson。
+      const asciiName = (baseName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_") || "chat") + ".jsonl";
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${baseName}.jsonl`)}`);
+      res.setHeader("Content-Disposition", `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       res.send(fs.readFileSync(file, "utf8"));
       return;
     }
