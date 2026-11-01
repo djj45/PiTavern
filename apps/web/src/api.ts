@@ -10,6 +10,8 @@ import type {
   ChatBackupDto,
   GenerationPageDto,
   ChatBackupPreviewDto,
+  ChatImportPreviewDto,
+  ChatImportResultDto,
   ChatPageDto,
   ChatSnapshotDto,
   ChatSummaryDto,
@@ -35,6 +37,38 @@ async function json<T>(res: Response): Promise<T> {
     throw new Error(body.error ?? `${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+/** 保留 HTTP 状态与响应体的接口错误，供聊天导入区分重复（409）与校验失败（422）。 */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+const chatImportBody = (file: File) => ({
+  method: "POST",
+  headers: {
+    "Content-Type": "application/octet-stream",
+    // fetch 头只允许 ByteString，中文/空格文件名必须先编码再交给服务端解码。
+    "x-file-name": encodeURIComponent(file.name),
+  },
+  body: file,
+});
+
+async function readJsonBody(response: Response): Promise<unknown> {
+  return response.json().catch(() => null);
+}
+
+function isChatImportPreview(value: unknown): value is ChatImportPreviewDto {
+  const preview = value as ChatImportPreviewDto | null;
+  return !!preview && typeof preview === "object" && typeof preview.valid === "boolean"
+    && typeof preview.sha256 === "string" && Array.isArray(preview.errors);
 }
 
 export const api = {
@@ -172,6 +206,26 @@ export const api = {
   restoreBackup: (chatId: string, backupId: string, revision: string) =>
     fetch("/api/chat/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, backupId, revision }) }).then((r) => json<{ ok: boolean }>(r)),
+  previewChatImport: async (file: File): Promise<ChatImportPreviewDto> => {
+    const response = await fetch("/api/chat-import/preview", chatImportBody(file));
+    const payload = await readJsonBody(response);
+    if (response.ok) return payload as ChatImportPreviewDto;
+    // 预览接口可能用 422/409 返回完整预览；此时仍展示逐行错误与重复信息。
+    const body = payload as { preview?: unknown; error?: string } | null;
+    if (isChatImportPreview(body?.preview)) return body.preview;
+    if (isChatImportPreview(payload)) return payload;
+    throw new ApiError(body?.error ?? `${response.status} ${response.statusText}`, response.status, payload);
+  },
+  importChat: async (file: File, options: { character: string; sha256: string; title: string }): Promise<ChatImportResultDto> => {
+    const query = new URLSearchParams({ character: options.character, sha256: options.sha256, title: options.title });
+    const response = await fetch("/api/chat-import?" + query, chatImportBody(file));
+    const payload = await readJsonBody(response);
+    if (!response.ok) {
+      const body = payload as { error?: string } | null;
+      throw new ApiError(body?.error ?? `${response.status} ${response.statusText}`, response.status, payload);
+    }
+    return payload as ChatImportResultDto;
+  },
   importCharacter: (file: File) =>
     fetch("/api/import/character", {
       method: "POST",

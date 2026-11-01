@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CharacterStore } from '../src/stdata/characters.ts';
 import { ChatStore } from '../src/stdata/chats.ts';
+import { ChatImportService } from '../src/stdata/chat-import.ts';
 import { LibraryBackupStore } from '../src/stdata/library-backup.ts';
 import { LibraryStore } from '../src/stdata/library.ts';
 import { fixtureCard } from './card-fixtures.ts';
@@ -43,6 +44,52 @@ const backups = new LibraryBackupStore(config.stDataDir), archive = await backup
 const preview = await backups.preview(fs.createReadStream(archive)); const restore = await backups.restore(preview.id, config);
 assert.deepEqual(inventory(restore.stDataDir), baseline, '副本导出恢复逐文件 SHA-256 一致');
 assert.deepEqual(inventory(sourceRoot), baseline, '验收前后原资料未改变');
+// 真实副本上的单文件导入闭环：只从副本读源聊天，写入另一个隔离目录，不修改原资料。
+const importSource = new ChatStore(config.stDataDir);
+const importSourceChats = importSource.listChats();
+const importCards = new CharacterStore(path.join(config.stDataDir, 'characters')).listCharacters();
+let chatImport: { status: string; sourceChat?: string; bytes?: number; warnings?: number; reason?: string } = { status: 'skipped_no_chats' };
+if (!importSourceChats.length) chatImport = { status: 'skipped_no_chats', reason: '本机副本没有聊天' };
+else if (!importCards.length) chatImport = { status: 'skipped_no_characters', reason: '本机副本没有角色卡' };
+else {
+  const importRoot = path.join(runDir, 'import-copy');
+  fs.mkdirSync(path.join(importRoot, 'characters'), { recursive: true });
+  for (const name of fs.readdirSync(path.join(config.stDataDir, 'characters'))) {
+    const from = path.join(config.stDataDir, 'characters', name);
+    if (fs.lstatSync(from).isFile() && !fs.lstatSync(from).isSymbolicLink()) fs.copyFileSync(from, path.join(importRoot, 'characters', name));
+  }
+  const importStore = new ChatStore(importRoot);
+  const importService = new ChatImportService(importRoot, importStore, new CharacterStore(path.join(importRoot, 'characters')));
+  let selected: { chat: { id: string }; buffer: Buffer; preview: ReturnType<ChatImportService['preview']> } | undefined;
+  const rejected: string[] = [];
+  for (const chat of importSourceChats) {
+    const file = importSource.resolveChatFile(chat.id);
+    if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
+    const buffer = fs.readFileSync(file);
+    const preview = importService.preview(buffer, path.basename(file));
+    if (preview.valid) { selected = { chat, buffer, preview }; break; }
+    rejected.push(chat.id + ': ' + (preview.errors[0]?.message ?? '校验失败'));
+  }
+  if (!selected) chatImport = { status: 'skipped_no_strictly_valid_chat', reason: rejected.slice(0, 3).join('；') };
+  else {
+    const character = selected.preview.suggestedCharacter ?? importCards[0].name;
+    const result = importService.import(selected.buffer, {
+      fileName: path.basename(selected.chat.id), character, expectedSha256: selected.preview.sha256,
+    });
+    const document = importStore.readDocument(result.id);
+    assert.ok(document, '真实副本聊天导入后必须可读取');
+    assert.equal(document!.character, character);
+    assert.equal(document!.lines.length, selected.preview.messages);
+    const importedMetadata = importStore.readMetadata(result.id);
+    assert.equal((importedMetadata._pitavernImport as { sha256?: string } | undefined)?.sha256, selected.preview.sha256);
+    if (selected.preview.world) assert.ok(importStore.readWorld(result.id), '真实副本导入后世界快照必须仍可读取');
+    chatImport = {
+      status: 'passed', sourceChat: selected.chat.id, bytes: selected.buffer.length,
+      warnings: selected.preview.warnings.length,
+    };
+  }
+}
+assert.deepEqual(inventory(config.stDataDir), baseline, '导入验收后副本原资料仍未被修改');
 const requestedProvider = process.argv.includes('--provider');
 let provider: { status: string; reason?: string } = { status: 'not_requested', reason: '真实供应商验收需显式传入 --provider；仅发送合成短消息' };
 if (requestedProvider) {
@@ -63,7 +110,7 @@ if (requestedProvider) {
     finally { clearTimeout(timer); }
   }
 }
-const report = { createdAt: new Date().toISOString(), sourceFiles: Object.keys(baseline).length, sourceCharacters: cards.length, sourceChats: new ChatStore(sourceRoot).listChats().length, resources: library.list().length, byteExactRestore: true, originalUnchanged: true, provider, problems };
+const report = { createdAt: new Date().toISOString(), sourceFiles: Object.keys(baseline).length, sourceCharacters: cards.length, sourceChats: new ChatStore(sourceRoot).listChats().length, resources: library.list().length, byteExactRestore: true, originalUnchanged: true, chatImport, provider, problems };
 fs.writeFileSync(path.join(runDir, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
 console.log(JSON.stringify(report, null, 2)); console.log('验收产物仅保存在：' + runDir);
 if (requestedProvider && provider.status !== 'passed') process.exitCode = 2;

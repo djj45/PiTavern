@@ -464,6 +464,46 @@ export class ChatStore {
     return meta;
   }
 
+  /**
+   * 单文件导入：只创建新文件，绝不覆盖已有聊天。先写同目录临时文件，再用 link 原子发布；
+   * 失败时清理临时文件，不留下半个聊天。
+   */
+  importChat(character: string, source: string): ChatMeta {
+    const dir = this.characterChatsDir(character);
+    fs.mkdirSync(dir, { recursive: true });
+    const temporary = path.join(dir, ".pitavern-import-" + randomUUID() + ".tmp");
+    let created: string | undefined;
+    try {
+      const fd = fs.openSync(temporary, "wx", 0o600);
+      try { fs.writeFileSync(fd, source); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      let file = path.join(dir, stChatFileName());
+      for (let attempt = 0; attempt < 10_000; attempt++) {
+        try {
+          fs.linkSync(temporary, file);
+          created = file;
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          file = path.join(dir, stChatFileName(new Date(Date.now() + (attempt + 1) * 1000)));
+        }
+      }
+      if (!created) throw new Error("无法为导入的聊天分配文件名");
+      const meta = this.statChat(created);
+      if (!meta) throw new Error("无法读取导入的聊天");
+      return meta;
+    } catch (error) {
+      if (created) {
+        try { fs.rmSync(created, { force: true }); } catch { /* 清理失败时保留原错误。 */ }
+        this.documents.delete(created);
+        this.summaries.delete(created);
+        this.branchIndexes.delete(created);
+      }
+      throw error;
+    } finally {
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+
   /** Compare against the captured source before replacing it; never overwrite an external edit. */
   private replaceSource(chatId: string, expected: string, next: string, backup = true): void {
     const file = this.resolveChatFile(chatId);

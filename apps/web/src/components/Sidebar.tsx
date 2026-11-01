@@ -13,6 +13,7 @@ interface SidebarProps {
   activeChatId: string | null;
   onOpenChat: (chatId: string) => void;
   onNewChat: (worldTemplateId?: string) => void;
+  onImportChat: () => void;
   onNewGroup: (name: string, members: string[]) => Promise<boolean>;
   onDeleteChat: (chatId: string) => void;
   /** 置顶/重命名/归档成功后刷新对话列表。 */
@@ -33,6 +34,7 @@ export function Sidebar({
   activeChatId,
   onOpenChat,
   onNewChat,
+  onImportChat,
   onNewGroup,
   onDeleteChat,
   onChatsChanged,
@@ -133,6 +135,8 @@ export function Sidebar({
         >
           ＋ 开始新对话
         </button>
+        <button type="button" onClick={() => { onClose(); onImportChat(); }}
+          className="mt-2 w-full rounded border border-tavern-border px-3 py-1.5 text-sm hover:bg-tavern-raised">＋ 导入聊天</button>
         <button type="button" className="mt-2 w-full rounded border border-tavern-border px-3 py-1.5 text-sm" onClick={() => setGroupOpen((value) => !value)}>＋ 新建群聊</button>
         {groupOpen && <form aria-label="新建群聊" onSubmit={(event) => {
           event.preventDefault(); if (creating) return; setCreating(true);

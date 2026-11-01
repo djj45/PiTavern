@@ -5,7 +5,7 @@
  * 两端 TS 会同时报错，避免契约漂移。
  */
 
-export const PITAVERN_VERSION = "0.3.0";
+export const PITAVERN_VERSION = "0.4.0";
 
 /** SillyTavern instruct 预设的单人对话字段。 */
 export interface InstructTemplate {
@@ -443,6 +443,70 @@ export interface ChatBackupPreviewDto {
   total: number;
   /** Current chat revision, checked again when restoring. */
   revision: string;
+}
+
+export type ChatImportIssueCode = "encoding" | "size" | "limit" | "json" | "depth" | "structure" | "metadata" | "world" | "unsafe";
+
+/** 单个聊天 JSONL 导入的校验问题；line 为 1-based 物理行号。 */
+export interface ChatImportIssueDto {
+  code: ChatImportIssueCode;
+  line?: number;
+  /** 字段路径，例如 chat_metadata._pitavernWorld。 */
+  path?: string;
+  message: string;
+}
+
+export interface ChatImportWorldPreviewDto {
+  /** 头部快照、回合检查点和候选快照的总数。 */
+  snapshots: number;
+  /** 快照引用到的模板记录数。 */
+  templates: number;
+  templateIds: string[];
+  templateNames: string[];
+  templateVersion?: number;
+  rulesVersion?: number;
+  capability: "enabled" | "read-only";
+  reason?: string;
+}
+
+/** 选择文件后的只读预览；valid=false 时不能导入。 */
+export interface ChatImportPreviewDto {
+  sha256: string;
+  bytes: number;
+  lines: number;
+  fileName: string;
+  valid: boolean;
+  issueCount: number;
+  errors: ChatImportIssueDto[];
+  warnings: string[];
+  hasHeader: boolean;
+  detectedCharacter: string | null;
+  suggestedCharacter: string | null;
+  characterKnown: boolean;
+  userNames: string[];
+  assistantNames: string[];
+  group?: { name: string; members: string[]; missingMembers: string[] };
+  messages: number;
+  userMessages: number;
+  assistantMessages: number;
+  systemMessages: number;
+  hiddenMessages: number;
+  branchPoints: number;
+  candidates: number;
+  hiddenContinuations: number;
+  hiddenBranches: number;
+  firstPreview: string;
+  lastPreview: string;
+  world?: ChatImportWorldPreviewDto;
+  suggestedTitle: string;
+  duplicate?: { chatId: string; title: string };
+}
+
+export interface ChatImportResultDto {
+  id: string;
+  title: string;
+  character: string;
+  warnings: string[];
 }
 
 export interface ChatSnapshotDto {

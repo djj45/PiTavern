@@ -31,6 +31,7 @@ import { LibraryStore } from "../stdata/library.ts";
 import { LibraryBackupStore } from "../stdata/library-backup.ts";
 import { attachLibraryBackupJobs, backupControlPath } from "./library-backup-jobs.ts";
 import { atomicWrite } from "../stdata/files.ts";
+import { ChatImportError, ChatImportService } from "../stdata/chat-import.ts";
 
 export interface HttpDeps {
   config: TavernConfig;
@@ -86,6 +87,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   const app = express();
   const library = new LibraryStore(deps.stDataDir);
   const libraryBackups = new LibraryBackupStore(deps.stDataDir);
+  const chatImports = new ChatImportService(deps.stDataDir, chats, characters);
   app.use("/api", (req, res, next) => {
     if (sessions.writeBlocked && req.path !== "/status" && !backupControlPath(req.path)) return res.status(503).json({ error: sessions.writeBlocked });
     next();
@@ -537,6 +539,54 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       sessions.libraryChanged();
       res.json({ ok: true, name: safeName, entryCount: entries.length });
     } catch (error) { res.status(400).json({ error: (error as Error).message }); }
+  });
+
+  const importFileName = (req: Request): string => {
+    const header = req.get("x-file-name");
+    if (!header) return "chat.jsonl";
+    try { return decodeURIComponent(header); } catch { return header; }
+  };
+
+  /** 单文件聊天 JSONL：严格校验预览；不写入任何文件。 */
+  app.post("/api/chat-import/preview", express.raw({ type: "*/*", limit: "32mb" }), (req, res) => {
+    if (!Buffer.isBuffer(req.body)) { res.status(400).json({ error: "请上传 JSONL 文件内容" }); return; }
+    try {
+      res.json(chatImports.preview(req.body, importFileName(req)));
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** 导入聊天：重新校验、选择已有角色关联、原子创建新聊天；重复文件返回 409。 */
+  app.post("/api/chat-import", express.raw({ type: "*/*", limit: "32mb" }), (req, res) => {
+    if (!Buffer.isBuffer(req.body)) { res.status(400).json({ error: "请上传 JSONL 文件内容" }); return; }
+    const { character, sha256, title } = req.query;
+    if (typeof character !== "string" || !character.trim() || (sha256 !== undefined && typeof sha256 !== "string")
+      || (title !== undefined && typeof title !== "string")) {
+      res.status(400).json({ error: "导入参数无效" });
+      return;
+    }
+    try {
+      sessions.assertIdle();
+      const result = chatImports.import(req.body, {
+        fileName: importFileName(req),
+        character,
+        ...(typeof sha256 === "string" ? { expectedSha256: sha256 } : {}),
+        ...(typeof title === "string" ? { title } : {}),
+      });
+      sessions.libraryChanged();
+      res.json(result);
+    } catch (error) {
+      if (error instanceof ChatImportError) {
+        res.status(error.code === "invalid" ? 422 : 409).json({
+          error: error.message,
+          ...(error.issues.length ? { issues: error.issues } : {}),
+          ...(error.duplicate ? { duplicate: error.duplicate } : {}),
+        });
+        return;
+      }
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.get("/api/characters/:name/avatar", (req: Request, res: Response) => {

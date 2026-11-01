@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { BranchPathStepDto, ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import type { BranchPathStepDto, ChatImportResultDto, ChatSummaryDto, CharacterDto, ClientMessage, ConnectionDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import type { WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { api } from "./api.ts";
 import { useTavernSocket } from "./socket.ts";
 import { isToolItem } from "./chatItems.ts";
 import { chatReducer, EMPTY_USAGE } from "./chatState.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { ImportChatDialog } from "./components/ImportChatDialog.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { ChatView } from "./components/ChatView.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
@@ -23,6 +24,7 @@ export function App() {
   const [chatStates, dispatch] = useReducer(chatReducer, {});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [maintenance, setMaintenance] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -39,6 +41,8 @@ export function App() {
   const historyRequests = useRef(new Set<string>());
   const activeChatIdRef = useRef<string | null>(null);
   activeChatIdRef.current = activeChatId;
+  const selectedCharacterRef = useRef<string | null>(selectedCharacter);
+  selectedCharacterRef.current = selectedCharacter;
   const sendRef = useRef<(message: ClientMessage) => boolean>(() => false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const listRequest = useRef(0);
@@ -56,10 +60,10 @@ export function App() {
     api.characters().then(setCharacters).catch((e: Error) => showNotice(`读取角色失败: ${e.message}`)), [showNotice]);
   const refreshWorldTemplates = useCallback(() =>
     api.worldTemplates().then(setWorldTemplates).catch((e: Error) => showNotice(`读取世界模板失败: ${e.message}`)), [showNotice]);
-  const refreshChats = useCallback(async () => {
+  const refreshChats = useCallback(async (character: string | null = selectedCharacter) => {
     const request = ++listRequest.current;
     try {
-      const list = await api.chats(selectedCharacter ?? undefined);
+      const list = await api.chats(character ?? undefined);
       if (request === listRequest.current) setChats(list);
     } catch (e) {
       if (request === listRequest.current) showNotice(`读取聊天列表失败: ${(e as Error).message}`);
@@ -76,17 +80,17 @@ export function App() {
       if (!event.message && activeChatIdRef.current) sendRef.current({ type: "chat.sync", chatId: activeChatIdRef.current });
     } else if (event.type === "library.changed") {
       void refreshCharacters();
-      void refreshChats();
+      void refreshChats(selectedCharacterRef.current);
       if (activeChatIdRef.current) sendRef.current({ type: "chat.sync", chatId: activeChatIdRef.current });
     } else if (event.type === "hello") {
       setMaintenance(event.maintenance ?? "");
       const chatId = activeChatIdRef.current;
       if (!event.maintenance) {
         if (chatId) sendRef.current({ type: "chat.sync", chatId });
-        void refreshChats();
+        void refreshChats(selectedCharacterRef.current);
       }
     } else if (event.type === "chat.finished" || event.type === "chat.snapshot") {
-      void refreshChats();
+      void refreshChats(selectedCharacterRef.current);
     } else if (event.type === "chat.error") {
       showNotice(`聊天失败: ${event.message}`);
     }
@@ -269,6 +273,17 @@ export function App() {
     } catch (e) { showNotice(`删除失败: ${(e as Error).message}`); }
   }, [refreshChats, showNotice]);
 
+  const importedChat = useCallback(async (result: ChatImportResultDto) => {
+    // 导入角色可能不在当前筛选内；先回到“全部”再刷新，确保新聊天立即可见。
+    // 同步更新 ref，避免随后到达的 library.changed 仍按旧筛选刷新列表。
+    selectedCharacterRef.current = null;
+    setSelectedCharacter(null);
+    await refreshChats(null);
+    openChat(result.id);
+    setNavOpen(false);
+    showNotice(`已导入聊天「${result.title}」` + (result.warnings.length ? `；${result.warnings.join("；")}` : ""));
+  }, [refreshChats, openChat, showNotice]);
+
   const modelOptions = connection?.providers.flatMap((provider) => provider.models.map((model) => ({
     providerId: provider.id,
     providerName: provider.name,
@@ -291,7 +306,7 @@ export function App() {
       {maintenance && <p role="status" className="shrink-0 border-b border-tavern-border bg-tavern-raised px-4 py-2 text-sm text-tavern-accent">{maintenance}</p>}
       <div className="relative flex min-h-0 flex-1">
         <Sidebar characters={characters} worldTemplates={worldTemplates} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
-          chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onNewGroup={async (name, members) => {
+          chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onImportChat={() => setImportOpen(true)} onNewGroup={async (name, members) => {
             try { const { id } = await api.createGroup(name, members); setSelectedCharacter(null); openChat(id); await refreshChats(); return true; }
             catch (error) { showNotice("创建群聊失败: " + (error as Error).message); return false; }
           }} onDeleteChat={deleteChat} onChatsChanged={() => { void refreshChats(); }}
@@ -325,6 +340,7 @@ export function App() {
       {libraryOpen && <Suspense fallback={<p role="status" className="fixed bottom-4 right-4 rounded bg-tavern-panel p-3">正在打开资料库…</p>}>
         <LibraryDialog scope={connection?.stDataDir ?? ""} onClose={() => setLibraryOpen(false)} />
       </Suspense>}
+      {importOpen && <ImportChatDialog characters={characters} onClose={() => setImportOpen(false)} onImported={importedChat} />}
     </div>
   );
 }

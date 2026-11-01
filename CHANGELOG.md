@@ -1,5 +1,28 @@
 # 变更记录
 
+## 0.4.0 — 2026-11-01
+
+单文件聊天 JSONL 导入：严格校验、只读预览、选择已有角色关联、原子创建并打开；重复文件按 SHA-256 阻止。完整契约见 [聊天导入契约](docs/CHAT_IMPORT.md)，升级与验收见 [发布说明](docs/RELEASE.md)。
+
+### 聊天导入
+
+- 新增严格 JSONL 解析器与预览契约：校验头部/消息结构，保留消息与 `chat_metadata` 未知字段；支持无头 JSONL、BOM/CRLF、原版 `swipes`/`swipe_id`/`swipe_info`，拒绝 JSON 数组、Markdown/HTML、ZIP 和原版群组文件。
+- 未知字段、候选、隐藏 continuation、变量、世界快照和 `_pitavernWorldTemplates` 原样保留；结构损坏的世界快照拒绝并定位行/字段；模板缺失、哈希/版本不匹配或规则版本未知时只读并警告，不静默套用新模板。
+- 补强原生候选与首行边界：`swipe_info[].extra` 复用消息 `extra` 的扩展字段/世界快照/候选校验；原生 `swipes` 候选计入 10000 节点预算并覆盖跨消息累计；首行带 `mes` 字段（即使类型非法）按消息校验，不再误判为空聊天头。
+- 新增 `POST /api/chat-import/preview` 与 `POST /api/chat-import`；导入端重新解析上传字节、校验 SHA-256 和角色存在性。导入索引保存在 `<stDataDir>/.pitavern/chat-imports/index.json`，随整库备份；索引损坏时保留副本并重建。
+- 重复文件按原始字节 SHA-256 阻止并返回已有聊天；标题优先保留原 `_pitavernTitle`，否则用上传文件名，重名追加 ` (2)`、` (3)`……。导入只创建新文件：同目录临时文件 + 原子发布，失败或索引写入失败会清理刚创建的聊天。
+- 侧栏新增「＋ 导入聊天」：选择文件 → 只读预览（字节/行数、消息与分支统计、错误、警告、世界只读原因）→ 关联已有角色卡/确认标题 → 导入并打开；浏览器用例包含 390px 移动端流程。
+- 单文件仅包含聊天本身，不含角色卡、独立生成记录/用量、供应商配置、persona、全局世界书、正则或预设；完整迁移仍使用整库归档。
+
+### 文档与兼容
+
+- 修正导出语义：**JSONL 导出原样返回整份聊天文件**，包含未选中的候选、隐藏 continuation、变量和世界模板表；**MD 导出只包含当前活动路径的可见消息**。两者都不含角色卡、生成记录和供应商配置。
+- 同步 README、RELEASE、COMPATIBILITY 和 WORLD_ENGINE 的 0.4.0 导入入口与边界；自定义模板编辑器和模板热更新仍属 0.5/0.6。
+
+### 验收
+
+- 新增 `npm run verify:chat-import` 服务端专项（49 项）与浏览器导入用例（4 项）；本次本地验收离线 CI 19 组、浏览器 39 项通过。真实供应商保留 not_requested，未执行项见发布说明。
+
 ## 0.3.0 — 2026-11-01
 
 World Engine v0.1 首个正式版本（M0–M5）：世界快照/模板进入聊天 JSONL，回合事务、候选分支、重生成、文本编辑和备份恢复保持一致；Agent 工具、World Digest、世界 UI、旧聊天绑定和手工修正完成闭环。完整设计见 [docs/WORLD_ENGINE.md](docs/WORLD_ENGINE.md)，升级与验收见 [docs/RELEASE.md](docs/RELEASE.md)。

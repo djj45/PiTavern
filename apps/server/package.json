@@ -1,7 +1,7 @@
 {
   "name": "@pitavern/server",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -27,7 +27,8 @@
     "verify:card-compat": "tsx scripts/card-compat-verify.ts",
     "verify:local": "tsx scripts/local-verify.ts",
     "verify:group-script": "tsx scripts/group-script-verify.ts",
-    "verify:branches": "tsx scripts/branch-tree-verify.ts"
+    "verify:branches": "tsx scripts/branch-tree-verify.ts",
+    "verify:chat-import": "tsx scripts/chat-import-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",
