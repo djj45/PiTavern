@@ -1,0 +1,51 @@
+{
+  "reports": [
+    {
+      "mode": "simple",
+      "requests": 2,
+      "elapsedMs": 92.17941699999994,
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 2200,
+        "costTotal": 0,
+        "responses": 2,
+        "responsesWithUsage": 2
+      }
+    },
+    {
+      "mode": "bridge",
+      "requests": 2,
+      "elapsedMs": 49.30604200000005,
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 2200,
+        "costTotal": 0,
+        "responses": 2,
+        "responsesWithUsage": 2
+      }
+    },
+    {
+      "mode": "takeover",
+      "requests": 2,
+      "elapsedMs": 12.821583999999916,
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 2200,
+        "costTotal": 0,
+        "responses": 2,
+        "responsesWithUsage": 2
+      }
+    }
+  ],
+  "realProvider": "not_requested",
+  "quality": "not_evaluated"
+}
