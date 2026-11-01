@@ -1,4 +1,5 @@
 import {hasQuestHistory} from "../world/quest-scope.ts";
+import { generationFailure } from "./failure.ts";
 import { createNarrativeAgent, settlementTools } from "../agent/narrative.ts";
 import { createNarrative, narrativeCatalog, validateNarrative, NARRATIVE_KEY, NARRATIVE_TEXT_KEY, SETTLEMENT_INSTRUCTION, REQUEST_KEY, findGenerationRequest, requestFingerprint, type GenerationRequest } from "./narrative.ts";
 import { executeScript, type ScriptResult } from "../script/interpreter.ts";
@@ -988,15 +989,12 @@ export class SessionManager {
         if (!regeneration) for (const line of generated) this.emit({ type: "chat.done", chatId, message: chatMessages([line])[0] });
       }
     } catch (cause) {
-      if (session.generation?.stages) {
-        const detail = cause instanceof Error ? cause.message : String(cause);
-        session.generation.failureCode = /预算/.test(detail) ? "budget" : /正文为空|正文阶段禁止|正文输出被截断/.test(detail) ? "output" :
-          /变化|冲突|修改/.test(detail) ? "conflict" : /叙事计划|叙事数据包|引用/.test(detail) ? "plan" : "provider";
-      }
+      const failure = generationFailure(cause);
+      if (session.generation) session.generation.failureCode = failure.code;
       const protectedWorld = (session.worldTransaction?.snapshot.schemaVersion ?? 0) >= 2 ||
         ((this.chats.readMetadata(chatId)[WORLD_STATE_KEY] as {schemaVersion?:number} | undefined)?.schemaVersion ?? 0) >= 2;
       const error = protectedWorld
-        ? new Error("本轮生成未完成，世界与知识未提交。") : cause;
+        ? new Error(failure.publicMessage) : cause;
       if (session.generation && !session.aborted) session.generation.error = error instanceof Error ? error.message : String(error);
       if (!session.aborted) this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
     } finally {

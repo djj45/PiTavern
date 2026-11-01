@@ -666,6 +666,19 @@ for (const mobile of [false, true]) test(`雾港实际游戏资产导入、发�
   await page.locator('aside li').filter({ hasText: '雾港最后一盏灯' }).getByRole('button').first().click();
   await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '世界状态', exact: true })).toContainText('第1天 00:00');
+  await page.getByRole('dialog', { name: '世界状态', exact: true }).getByRole('button', { name: '关闭世界状态' }).click();
+  await page.getByLabel('消息输入').fill('诊断空正文');
+  await page.getByLabel('消息输入').press('Enter');
+  if (mobile) await page.getByRole('button', { name: '统计', exact: true }).click();
+  await expect(page.locator('aside').getByRole('alert')).toContainText('模型未返回可用正文');
+  await expect(page.locator('body')).not.toContainText('私有故障标记');
+  await page.reload();
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  if (mobile) await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await page.locator('aside li').filter({ hasText: '雾港最后一盏灯' }).getByRole('button').first().click();
+  if (mobile) await page.getByRole('button', { name: '统计', exact: true }).click();
+  await expect(page.locator('aside').getByRole('alert')).toContainText('模型未返回可用正文');
+  await expect(page.locator('body')).not.toContainText('私有故障标记');
 });
 
 });

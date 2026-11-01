@@ -60,6 +60,11 @@ const mock = http.createServer(async (req, res) => {
   let raw = ''; for await (const part of req) raw += part;
   fs.appendFileSync(path.join(runDir, 'requests.ndjson'), raw + '\n');
   const body = JSON.parse(raw);
+  if (raw.includes('诊断空正文')) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: '模型输出为空，请降低思考强度。私有故障标记-DO-NOT-EXPOSE' } }));
+    return;
+  }
   const twoStage = body.tools?.some((tool: {function?:{name?:string}}) => tool.function?.name === 'submit_narrative_plan');
   const contentText = (message:{content?:unknown}) => typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.filter((c:{type?:string})=>c.type==='text').map((c:{text:string})=>c.text).join('') : '';
   const packetMessage = body.messages?.findLast((message:{role:string;content?:unknown}) => message.role === 'user' && contentText(message).startsWith('{"protocol":"pitavern-narrative-v1"'));

@@ -9,7 +9,7 @@ import {buildModels} from '../src/providers/models.ts';
 import {ChatStore} from '../src/stdata/chats.ts';
 import {CharacterStore} from '../src/stdata/characters.ts';
 import {SessionManager} from '../src/session/manager.ts';
-export type MockStep={text?:string;calls?:Array<{name:string;args:unknown}>;failure?:boolean;failureMessage?:string;pause?:boolean;length?:boolean;inspect?:(body:any)=>void};
+export type MockStep={text?:string;calls?:Array<{name:string;args:unknown}>;failure?:boolean;failureMessage?:string;streamFailure?:string;pause?:boolean;length?:boolean;inspect?:(body:any)=>void};
 export async function twoStageFixture(template?:unknown){
   const root=path.resolve(import.meta.dirname,'../../../data/test-runs');fs.mkdirSync(root,{recursive:true});
   const run=fs.mkdtempSync(path.join(root,'two-stage-'));process.env.PITAVERN_CONFIG=path.join(run,'config.json');
@@ -22,6 +22,7 @@ export async function twoStageFixture(template?:unknown){
     if(!step)throw new Error('unexpected request '+label+' #'+index);step.inspect?.(body);
     if(step.failure){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:step.failureMessage??'synthetic provider failure'}}));return;}
     res.writeHead(200,{'Content-Type':'text/event-stream'});
+    if(step.streamFailure){res.end(frame({role:'assistant',reasoning_content:'内部思考片段，不是正文。'},null)+'data: '+JSON.stringify({error:{message:step.streamFailure}})+'\n\n');return;}
     if(step.pause){res.flushHeaders();paused();return;}
     if (typeof body.prompt === 'string') {res.end('data: '+JSON.stringify({id:'text',choices:[{index:0,text:step.text??'文本补全正文',finish_reason:'stop'}],usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}})+'\n\ndata: [DONE]\n\n');return;}
     const delta=step.calls?{role:'assistant',tool_calls:step.calls.map((c,i)=>({index:i,id:`call-${index}-${i}`,type:'function',function:{name:c.name,arguments:JSON.stringify(c.args)}}))}:{role:'assistant',content:step.text??'掌柜迎接旅人。'};

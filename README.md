@@ -63,7 +63,7 @@ npm run verify:chat-migration # 0.6.0 整聊天迁移（全分支规划/原子�
 npm run verify:character-cards # 角色卡管理（列表/编辑/复制/删除/导出）
 npm run verify:context # 长局基线/纯构建/分支缓存/三种模式/合成游戏（28 组检查）
 npm run verify:knowledge # 知识校验/视图/事务/出口/迁移/完整请求游戏（53 组）
-npm run verify:two-stage # 双阶段/正文重写/幂等/分支秘密恢复/长局/对照/坏行兼容（83 组）
+npm run verify:two-stage # 双阶段/正文重写/幂等/分支秘密恢复/长局/对照/坏行兼容/失败诊断（90 组）
 npm run verify:quests # v3任务校验/规则/三模式生成/分支迁移/边界（77 组）
 npm run verify:game   # 雾港完整游戏、三模式单/双阶段、秘密与分支恢复
 npm run verify:ci     # 29 组独立合成数据回归，不需要本机资料库或真实 API Key
