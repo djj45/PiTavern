@@ -140,41 +140,42 @@ export function planWorldSnapshotMigration(snapshotInput: unknown, from: WorldTe
       // 源记录本身也必须可重建；否则未知/被篡改的旧模板可能绕过目标校验。
       const sourceCheck = createWorldTemplateRecord(from.template, { name: from.name, description: from.description });
       if (sourceCheck.contentHash !== from.contentHash) fail("源模板内容哈希不匹配");
-      else if (from.template.rulesVersion !== WORLD_RULES_VERSION) {
-        const change = {
-          ...modifiedChange("rules", String(from.template.rulesVersion), "源规则版本",
-            "源规则版本 " + from.template.rulesVersion + " 不受当前运行时支持"),
-          blocking: true,
-        };
-        changes.push(change); blocking.push(change);
-      } else {
-        const targetCheck = createWorldTemplateRecord(to.template, { name: to.name, description: to.description });
-        if (targetCheck.contentHash !== to.contentHash) fail("目标模板内容哈希不匹配");
-        else if (from.contentHash === to.contentHash && diff.changes.length === 0) {
-          noOp = true;
-          warnings.push("目标版本与当前世界模板相同，无需迁移。");
+      else {
+        // 源世界必须本身可写；未知规则/版本、缺角色、悬空引用都不能靠迁移“修好”。
+        const sourceState = new WorldState(source, { [from.contentHash]: from });
+        if (sourceState.capability.mode !== "enabled") {
+          fail("源世界只读：" + (sourceState.capability.reason ?? "源模板/快照不一致"));
         } else {
-          const next = structuredClone(source);
-          next.templateHash = to.contentHash;
-          next.templateVersion = to.template.templateVersion;
-          next.rulesVersion = to.template.rulesVersion;
-          if (from.contentHash !== to.contentHash) {
-            for (const actor of to.template.actors) {
-              if (next.actors[actor.id]) continue;
-              const locationId = to.template.initial.locationId;
-              next.actors[actor.id] = { id: actor.id, locationId, status: "alive" };
-              next.money[actor.id] = 0;
-              warnings.push("新增角色「" + actor.name + "」以新模板初始地点创建 alive 状态。");
-            }
+          const targetCheck = createWorldTemplateRecord(to.template, { name: to.name, description: to.description });
+          if (targetCheck.contentHash !== to.contentHash) fail("目标模板内容哈希不匹配");
+          else if (from.contentHash === to.contentHash && diff.changes.length === 0) {
+            noOp = true;
+            warnings.push("目标版本与当前世界模板相同，无需迁移。");
           } else {
-            warnings.push("仅更新发布名称/描述/版本元数据，世界数值保持不变。");
+            const next = structuredClone(source);
+            next.templateHash = to.contentHash;
+            next.templateVersion = to.template.templateVersion;
+            next.rulesVersion = to.template.rulesVersion;
+            if (from.contentHash !== to.contentHash) {
+              // 只补两个模板之间的新角色，避免把源快照里丢失的角色误判为新增。
+              const beforeActors = new Set(from.template.actors.map((actor) => actor.id));
+              for (const actor of to.template.actors) {
+                if (beforeActors.has(actor.id)) continue;
+                const locationId = to.template.initial.locationId;
+                next.actors[actor.id] = { id: actor.id, locationId, status: "alive" };
+                next.money[actor.id] = 0;
+                warnings.push("新增角色「" + actor.name + "」以新模板初始地点创建 alive 状态。");
+              }
+            } else {
+              warnings.push("仅更新发布名称/描述/版本元数据，世界数值保持不变。");
+            }
+            next.scene.presentActorIds = presentActorIds(next.actors, next.scene.locationId);
+            const parsed = parseWorldSnapshot(next);
+            const table = { [to.contentHash]: to };
+            const state = new WorldState(parsed, table);
+            if (state.capability.mode !== "enabled") fail("迁移后世界只读：" + (state.capability.reason ?? "模板引用不完整"));
+            else snapshot = parsed;
           }
-          next.scene.presentActorIds = presentActorIds(next.actors, next.scene.locationId);
-          const parsed = parseWorldSnapshot(next);
-          const table = { [to.contentHash]: to };
-          const state = new WorldState(parsed, table);
-          if (state.capability.mode !== "enabled") fail("迁移后世界只读：" + (state.capability.reason ?? "模板引用不完整"));
-          else snapshot = parsed;
         }
       }
     }

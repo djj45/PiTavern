@@ -128,7 +128,7 @@ const sourceUnknownSnapshot = { ...snapshot, templateHash: sourceUnknown.content
 const sourceUnknownPlan = planWorldSnapshotMigration(sourceUnknownSnapshot, sourceUnknown, priceRecord);
 assert.equal(sourceUnknownPlan.applyable, false);
 assert.equal(sourceUnknownPlan.snapshot, undefined);
-assert.ok(sourceUnknownPlan.blocking.some((change) => change.entity === "rules" && change.detail?.includes("999")));
+assert.ok(sourceUnknownPlan.blocking.some((change) => change.detail?.includes("源世界只读")));
 const sourceBroken: WorldTemplateRecord = {
   ...base,
   template: { ...base.template, locations: base.template.locations.map((location, index) => index === 0 ? { ...location, name: "被篡改的酒馆" } : location) },
@@ -138,6 +138,27 @@ const sourceBrokenPlan = planWorldSnapshotMigration(snapshot, sourceBroken, pric
 assert.equal(sourceBrokenPlan.applyable, false);
 assert.ok(sourceBrokenPlan.blocking.some((change) => change.detail?.includes("源模板内容哈希不匹配")));
 check("源规则未知或源模板正文与哈希不符：阻断，不信任源记录");
+
+// 源快照自身必须能被源模板启用；不能靠迁移修正版本或缺失角色。
+const sourceRulesSnapshot = { ...snapshot, rulesVersion: 999 };
+const sourceRulesPlan = planWorldSnapshotMigration(sourceRulesSnapshot, base, priceRecord);
+assert.equal(sourceRulesPlan.applyable, false);
+assert.equal(sourceRulesPlan.snapshot, undefined);
+assert.ok(sourceRulesPlan.blocking.some((change) => change.detail?.includes("源世界只读")));
+const sourceVersionSnapshot = { ...snapshot, templateVersion: 999 };
+const sourceVersionPlan = planWorldSnapshotMigration(sourceVersionSnapshot, base, priceRecord);
+assert.equal(sourceVersionPlan.applyable, false);
+assert.ok(sourceVersionPlan.blocking.some((change) => change.detail?.includes("源世界只读")));
+const missingActorSnapshot = clone(snapshot);
+delete (missingActorSnapshot.actors as Record<string, unknown>).merchant;
+delete (missingActorSnapshot.money as Record<string, unknown>).merchant;
+missingActorSnapshot.inventory = missingActorSnapshot.inventory.filter((entry) => entry.ownerId !== "merchant");
+missingActorSnapshot.scene.presentActorIds = missingActorSnapshot.scene.presentActorIds.filter((id) => id !== "merchant");
+const missingActorPlan = planWorldSnapshotMigration(missingActorSnapshot, base, priceRecord);
+assert.equal(missingActorPlan.applyable, false);
+assert.equal(missingActorPlan.snapshot, undefined);
+assert.ok(missingActorPlan.blocking.some((change) => change.detail?.includes("源世界只读")));
+check("源快照规则/模板版本不符或缺少原有角色：阻断，不补回角色");
 
 // 完全相同的记录是 no-op，不再用阻断项表示。
 const noopPlan = planWorldSnapshotMigration(snapshot, base, base);

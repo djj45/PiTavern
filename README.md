@@ -86,7 +86,7 @@ npm run build && npm run verify:browser # 56 项真实界面验收，独立合�
 - **M7 剧情分支** ✅ 重新生成保留候选并支持多分支树：可回到任意历史回合切换候选，未选中的后续剧情/状态原样保存并可恢复；设置中可开启每次成功回复后自动追加 0–4 个候选，分支面板支持「换条路线」的本次生成指令（`npm run verify:branches`）
 - **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。0.4.0 提供单文件聊天 JSONL 导入 UI；0.5.0 提供世界模板编辑器与版本选择，已有聊天更新模板（热更新）仍属 0.6.0。
 - **角色卡管理（开发中）** 侧栏「角色 → 管理」集中查看/编辑描述、性格、场景、默认/备用开场白、示例对话、系统提示、标签，复制/删除/导入/导出角色卡；名称不可改，PNG 像素与未知字段保留（`npm run verify:character-cards`，8 项）。卡内世界书/正则仍在资料库编辑。契约见 [角色卡管理契约](docs/CHARACTER_MANAGER.md)。
-- **0.6.0（开发中）** 已有聊天更新模板的迁移规划：版本差异、删除/改 ID 阻断、价格/新增实体/初始状态语义、迁移后快照预览（`npm run verify:world-migration`，11 项）。聊天批量快照迁移/API/UI 仍在开发。契约见 [模板迁移契约](docs/WORLD_TEMPLATE_MIGRATION.md)。
+- **0.6.0（开发中）** 已有聊天更新模板的迁移规划：版本差异、删除/改 ID 阻断、价格/新增实体/初始状态语义、迁移后快照预览（`npm run verify:world-migration`，12 项）。聊天批量快照迁移/API/UI 仍在开发。契约见 [模板迁移契约](docs/WORLD_TEMPLATE_MIGRATION.md)。
 - **0.5.0** 世界模板库：草稿/冲突、不可变发布版本、从内置复制、导入/导出、整库备份恢复、新聊天精确版本选择，以及地点/角色/物品/初始状态编辑器与初始世界预览（`npm run verify:world-templates`，16 项）。已有聊天更新模板仍属 0.6.0。契约见 [世界模板契约](docs/WORLD_TEMPLATES.md)。
 - **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。
 
