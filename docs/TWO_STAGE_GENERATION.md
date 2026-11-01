@@ -18,6 +18,8 @@
 
 数据包写入回复 `extra._pitavernNarrative`，随原生 swipe、剧情候选、隐藏 continuation、JSONL 和备份保存；活动不是恢复来源。默认 HTTP、WS、诊断不输出数据包或原始提示。JSONL/备份仍是作者完整资料；MD 仍只导出活动路径正文。本地作者入口不是多人权限控制。
 
+v1 字段为 `version/settlementId/turnId/stateHash/sourceHash/templateSourceHash/templateHash/viewpointId/knowledgeKey/state/events/plan/writing/digest`。`plan` 仅允许 scene（1000字）、beats（1–12项）、dialogue（0–12项）、references（0–32项，actor/fact/event）；每项文本1000字，引用128字。写作设置和原输入各32000字，方向4000字；事件最多100项，总包250000字符。digest 检测损坏，不是作者权限签名；导入包即使摘要自洽，也必须与重新构建的玩家投影、真实事件和当前来源完全一致才能用于重写。
+
 正文阶段依然遵循 0.8 玩家投影。普通历史/角色卡/世界书的自由文字不自动脱敏；不做关键词清洗，也不承诺阻止公开线索推断。回退未知分支、v1 或无世界后，旧活动按记录视角与当前视角过滤，不能因当前无 v2 状态跳过。
 
 ## 两种重做
