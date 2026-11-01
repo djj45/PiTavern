@@ -98,6 +98,8 @@ export interface TavernAgentOptions {
   instruct?: InstructTemplate;
   contextAssembly?: ContextAssemblyDto;
   onContext?: (diagnostics: ContextDiagnosticsDto) => void;
+  completion?: "settlement" | "render";
+  settlementComplete?: () => boolean;
 }
 
 /**
@@ -201,6 +203,16 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
     },
     finishTurn: async (turn) => {
       turnCount += 1;
+      if (options.completion === "render") {
+        if (turn.message.content.some(c => c.type === "toolCall")) throw new Error("正文阶段禁止工具调用");
+        if (turn.message.stopReason === "length") throw new Error("正文输出被截断，本轮未提交");
+        return { action: "end" };
+      }
+      if (options.completion === "settlement") {
+        if (options.settlementComplete?.()) return { action: "end" };
+        if (turnCount >= MAX_TURNS || !turn.toolResults.length) throw new Error("结算未提交有效叙事计划");
+        return undefined;
+      }
       if (turnCount >= MAX_TURNS) return { action: "end" };
       const calledGameContent = turn.message.content.some(
         (c) => c.type === "toolCall" && c.name === GAME_TOOL_NAME,
