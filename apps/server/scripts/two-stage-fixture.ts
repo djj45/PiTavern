@@ -10,7 +10,7 @@ import {ChatStore} from '../src/stdata/chats.ts';
 import {CharacterStore} from '../src/stdata/characters.ts';
 import {SessionManager} from '../src/session/manager.ts';
 export type MockStep={text?:string;calls?:Array<{name:string;args:unknown}>;failure?:boolean;pause?:boolean;length?:boolean;inspect?:(body:any)=>void};
-export async function twoStageFixture(){
+export async function twoStageFixture(template?:unknown){
   const root=path.resolve(import.meta.dirname,'../../../data/test-runs');fs.mkdirSync(root,{recursive:true});
   const run=fs.mkdtempSync(path.join(root,'two-stage-'));process.env.PITAVERN_CONFIG=path.join(run,'config.json');
   let steps:MockStep[]=[],index=0,label='';const requests:any[]=[],problems:string[]=[];
@@ -34,7 +34,7 @@ export async function twoStageFixture(){
   const config=defaultConfig();config.stDataDir=data;config.activePreset='context';
   config.providers=[{id:'fixture',name:'本地合成',apiKey:'synthetic-only',baseUrl:`http://127.0.0.1:${(mock.address() as AddressInfo).port}/v1`,models:[{id:'fixture',name:'fixture',contextWindow:24000,maxTokens:500}]}];config.defaultProvider='fixture';config.defaultModel='fixture';
   const models=buildModels(config),chats=new ChatStore(data),cards=new CharacterStore(path.join(data,'characters')),sessions=new SessionManager(config,()=>buildModels(config),cards,chats,data);
-  const raw=JSON.parse(fs.readFileSync(new URL('./fixtures/knowledge-tavern.json',import.meta.url),'utf8'));
+  const raw=template?structuredClone(template):JSON.parse(fs.readFileSync(new URL('./fixtures/knowledge-tavern.json',import.meta.url),'utf8'));
   const blank=sessions.worldTemplateLibrary.createBlank('酒馆双阶段','固定验收');raw.templateId=blank.id;
   const saved=sessions.worldTemplateLibrary.saveDraft(blank.id,blank.draftRevision,{name:'酒馆双阶段',template:raw}),published=sessions.worldTemplateLibrary.publish(blank.id,saved.draftRevision);
   return {run,data,config,models,chats,cards,sessions,raw,requests,problems,

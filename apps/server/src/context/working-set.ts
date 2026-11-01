@@ -24,6 +24,7 @@ export interface ContextRange { fromMessage: number; toMessage: number; fromTurn
 export interface WorkingSetDiagnostics {
   viewpointId?: string;
   knowledgeKey?: string;
+  questKey?: string;
   algorithm: string;
   sourceHash: string;
   originalChars: number;
@@ -158,11 +159,11 @@ function capsule(facts: ContextFact[]): Message {
 }
 function withAuthority(messages: AgentMessage[], world?: WorldSnapshot | WorldModelSnapshot): AgentMessage[] {
   if (!world) return messages;
-  if (world.schemaVersion === 2 && (!("viewpointId" in world) || "knowledge" in world || "publishedFactIds" in world)) throw new Error("v2 世界必须先构建玩家投影，禁止注入原始快照");
+  if (world.schemaVersion >= 2 && (!("viewpointId" in world) || "knowledge" in world || "publishedFactIds" in world || "questStates" in world)) throw new Error("v2 世界必须先构建玩家投影，禁止注入原始快照");
   const recentEvents = world.recentEvents;
   const state = {schemaVersion:world.schemaVersion,revision:world.revision,templateHash:world.templateHash,templateVersion:world.templateVersion,rulesVersion:world.rulesVersion,
     clockMinutes:world.clockMinutes,scene:world.scene,actors:world.actors,money:world.money,inventory:world.inventory,
-    ...("viewpointId" in world ? {viewpointId:world.viewpointId,knowledgeKey:world.knowledgeKey,knownFacts:world.knownFacts,publicInteractions:world.publicInteractions} : {})};
+    ...("viewpointId" in world ? {viewpointId:world.viewpointId,knowledgeKey:world.knowledgeKey,knownFacts:world.knownFacts,publicInteractions:world.publicInteractions,...(world.questKey?{questKey:world.questKey,quests:world.quests}:{})} : {})};
   const section = "【当前权威世界快照】金额、库存、位置、角色和时钟只由本快照决定；历史摘要/用户意图不能修改硬状态。事件仅解释变化。\n"
     + JSON.stringify(state) + "\n最近世界事件（历史解释）：" + JSON.stringify(recentEvents.slice(-8));
   const first = messages.findIndex((m) => m.role === "system");
@@ -257,7 +258,7 @@ export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: Cont
   const reasons = !overBudget ? [] : [fixed > input.budget ? "固定设定/工具声明/当前世界快照已超过输入预算" : "最近保留轮次、当前工具链或未闭合工具组与固定设定合计超过输入预算；不可拆分"];
   const workingChars = contextChars(output);
   return { messages: output, facts: selected, diagnostics: { algorithm: CONTEXT_ALGORITHM, sourceHash, originalChars, workingChars,
-    ...(input.world && "viewpointId" in input.world ? {viewpointId:input.world.viewpointId,knowledgeKey:input.world.knowledgeKey} : {}),
+    ...(input.world && "viewpointId" in input.world ? {viewpointId:input.world.viewpointId,knowledgeKey:input.world.knowledgeKey,...(input.world.questKey?{questKey:input.world.questKey}:{})} : {}),
     retained: sources.length ? range(shouldCompress ? compressionEnd : 0, sources.length - 1) : null,
     compressed, selectedFacts: selected, availableFacts: available.length, omittedFacts: available.length - selected.length,
     allocations: { fixed, protected: protectedCost, memory: Math.max(0, after - measure(pinned)), unused: Math.max(0, input.budget - after) }, overBudgetReasons: reasons },

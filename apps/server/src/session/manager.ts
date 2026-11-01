@@ -106,13 +106,15 @@ export class SessionManager {
   private activityForPlayer<T extends {records:GenerationRecordDto[]}>(chatId:string,page:T):T {
     const state=this.chats.readWorld(chatId);
     const session=this.sessions.get(chatId), staged=session?.running && session.worldTransaction?.status==="open" ? session.worldTransaction.snapshot : state?.snapshot;
-    const key=staged ? buildPlayerWorldView(staged,state?.template).knowledgeKey : undefined;
-    return {...page,knowledgeKey:key,records:page.records.map(record=>{
+    const view=staged ? buildPlayerWorldView(staged,state?.template) : undefined;
+    const key=view?.knowledgeKey,questKey=view?.questKey;
+    return {...page,knowledgeKey:key,questKey,records:page.records.map(record=>{
       const recordKey=record.knowledgeKey ?? record.context?.workingSet?.knowledgeKey;
+      const recordQuestKey=record.questKey ?? record.context?.workingSet?.questKey;
       // Activity survives chat backup restoration. A v2 record still needs its
       // original knowledge authorization after restoring v1 or no world.
       // Pre-knowledge records retain legacy behavior outside a v2 world.
-      if(recordKey===key || (recordKey===undefined && staged?.schemaVersion!==2)) return record;
+      if((recordKey===key || (recordKey===undefined && (staged?.schemaVersion??0)<2)) && recordQuestKey===questKey) return record;
       const {context:_,...rest}=record;
       return {...rest,stages:rest.stages?.map(({context:_,...stage})=>stage),contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
     })};
@@ -125,7 +127,10 @@ export class SessionManager {
 
   private saveActivity(chatId: string, generation: GenerationRecordDto): void {
     const live = this.sessions.get(chatId)?.worldTransaction;
-    if (generation.stages && live?.status === "open") generation.knowledgeKey = buildPlayerWorldView(live.snapshot, this.chats.readWorld(chatId)?.template).knowledgeKey;
+    if (live?.status === "open" && (generation.stages || live.snapshot.schemaVersion===3)) {
+      const view=buildPlayerWorldView(live.snapshot,this.chats.readWorld(chatId)?.template);
+      generation.knowledgeKey=view.knowledgeKey;generation.questKey=view.questKey;
+    }
     try {
       this.activity.save(chatId, generation);
       const session = this.sessions.get(chatId);
@@ -338,7 +343,7 @@ export class SessionManager {
           capability = { mode: "read-only", reason: "尚未配置可用模型" };
         }
       }
-      if (snapshot.schemaVersion === 2 && !template) capability = {mode:"read-only",reason:"世界定义不可用"};
+      if (snapshot.schemaVersion >= 2 && !template) capability = {mode:"read-only",reason:"世界定义不可用"};
       return {
         snapshot: buildPlayerWorldView(snapshot,template),
         ...(template ? { template:publicWorldTemplate(template) } : {}),
@@ -655,7 +660,7 @@ export class SessionManager {
     const model = current.model, config = structuredClone(this.config), generated: StChatLine[] = [];
     const generation: GenerationRecordDto = {
       id: this.activity.createId(chatId), version: 0, userMessageId: current.packet.turnId, kind: "rewrite",
-      provider: model.provider, model: model.id, startedAt: new Date().toISOString(), status: "running", usage: emptyUsage(), tools: [], knowledgeKey: current.view.knowledgeKey,
+      provider: model.provider, model: model.id, startedAt: new Date().toISOString(), status: "running", usage: emptyUsage(), tools: [], knowledgeKey: current.view.knowledgeKey, questKey: current.view.questKey,
     };
     session.character = current.last.name; session.running = true; session.aborted = false;
     session.controller = new AbortController(); session.streamingText = ""; session.staged = [];

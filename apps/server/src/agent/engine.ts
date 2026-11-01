@@ -193,7 +193,7 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
     transformContext: async (messages) => {
       const world = options.worldSnapshot?.();
       const input = { messages, archived: options.archivedHistory, config: compression ?? { enabled: false, keepFullTurns: 6 }, budget: budget.inputBudget,
-        measure: (items: AgentMessage[]) => measure(items).total, world, sourceRevision: JSON.stringify([options.contextSourceRevision,world?.viewpointId,world?.knowledgeKey]) };
+        measure: (items: AgentMessage[]) => measure(items).total, world, sourceRevision: JSON.stringify([options.contextSourceRevision,world?.viewpointId,world?.knowledgeKey,world?.questKey]) };
       beforeTokens = measure(prepareWorkingSources(input).sources).total;
       const result = options.contextFactCache ? buildCachedWorkingContext(input, options.contextFactCache, options.chatId) : buildWorkingContext(input);
       workingSet = result.diagnostics;

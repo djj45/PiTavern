@@ -111,9 +111,15 @@ export function createWorldInteractTool(ctx:ToolContext):AgentTool<any> {
     }};
 }
 
+export function createWorldQuestTool(ctx:ToolContext):AgentTool<any> {
+  const parameters=Type.Object({questId:Type.String({minLength:1,maxLength:128}),action:Type.Union([Type.Literal("accept"),Type.Literal("advance")])},{additionalProperties:false});
+  return {name:"world_quest",label:"任务操作",description:"只选择玩家任务日志中的任务ID，accept接取，advance检查当前阶段并推进。服务端绑定玩家并决定进度、交付和NPC实际支付的奖励；正文声称完成没有效果。同轮重复advance不会跨多个阶段。成功仅暂存，整轮失败或停止会撤销。",parameters,
+    execute:async(_id,params)=>{const result=ctx.world?.transaction.quest(params)??{status:"rejected",summary:"当前无法执行该任务操作。",revision:0};return {content:text(JSON.stringify(result)),details:{summary:result.summary,revision:result.revision},isError:result.status==="rejected"};}};
+}
+
 export function createWorldTools(ctx: ToolContext): AgentTool<any>[] {
   if (!ctx.world) return [];
   const mode = ctx.world.state.capability.mode;
-  if (mode === "enabled") return [createWorldQueryTool(ctx), createWorldCommandTool(ctx), ...(ctx.world.state.template?.schemaVersion===2?[createWorldInteractTool(ctx)]:[])];
+  if (mode === "enabled") return [createWorldQueryTool(ctx), createWorldCommandTool(ctx), ...((ctx.world.state.template?.schemaVersion??0)>=2?[createWorldInteractTool(ctx)]:[]), ...(ctx.world.state.template?.schemaVersion===3?[createWorldQuestTool(ctx)]:[])];
   return mode === "read-only" ? [createWorldQueryTool(ctx)] : [];
 }

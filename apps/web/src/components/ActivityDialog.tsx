@@ -77,7 +77,7 @@ export function ContextDiagnostics({ context }: { context: ContextDiagnosticsDto
 
 export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; activity: ChatActivityDto; onClose: () => void }) {
   const [older, setOlder] = useState<GenerationRecordDto[]>([]);
-  const scope=JSON.stringify([chatId,activity.knowledgeKey]);
+  const scope=JSON.stringify([chatId,activity.knowledgeKey,activity.questKey]);
   const [olderScope,setOlderScope]=useState(scope);
   const knowledgeKey=useRef(scope);knowledgeKey.current=scope;
   useEffect(()=>{setOlder([]);setOlderScope(scope);setBefore(activity.before);setSelected(activity.records[0]?.id)},[scope]);

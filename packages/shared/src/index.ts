@@ -145,6 +145,7 @@ export interface ContextRangeDto { fromMessage: number; toMessage: number; fromT
 export interface ContextWorkingSetDto {
   viewpointId?: string;
   knowledgeKey?: string;
+  questKey?: string;
   algorithm: string;
   sourceHash: string;
   originalChars: number;
@@ -188,6 +189,7 @@ export interface GenerationStageDto {
 
 export interface GenerationRecordDto {
   knowledgeKey?: string;
+  questKey?: string;
   failureCode?: "budget" | "output" | "conflict" | "plan" | "provider";
   stages?: GenerationStageDto[];
   contentHidden?: boolean;
@@ -208,6 +210,7 @@ export interface GenerationRecordDto {
 
 export interface GenerationPageDto {
   knowledgeKey?: string;
+  questKey?: string;
   records: GenerationRecordDto[];
   before: string | null;
 }

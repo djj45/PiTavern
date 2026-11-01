@@ -74,6 +74,7 @@ export function worldDigest(
   if (events.length) lines.push("最近变化：" + events.map((event) => eventText(event, template)).join("；"));
   if (view.knownFacts.length) lines.push("已知事实：" + view.knownFacts.map(f=>f.text).join("；"));
   if (view.publicInteractions.length) lines.push("可选交互（由服务端判断条件）：" + JSON.stringify(view.publicInteractions));
+  if (view.quests) lines.push("玩家任务日志（只读；接取/推进需world_quest，不能用正文改变进度）："+JSON.stringify(view.quests));
   const restriction = restrictionLabel(capability);
   if (restriction) {
     lines.push(`${restriction}：本轮不要声称修改了金钱、物品、位置或时间。`);
@@ -125,7 +126,7 @@ export function worldStateText(
   const view = "knownFacts" in snapshot ? snapshot as WorldModelSnapshot : buildPlayerWorldView(snapshot,template);
   snapshot = view;
   template = publicWorldTemplate(template);
-  const knowledge = "\n已知事实：" + JSON.stringify(view.knownFacts) + "\n公共交互：" + JSON.stringify(view.publicInteractions);
+  const knowledge = "\n已知事实：" + JSON.stringify(view.knownFacts) + "\n公共交互：" + JSON.stringify(view.publicInteractions)+(view.quests?"\n玩家任务日志："+JSON.stringify(view.quests):"");
   const restriction = restrictionLabel(capability);
   const restrictedNote = restriction ? `\n\n${restriction}，不能执行命令。` : "";
   if (section === "summary") {

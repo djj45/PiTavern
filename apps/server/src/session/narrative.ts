@@ -18,7 +18,7 @@ export const narrativePlanSchema = Type.Object({
   beats: Type.Array(text(1000), { minItems: 1, maxItems: 12 }),
   dialogue: Type.Array(text(1000), { maxItems: 12 }),
   references: Type.Array(Type.Object({
-    kind: Type.Union([Type.Literal("actor"), Type.Literal("fact"), Type.Literal("event")]), id,
+    kind: Type.Union([Type.Literal("actor"), Type.Literal("fact"), Type.Literal("event"), Type.Literal("quest")]), id,
   }, strict), { maxItems: 32 }),
 }, strict);
 export type NarrativePlan = Static<typeof narrativePlanSchema>;
@@ -29,7 +29,7 @@ const sampling = Type.Object({
 const packetSchema = Type.Object({
   version: Type.Literal(1), settlementId: id, turnId: id,
   stateHash: hash, sourceHash: hash, templateSourceHash: hash,
-  templateHash: hash, viewpointId: Type.String({ maxLength: 128 }), knowledgeKey: hash,
+  templateHash: hash, viewpointId: Type.String({ maxLength: 128 }), knowledgeKey: hash, questKey: Type.Optional(hash),
   // Never trust this imported field by itself: eligibility requires exact equality
   // with a freshly built player projection, and rendering uses that fresh view.
   state: Type.Unknown(), events: Type.Array(Type.Unknown(), { maxItems: 100 }),
@@ -41,7 +41,7 @@ export type NarrativePacket = Static<typeof packetSchema> & { state: WorldModelS
 
 export function validatePlan(input: unknown, view: WorldModelSnapshot): NarrativePlan {
   if (!Value.Check(narrativePlanSchema, input)) throw new Error("叙事计划格式或长度无效");
-  const allowed = { actor: new Set(Object.keys(view.actors)), fact: new Set(view.knownFacts.map(f => f.id)), event: new Set(view.recentEvents.map(e => e.id)) };
+  const allowed = { actor: new Set(Object.keys(view.actors)), fact: new Set(view.knownFacts.map(f => f.id)), event: new Set(view.recentEvents.map(e => e.id)), quest: new Set(view.quests?.map(q=>q.id) ?? []) };
   for (const ref of input.references) if (!allowed[ref.kind].has(ref.id)) throw new Error("叙事计划包含不可见或不存在的引用");
   return structuredClone(input);
 }
@@ -68,7 +68,7 @@ export function createNarrative(input: {
   const body = {
     version: 1 as const, settlementId: randomUUID(), turnId: input.turnId,
     stateHash: narrativeState(input.metadata), sourceHash: narrativeSource(input.source), templateSourceHash: narrativeTemplates(input.metadata),
-    templateHash: input.view.templateHash, viewpointId: input.view.viewpointId, knowledgeKey: input.view.knowledgeKey,
+    templateHash: input.view.templateHash, viewpointId: input.view.viewpointId, knowledgeKey: input.view.knowledgeKey, ...(input.view.questKey?{questKey:input.view.questKey}:{}),
     state: structuredClone(input.view), events: input.view.recentEvents.filter(e => !old.has(e.id)),
     plan: validatePlan(input.plan, input.view), writing: input.writing,
   };
@@ -81,7 +81,7 @@ export function validateNarrative(input: unknown, metadata: Record<string, unkno
   if (!user?.is_user || user.extra?.messageId !== packet.turnId) throw new Error("叙事数据包不属于当前回合");
   if (packet.stateHash !== narrativeState(metadata) || packet.sourceHash !== narrativeSource(source) ||
       packet.templateSourceHash !== narrativeTemplates(metadata) || packet.templateHash !== view.templateHash ||
-      packet.viewpointId !== view.viewpointId || packet.knowledgeKey !== view.knowledgeKey ||
+      packet.viewpointId !== view.viewpointId || packet.knowledgeKey !== view.knowledgeKey || packet.questKey !== view.questKey ||
       worldContentHash(packet.state) !== worldContentHash(view)) throw new Error("状态、知识、历史或模板已变化，不能沿用旧结算重写正文");
   validatePlan(packet.plan, view);
   const actual = new Map(view.recentEvents.map(e => [e.id, worldContentHash(e)]));
