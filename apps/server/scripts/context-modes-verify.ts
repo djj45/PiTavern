@@ -8,6 +8,7 @@ import { buildWorkingContext } from "../src/context/working-set.ts";
 import { ContextFactCache } from "../src/context/memory-cache.ts";
 import { createTavernAgent } from "../src/agent/engine.ts";
 import { createInitialWorldSnapshot, createWorldTemplateRecord } from "../src/world/index.ts";
+import {buildPlayerWorldView} from "../src/world/knowledge.ts";
 import { getWorldTemplate } from "../src/world/catalog.ts";
 import { normalizeCard, type StChatLine } from "../src/stdata/types.ts";
 import { defaultConfig } from "../src/config.ts";
@@ -32,7 +33,7 @@ for (const mode of ["simple", "bridge", "takeover"] as const) {
   }
   let sent = ""; let diagnostics: ContextDiagnosticsDto | undefined;
   const capture = { streamSimple: (_model: unknown, context: Parameters<typeof normalizeContext>[0]) => { sent = JSON.stringify(normalizeContext(context).messages); throw new Error("captured working set"); } } as unknown as Models;
-  const agent = createTavernAgent({ models: capture, model, chatId: mode, thinkingLevel: "off", messages, archivedHistory: archived, worldSnapshot: () => world,
+  const agent = createTavernAgent({ models: capture, model, chatId: mode, thinkingLevel: "off", messages, archivedHistory: archived, worldSnapshot: () => buildPlayerWorldView(world,getWorldTemplate("tavern-sword")),
     contextFactCache: new ContextFactCache(), contextSourceRevision: "fixed", compression: { enabled: true, keepFullTurns: 3 }, onContext: (d) => { diagnostics = d; } });
   await agent.continue();
   assert.ok(sent); assert.ok(agent.state.errorMessage?.includes("captured working set"));

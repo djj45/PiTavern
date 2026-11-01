@@ -353,7 +353,7 @@ export interface WorldTemplateSummaryDto {
 
 /** ChatSnapshotDto.world：当前聊天的世界视图；快照损坏时只带 error 和只读能力。 */
 export interface WorldChatStateDto {
-  snapshot?: WorldSnapshot;
+  snapshot?: WorldModelSnapshot;
   template?: WorldTemplate;
   templateName: string;
   capability: WorldEngineCapability;

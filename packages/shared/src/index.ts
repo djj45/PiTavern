@@ -143,6 +143,8 @@ export interface ContextFactDto {
 }
 export interface ContextRangeDto { fromMessage: number; toMessage: number; fromTurn: number; toTurn: number }
 export interface ContextWorkingSetDto {
+  viewpointId?: string;
+  knowledgeKey?: string;
   algorithm: string;
   sourceHash: string;
   originalChars: number;
@@ -177,6 +179,7 @@ export interface ContextDiagnosticsDto {
 }
 
 export interface GenerationRecordDto {
+  contentHidden?: boolean;
   id: string;
   version: number;
   userMessageId: string;

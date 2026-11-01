@@ -9,6 +9,7 @@ import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPa
 import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatMigrationPreviewDto, type WorldChatMigrationResultDto, type WorldChatStateDto, type WorldTemplateRecord, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction, createWorldTemplateRecord } from "../world/index.ts";
 import { planChatWorldMigration } from "../world/chat-migration.ts";
+import { buildAuthorWorldView, buildPlayerWorldView, publicWorldTemplate } from "../world/knowledge.ts";
 import { worldDigest } from "../world/digest.ts";
 import { getWorldTemplate, worldTemplateName, worldTemplateSummaries } from "../world/catalog.ts";
 import { migrationTarget } from "../world/migration.ts";
@@ -100,10 +101,21 @@ export class SessionManager {
     this.worldTemplateLibrary = new WorldTemplateLibrary(stDataDir);
   }
 
-  activityPage(chatId: string, before?: string) { return this.activity.page(chatId, before); }
+  private activityForPlayer<T extends {records:GenerationRecordDto[]}>(chatId:string,page:T):T {
+    const state=this.chats.readWorld(chatId);
+    if(state?.snapshot.schemaVersion !== 2) return page;
+    const session=this.sessions.get(chatId), staged=session?.running && session.worldTransaction?.status==="open" ? session.worldTransaction.snapshot : state.snapshot;
+    const key=buildPlayerWorldView(staged,state.template).knowledgeKey;
+    return {...page,records:page.records.map(record=>{
+      if(record.context?.workingSet?.knowledgeKey===key) return record;
+      const {context:_,...rest}=record;
+      return {...rest,contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
+    })};
+  }
+  activityPage(chatId: string, before?: string) { return this.activityForPlayer(chatId,this.activity.page(chatId, before)); }
 
   private activitySnapshot(chatId: string) {
-    return this.activity.snapshot(chatId, this.chats.readChat(chatId)?.filter((line) => line.is_user && !line.is_system).length ?? 0);
+    return this.activityForPlayer(chatId,this.activity.snapshot(chatId, this.chats.readChat(chatId)?.filter((line) => line.is_user && !line.is_system).length ?? 0));
   }
 
   private saveActivity(chatId: string, generation: GenerationRecordDto): void {
@@ -291,6 +303,12 @@ export class SessionManager {
     this.changed(chatId);
   }
 
+  worldAuthorView(chatId:string) {
+    const state = this.chats.readWorld(chatId);
+    if (!state) throw new Error("当前聊天没有世界");
+    return {...buildAuthorWorldView(state.snapshot,state.template),capability:state.capability};
+  }
+
   /** 把聊天元数据投影成 UI 世界视图；快照损坏时给只读错误，不阻断聊天快照。 */
   private worldView(metadata: Record<string, unknown>): WorldChatStateDto | undefined {
     if (!metadata[WORLD_STATE_KEY]) return undefined;
@@ -313,9 +331,10 @@ export class SessionManager {
           capability = { mode: "read-only", reason: "尚未配置可用模型" };
         }
       }
+      if (snapshot.schemaVersion === 2 && !template) capability = {mode:"read-only",reason:"世界定义不可用"};
       return {
-        snapshot,
-        ...(template ? { template } : {}),
+        snapshot: buildPlayerWorldView(snapshot,template),
+        ...(template ? { template:publicWorldTemplate(template) } : {}),
         templateName: storedName ?? (template ? worldTemplateName(template.templateId) : "未知模板"),
         capability,
       };
@@ -323,7 +342,7 @@ export class SessionManager {
       return {
         templateName: "未知模板",
         capability: { mode: "read-only", reason: "世界快照无法读取" },
-        error: error instanceof Error ? error.message : String(error),
+        error: "世界状态不可用，请在作者视图中检查",
       };
     }
   }
@@ -520,7 +539,7 @@ export class SessionManager {
           };
           session.generation = generation; this.saveActivity(chatId, generation);
           const provider = config.providers.find((item) => item.id === model.provider);
-          const hooks: ContextHooks = { contextFactCache: this.contextFactCache, contextSourceRevision: this.chats.revisionId(chatId), worldSnapshot: () => this.chats.readWorld(chatId)?.snapshot, tokenCounter: createTokenCounter(model.id, provider?.models.find((m) => m.id === model.id)?.tokenizer), instruct: provider?.instruct, onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); } };
+          const hooks: ContextHooks = { contextFactCache: this.contextFactCache, contextSourceRevision: this.chats.revisionId(chatId), worldSnapshot: () => { const state=this.chats.readWorld(chatId); return state ? buildPlayerWorldView(state.snapshot,state.template) : undefined; }, tokenCounter: createTokenCounter(model.id, provider?.models.find((m) => m.id === model.id)?.tokenizer), instruct: provider?.instruct, onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); } };
           const env: MacroEnv = { char: name, user: config.persona.name, personaDescription: config.persona.description, variables,
             lastUserMessage: transaction.lines.findLast((line) => line.is_user)?.mes };
           const lines = transaction.lines.map((line) => group && !line.is_system ? { ...line, mes: "[" + line.name + "]: " + line.mes } : line);
@@ -664,7 +683,7 @@ export class SessionManager {
       this.saveActivity(chatId, generation);
       const provider = config.providers.find((item) => item.id === model.provider);
       const contextHooks: ContextHooks = {
-        worldSnapshot: () => worldTransaction?.snapshot,
+        worldSnapshot: () => worldTransaction ? buildPlayerWorldView(worldTransaction.snapshot,worldState?.template) : undefined,
         contextFactCache: this.contextFactCache,
         contextSourceRevision: this.chats.revisionId(chatId),
         tokenCounter: createTokenCounter(model.id, provider?.models.find((item) => item.id === model.id)?.tokenizer),
@@ -777,7 +796,9 @@ export class SessionManager {
         committed = true;
         if (!regeneration) for (const line of generated) this.emit({ type: "chat.done", chatId, message: chatMessages([line])[0] });
       }
-    } catch (error) {
+    } catch (cause) {
+      const error = this.chats.readMetadata(chatId)[WORLD_STATE_KEY] && (this.chats.readMetadata(chatId)[WORLD_STATE_KEY] as {schemaVersion?:number}).schemaVersion===2
+        ? new Error("本轮生成未完成，世界与知识未提交。") : cause;
       if (session.generation && !session.aborted) session.generation.error = error instanceof Error ? error.message : String(error);
       if (!session.aborted) this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
     } finally {

@@ -978,6 +978,12 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     } catch (error) { worldTemplateError(res, error); }
   });
 
+  // Explicit local-author management operation; never fetched by the default player snapshot.
+  app.post("/api/chat/world/author", (req,res)=>{
+    if(typeof req.body?.chatId !== "string") {res.status(400).json({error:"缺少聊天 ID"});return;}
+    try {res.json(sessions.worldAuthorView(req.body.chatId));} catch {res.status(404).json({error:"无法读取作者世界"});}
+  });
+
   app.post("/api/chat/world/initialize", (req, res) => {
     const { chatId, templateId, contentHash, revision, allowExisting } = req.body ?? {};
     if (typeof chatId !== "string" || typeof revision !== "string" || (templateId !== undefined && typeof templateId !== "string")

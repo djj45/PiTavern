@@ -6,7 +6,7 @@ import type { CompressionConfig } from "../context/compression.ts";
 import type { ContextFactCache } from "../context/memory-cache.ts";
 import { buildCachedWorkingContext } from "../context/memory-cache.ts";
 import { buildWorkingContext, prepareWorkingSources, type WorkingSetDiagnostics } from "../context/working-set.ts";
-import type { WorldSnapshot } from "@pitavern/shared/world";
+import type { WorldModelSnapshot } from "@pitavern/shared/world";
 import { createTokenCounter, inputBudget, measureContext, type TokenCounter } from "../context/tokens.ts";
 import { INSTRUCT_TEMPLATES, type ContextAssemblyDto, type ContextDiagnosticsDto, type InstructTemplate, type ReasoningLevel } from "@pitavern/shared";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
@@ -93,7 +93,7 @@ export interface TavernAgentOptions {
   contextFactCache?: ContextFactCache;
   contextSourceRevision?: string;
   archivedHistory?: Message[];
-  worldSnapshot?: () => WorldSnapshot | undefined;
+  worldSnapshot?: () => WorldModelSnapshot | undefined;
   tokenCounter?: TokenCounter;
   instruct?: InstructTemplate;
   contextAssembly?: ContextAssemblyDto;
@@ -189,8 +189,9 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
     initialState,
     streamFn,
     transformContext: async (messages) => {
+      const world = options.worldSnapshot?.();
       const input = { messages, archived: options.archivedHistory, config: compression ?? { enabled: false, keepFullTurns: 6 }, budget: budget.inputBudget,
-        measure: (items: AgentMessage[]) => measure(items).total, world: options.worldSnapshot?.(), sourceRevision: options.contextSourceRevision };
+        measure: (items: AgentMessage[]) => measure(items).total, world, sourceRevision: JSON.stringify([options.contextSourceRevision,world?.viewpointId,world?.knowledgeKey]) };
       beforeTokens = measure(prepareWorkingSources(input).sources).total;
       const result = options.contextFactCache ? buildCachedWorkingContext(input, options.contextFactCache, options.chatId) : buildWorkingContext(input);
       workingSet = result.diagnostics;

@@ -9,7 +9,8 @@ export class ContextFactCache {
     const { sources, compressionEnd } = prepareWorkingSources(input);
     // The current agent loop grows without changing the completed-history index.
     const completed = sources.slice(0, compressionEnd);
-    const key = contextSourceHash(completed, JSON.stringify([scope, input.sourceRevision ?? ""]));
+    const perspective = input.world && "viewpointId" in input.world ? [input.world.viewpointId,input.world.knowledgeKey] : [];
+    const key = contextSourceHash(completed, JSON.stringify([scope, input.sourceRevision ?? "",perspective]));
     const raw = this.entries.get(key) as Partial<CachedFacts> | undefined;
     if (raw?.algorithm === CONTEXT_ALGORITHM && raw.key === key && Array.isArray(raw.facts)
       && raw.digest === contentHash(JSON.stringify(raw.facts)) && validSources(completed, raw.facts)) {

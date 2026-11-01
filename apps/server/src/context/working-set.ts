@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Message, SystemMessage } from "@earendil-works/pi-ai";
-import type { WorldSnapshot } from "@pitavern/shared/world";
+import type { WorldModelSnapshot, WorldSnapshot } from "@pitavern/shared/world";
 import type { CompressionConfig } from "./compression.ts";
 
 export const CONTEXT_ALGORITHM = "extractive-v1";
@@ -22,6 +22,8 @@ export interface ContextFact {
 }
 export interface ContextRange { fromMessage: number; toMessage: number; fromTurn: number; toTurn: number }
 export interface WorkingSetDiagnostics {
+  viewpointId?: string;
+  knowledgeKey?: string;
   algorithm: string;
   sourceHash: string;
   originalChars: number;
@@ -42,7 +44,7 @@ export interface WorkingSetInput {
   config: CompressionConfig;
   budget: number;
   measure?: (messages: AgentMessage[]) => number;
-  world?: WorldSnapshot;
+  world?: WorldSnapshot | WorldModelSnapshot;
   /** Source revision changes even when an edit changes metadata without changing prose. */
   sourceRevision?: string;
 }
@@ -154,9 +156,13 @@ function capsule(facts: ContextFact[]): Message {
     api: "openai-completions", provider: "pitavern", model: "context-memory", timestamp: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" };
 }
-function withAuthority(messages: AgentMessage[], world?: WorldSnapshot): AgentMessage[] {
+function withAuthority(messages: AgentMessage[], world?: WorldSnapshot | WorldModelSnapshot): AgentMessage[] {
   if (!world) return messages;
-  const { recentEvents, ...state } = world;
+  if (world.schemaVersion === 2 && (!("viewpointId" in world) || "knowledge" in world || "publishedFactIds" in world)) throw new Error("v2 世界必须先构建玩家投影，禁止注入原始快照");
+  const recentEvents = world.recentEvents;
+  const state = {schemaVersion:world.schemaVersion,revision:world.revision,templateHash:world.templateHash,templateVersion:world.templateVersion,rulesVersion:world.rulesVersion,
+    clockMinutes:world.clockMinutes,scene:world.scene,actors:world.actors,money:world.money,inventory:world.inventory,
+    ...("viewpointId" in world ? {viewpointId:world.viewpointId,knowledgeKey:world.knowledgeKey,knownFacts:world.knownFacts,publicInteractions:world.publicInteractions} : {})};
   const section = "【当前权威世界快照】金额、库存、位置、角色和时钟只由本快照决定；历史摘要/用户意图不能修改硬状态。事件仅解释变化。\n"
     + JSON.stringify(state) + "\n最近世界事件（历史解释）：" + JSON.stringify(recentEvents.slice(-8));
   const first = messages.findIndex((m) => m.role === "system");
@@ -251,6 +257,7 @@ export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: Cont
   const reasons = !overBudget ? [] : [fixed > input.budget ? "固定设定/工具声明/当前世界快照已超过输入预算" : "最近保留轮次、当前工具链或未闭合工具组与固定设定合计超过输入预算；不可拆分"];
   const workingChars = contextChars(output);
   return { messages: output, facts: selected, diagnostics: { algorithm: CONTEXT_ALGORITHM, sourceHash, originalChars, workingChars,
+    ...(input.world && "viewpointId" in input.world ? {viewpointId:input.world.viewpointId,knowledgeKey:input.world.knowledgeKey} : {}),
     retained: sources.length ? range(shouldCompress ? compressionEnd : 0, sources.length - 1) : null,
     compressed, selectedFacts: selected, availableFacts: available.length, omittedFacts: available.length - selected.length,
     allocations: { fixed, protected: protectedCost, memory: Math.max(0, after - measure(pinned)), unused: Math.max(0, input.budget - after) }, overBudgetReasons: reasons },
