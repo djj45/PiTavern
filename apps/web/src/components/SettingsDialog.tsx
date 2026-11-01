@@ -29,6 +29,17 @@ function isBlankProvider(provider: ProviderDto & { apiKeyInput?: string }): bool
     ["", "https:", "https://", "http:", "http://"].includes(url);
 }
 
+/** 粘贴完整 URL 到已含 https:// 的输入框时，折叠重复的协议前缀。 */
+function normalizeBaseUrlInput(value: string): string {
+  let url = value.trim();
+  for (let index = 0; index < 8; index++) {
+    const match = /^(https?:\/\/)(?=https?:\/\/)/i.exec(url);
+    if (!match) break;
+    url = url.slice(match[1].length);
+  }
+  return url;
+}
+
 export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice }: SettingsDialogProps) {
   const [providers, setProviders] = useState<EditableProvider[]>(() =>
     (connection?.providers ?? []).filter((provider) => !isBlankProvider(provider)).map((p) => ({
@@ -134,7 +145,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
     const id = `relay-${Date.now().toString(36)}`;
     setProviders((list) => [
       ...list,
-      { id, name: "新中转", baseUrl: "https://", hasApiKey: false, models: [], apiKeyInput: "", newModelId: "" },
+      { id, name: "新中转", baseUrl: "", hasApiKey: false, models: [], apiKeyInput: "", newModelId: "" },
     ]);
   };
 
@@ -164,7 +175,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
       providers: keptProviders.map((p) => ({
         id: p.id,
         name: p.name,
-        baseUrl: p.baseUrl,
+        baseUrl: normalizeBaseUrlInput(p.baseUrl),
         hasApiKey: p.hasApiKey,
         apiType: p.apiType ?? "chat",
         ...(p.instruct ? { instruct: p.instruct } : {}),
@@ -432,7 +443,7 @@ export function SettingsDialog({ connection, onClose, onSaved, onError, onNotice
                     </div>
                   </label>
                   <label className="min-w-0 text-xs text-tavern-dim sm:col-span-2">API 请求地址 <span className="text-red-400">*</span>
-                    <input aria-label="接口地址" value={p.baseUrl} onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })} placeholder="https://api.example.com/v1"
+                    <input aria-label="接口地址" value={p.baseUrl} onChange={(e) => updateProvider(p.id, { baseUrl: normalizeBaseUrlInput(e.target.value) })} placeholder="https://api.example.com/v1"
                       className="mt-1 w-full rounded-md border border-tavern-border bg-tavern-raised px-2.5 py-2 text-sm text-tavern-text outline-none focus:border-tavern-accent-dim" />
                     <span className="mt-1 block text-[11px] text-tavern-dim">OpenAI 兼容地址，例如 https://中转域名/v1；填到 /v1 为止。</span>
                   </label>

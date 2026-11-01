@@ -55,6 +55,17 @@ function boundedNumber(value: unknown, label: string, min: number, max: number, 
   return value;
 }
 
+/** 折叠粘贴造成的重复协议前缀，并去掉末尾斜杠。 */
+function normalizeBaseUrl(value: string): string {
+  let url = value.trim();
+  for (let index = 0; index < 8; index++) {
+    const match = /^(https?:\/\/)(?=https?:\/\/)/i.exec(url);
+    if (!match) break;
+    url = url.slice(match[1].length);
+  }
+  return /^https?:\/\/$/i.test(url) ? url : url.replace(/\/+$/, "");
+}
+
 function characterDto(card: import("../stdata/types.ts").CharacterCard): CharacterDto {
   return {
     name: card.name,
@@ -265,7 +276,7 @@ export function createHttpApp(deps: HttpDeps): express.Express {
         return {
           id: p.id,
           name: p.name,
-          baseUrl: p.baseUrl.replace(/\/+$/, ""),
+          baseUrl: normalizeBaseUrl(p.baseUrl),
           apiKey,
           apiType: p.apiType === undefined ? old?.apiType ?? "chat" : p.apiType,
           instruct: p.instruct === undefined ? old?.instruct : normalizeInstruct(p.instruct),
@@ -414,14 +425,18 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       const stream = modelsRef.current.streamSimple(model, {
         systemPrompt: "You are a connectivity check. Reply with exactly: ok",
         messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
-      }, { maxTokens: 1, timeoutMs: 15_000 });
+      }, { maxTokens: 16, timeoutMs: 15_000 });
       let sawText = false;
+      let sawThinking = false;
+      let done = false;
       for await (const event of stream) {
         if (event.type === "text_delta") sawText = true;
+        // 推理模型可能先只返回思考增量；只要能完成流式响应，连通性已成立。
+        if (event.type === "thinking_delta") sawThinking = true;
         if (event.type === "error") throw new Error(event.error.errorMessage ?? "模型返回错误");
-        if (event.type === "done") break;
+        if (event.type === "done") { done = true; break; }
       }
-      res.json({ ok: sawText, provider: model.provider, model: model.id });
+      res.json({ ok: done || sawText || sawThinking, text: sawText, thinking: sawThinking, provider: model.provider, model: model.id });
     } catch (error) {
       res.status(400).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }

@@ -133,6 +133,14 @@ try {
   assert.equal((await patch({ providerId: "local", modelId: "fixture", thinkingLevel: "max" })).status, 400);
   assert.equal((await patch({ providerId: "local", modelId: "missing", thinkingLevel: "high" })).status, 404);
   passed("单模型思考等级写入、推理能力同步、配置落盘与无效参数");
+  const deepseekConfig = defaultConfig();
+  deepseekConfig.providers = [{ id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", apiKey: "synthetic",
+    models: [{ id: "deepseek-chat", name: "DeepSeek Chat", thinkingLevel: "off", contextWindow: 64_000, maxTokens: 8_192 }] }];
+  const deepseekModel = buildModels(deepseekConfig).getModel("deepseek", "deepseek-chat")!;
+  assert.equal(deepseekModel.reasoning, true, "官方 DeepSeek 关闭思考仍需保留 reasoning 以发送 thinking:disabled");
+  assert.equal((deepseekModel.compat as any)?.thinkingFormat, "deepseek");
+  assert.equal(deepseekModel.thinkingLevelMap?.off, "none");
+  passed("DeepSeek 官方地址使用 thinkingFormat=deepseek，thinking off 会显式禁用思考");
   fs.writeFileSync(path.join(runDir, "report.json"), JSON.stringify({ ok: true, checks, requests: requests.length }, null, 2));
   console.log("模型列表验证通过；合成产物保留：" + runDir);
 } catch (error) {

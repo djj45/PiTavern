@@ -810,3 +810,15 @@ test('模型列表支持逐模型测试并显示成功或失败颜色', async ({
   await expect(failButton).toHaveClass(/text-red-400/, { timeout: 5000 });
   await expect(failButton).toHaveAttribute('aria-label', /合成失败/);
 });
+
+test('粘贴完整接口地址不会重复 https://', async ({ page, app }) => {
+  await page.goto(app.baseURL); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: '＋ 添加', exact: true }).click();
+  const address = dialog.getByLabel('接口地址', { exact: true }).last();
+  await address.fill('https://https://api.deepseek.com/v1');
+  await expect(address).toHaveValue('https://api.deepseek.com/v1');
+  await address.fill('https://https://https://api.deepseek.com/v1');
+  await expect(address).toHaveValue('https://api.deepseek.com/v1');
+});

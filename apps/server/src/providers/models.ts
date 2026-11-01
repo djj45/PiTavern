@@ -23,6 +23,16 @@ function staticApiKeyAuth(providerName: string, apiKey: string | undefined, allo
   };
 }
 
+/** DeepSeek 官方地址：关闭思考时要显式发送 thinking: disabled，否则服务端仍按默认开启处理。 */
+function isOfficialDeepSeek(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "api.deepseek.com" || host.endsWith(".deepseek.com");
+  } catch {
+    return false;
+  }
+}
+
 /** 把配置里的中转列表变成 pi Models 集合；配置变更后重建 */
 export function buildModels(config: TavernConfig): Models {
   const models = createModels();
@@ -34,20 +44,29 @@ export function buildModels(config: TavernConfig): Models {
       baseUrl: p.baseUrl,
       auth: { apiKey: staticApiKeyAuth(p.name || p.id, p.apiKey, p.apiType === "text") },
       models: p.models.map(
-        (m): Model<Api> => ({
-          id: m.id,
-          name: m.name || m.id,
-          api: p.apiType === "text" ? "openai-text-completions" : "openai-completions",
-          provider: p.id,
-          baseUrl: p.baseUrl,
-          reasoning: p.apiType !== "text" && (m.thinkingLevel !== undefined ? m.thinkingLevel !== "off" : (m.reasoning ?? false)),
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: m.contextWindow ?? 1_000_000,
-          maxTokens: m.maxTokens ?? 16_384,
-          // 中转站普遍只认旧字段 max_tokens，覆盖 pi-ai 的自动探测
-          compat: { maxTokensField: "max_tokens" },
-        }),
+        (m): Model<Api> => {
+          const officialDeepSeek = p.apiType !== "text" && isOfficialDeepSeek(p.baseUrl);
+          return {
+            id: m.id,
+            name: m.name || m.id,
+            api: p.apiType === "text" ? "openai-text-completions" : "openai-completions",
+            provider: p.id,
+            baseUrl: p.baseUrl,
+            // 官方 DeepSeek 即使关闭思考也需保留 reasoning 能力，才能发出 thinking:disabled。
+            reasoning: officialDeepSeek || (p.apiType !== "text" && (m.thinkingLevel !== undefined ? m.thinkingLevel !== "off" : (m.reasoning ?? false))),
+            ...(officialDeepSeek ? {
+              thinkingLevelMap: { off: "none", minimal: "low", low: "low", medium: "high", high: "high", xhigh: "max", max: "max" },
+            } : {}),
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: m.contextWindow ?? 1_000_000,
+            maxTokens: m.maxTokens ?? 16_384,
+            // 中转站普遍只认旧字段 max_tokens，覆盖 pi-ai 的自动探测
+            compat: officialDeepSeek
+              ? { maxTokensField: "max_tokens", thinkingFormat: "deepseek", supportsReasoningEffort: true }
+              : { maxTokensField: "max_tokens" },
+          };
+        },
       ),
       api: p.apiType === "text"
         ? textCompletionsApi(normalizeInstruct(p.instruct ?? INSTRUCT_TEMPLATES.ChatML), config.persona.name)
