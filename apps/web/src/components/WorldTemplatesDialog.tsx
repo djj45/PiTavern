@@ -7,6 +7,7 @@ import type {
   WorldTemplateSummaryDto,
 } from "@pitavern/shared/world";
 import {QuestEditor} from "./QuestEditor.tsx";
+import {ScheduleEditor} from "./ScheduleEditor.tsx";
 import { KnowledgeEditor } from "./KnowledgeEditor.tsx";
 import { api, ApiError } from "../api.ts";
 import { buttonClass, fieldClass } from "./libraryStyles.ts";
@@ -581,6 +582,7 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
         </section>
 
         <QuestEditor template={template} change={updateTemplate} busy={busy} />
+        <ScheduleEditor template={template} change={updateTemplate} busy={busy} />
         <KnowledgeEditor template={template} change={updateTemplate} busy={busy} />
 
         {editor.initialSnapshot

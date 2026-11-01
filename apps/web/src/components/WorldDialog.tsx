@@ -71,13 +71,14 @@ function statusView(world: WorldChatStateDto) {
       {snapshot.recentEvents.length > 0 && (
         <div>
           <p className="mb-1 text-xs text-tavern-dim">最近变化</p>
-          <ul className="space-y-1 rounded-lg border border-tavern-border bg-tavern-bg/60 p-2.5 text-xs text-tavern-text">
-            {snapshot.recentEvents.slice(-5).map((event) => (
-              <li key={event.id} className="truncate" title={event.summary}>{clockLabel(event.worldTimeMinutes)} · {eventText(event, template)}</li>
+          <ul aria-label="最近世界变化" className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-tavern-border bg-tavern-bg/60 p-2.5 text-xs text-tavern-text">
+            {snapshot.recentEvents.map((event) => (
+              <li key={event.id} className="break-words">{clockLabel(event.worldTimeMinutes)} · {eventText(event, template)}</li>
             ))}
           </ul>
         </div>
       )}
+      {snapshot.schemaVersion===4 && <p className="text-xs text-tavern-dim">等待会推进世界时间，人物可能离开或返回。查看状态、刷新和恢复不会推进时间。</p>}
     </div>
   );
 }

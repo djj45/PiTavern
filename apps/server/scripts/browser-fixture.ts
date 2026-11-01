@@ -65,13 +65,14 @@ const mock = http.createServer(async (req, res) => {
   const packetMessage = body.messages?.findLast((message:{role:string;content?:unknown}) => message.role === 'user' && contentText(message).startsWith('{"protocol":"pitavern-narrative-v1"'));
   const questFlow=body.tools?.some((tool:{function?:{name?:string}})=>tool.function?.name==='world_quest');
   const questPacket=packetMessage?JSON.parse(contentText(packetMessage)):undefined;
-  if(questFlow || questPacket?.authoritativeState.schemaVersion===3){
+  if(questFlow || (questPacket?.authoritativeState.schemaVersion??0)>=3){
     const frame=(delta:object,finish_reason:string|null)=>'data: '+JSON.stringify({id:'quest-browser',object:'chat.completion.chunk',model:'fixture',choices:[{index:0,delta,finish_reason}]})+'\n\n';
     const lastUser=contentText(body.messages.findLast((m:{role:string})=>m.role==='user')??{});
-    const settled=body.messages.some((m:{tool_calls?:Array<{function:{name:string}}>})=>m.tool_calls?.some(c=>c.function.name==='world_quest'));
+    const settled=body.messages.some((m:{tool_calls?:Array<{function:{name:string}}>})=>m.tool_calls?.some(c=>['world_quest','world_command','world_interact'].includes(c.function.name)));
+    const wait=(minutes:number)=>({name:'world_command',args:{commandId:`wait-${minutes}`,type:'advance_time',minutes}});
     const operation=(action:string)=>({name:'world_quest',args:{questId:'cellar_sword',action}});
     const plan={name:'submit_narrative_plan',args:{scene:'旧酒馆',beats:['依据实际任务状态叙述'],dialogue:['掌柜回应'],references:[{kind:'quest',id:'cellar_sword'}]}};
-    let calls=settled||raw.includes('任务不交付')?[plan]:lastUser.includes('任务调查')?[operation('accept'),{name:'world_command',args:{commandId:'buy',type:'purchase_item',buyerId:'player',sellerId:'innkeeper',itemId:'sword',quantity:1}},{name:'world_interact',args:{interactionId:'ask_innkeeper_about_cellar'}},operation('advance')]:lastUser.includes('任务交付')?[operation('advance')]:[plan];
+    let calls=settled||raw.includes('任务不交付')||raw.includes('日程不返回')?[plan]:lastUser.includes('等待到10')?[wait(10)]:lastUser.includes('日程返回交付')?[wait(20),operation('advance')]:lastUser.includes('任务调查')?[operation('accept'),{name:'world_command',args:{commandId:'buy',type:'purchase_item',buyerId:'player',sellerId:'innkeeper',itemId:'sword',quantity:1}},{name:'world_interact',args:{interactionId:'ask_innkeeper_about_cellar'}},operation('advance')]:lastUser.includes('任务交付')?[operation('advance')]:[plan];
     if(!twoStage && settled)calls=[];
     const text=questPacket?'任务正文：'+(questPacket.authoritativeState.quests?.find((q:{id:string})=>q.id==='cellar_sword')?.status==='completed'?'已交付长剑并领取奖励。':'当前任务尚未完成。'):'任务回应。';
     const delta=questPacket||!calls.length?{role:'assistant',content:text}:{role:'assistant',tool_calls:calls.map((c,index)=>({index,id:'quest-'+index+'-'+(settled?'plan':'act'),type:'function',function:{name:c.name,arguments:JSON.stringify(c.args)}}))};

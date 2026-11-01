@@ -40,6 +40,7 @@ import { buildRoleWorldView } from "../world/knowledge.ts";
 import { createWorldTemplateRecord, createInitialWorldSnapshot, WorldValidationError } from "../world/index.ts";
 import { WorldChatMigrationLimitError } from "../world/chat-migration.ts";
 import { WorldTemplateConflictError, WorldTemplateNotFoundError } from "../world/template-library.ts";
+import {advanceSchedules} from "../world/schedules.ts";
 
 export interface HttpDeps {
   config: TavernConfig;
@@ -994,6 +995,19 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       sessions.libraryChanged();
       res.json({ ok: true });
     } catch (error) { worldTemplateError(res, error); }
+  });
+
+  // Explicit local-author management operation; never fetched by the default player snapshot.
+  app.post("/api/world/schedule-preview",(req,res)=>{
+    try {
+      const record=createWorldTemplateRecord(req.body?.template),snapshot=createInitialWorldSnapshot(record);
+      if(record.template.schemaVersion!==4)throw new Error("请先启用日程规则（v4）");
+      const from=boundedNumber(req.body?.fromMinute,"起始累计分钟",0,525600000,true);
+      const minutes=boundedNumber(req.body?.minutes,"推进分钟数",1,525600000,true);
+      snapshot.clockMinutes=from;
+      snapshot.scheduleStates=record.template.schedules!.map(s=>({scheduleId:s.id,activatedAt:from,processedThrough:from}));
+      res.json(advanceSchedules(snapshot,record.template,from+minutes));
+    } catch (error) {worldTemplateError(res,error);}
   });
 
   // Explicit local-author management operation; never fetched by the default player snapshot.

@@ -417,3 +417,9 @@ export interface WorldScheduleState {
   processedThrough: number;
   lastOccurrenceAt?: number;
 }
+/** Explicit local-author preview; never part of a player snapshot. */
+export interface WorldSchedulePreviewDto {
+  snapshot: WorldSnapshot;
+  events: Array<Omit<WorldEvent,"id"|"commandId"|"turn">>;
+  questViewsChanged: boolean;
+}

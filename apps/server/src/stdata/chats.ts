@@ -298,10 +298,15 @@ export class ChatStore {
     if (!metadata[WORLD_STATE_KEY]) throw new Error("该聊天尚未初始化世界");
     const current = new WorldState(metadata[WORLD_STATE_KEY], templates);
     if (!current.template) throw new Error(current.capability.reason ?? "世界模板缺失，无法修正");
+    const base = current.snapshot;
+    const proposed = snapshotInput as Partial<WorldSnapshot> | null;
+    if (base.schemaVersion === 4 && (proposed?.clockMinutes !== base.clockMinutes ||
+        JSON.stringify(proposed?.scheduleStates) !== JSON.stringify(base.scheduleStates))) {
+      throw new Error("日程世界的时钟与进度只能通过 advance_time、模板迁移或备份恢复变更");
+    }
     const checked = new WorldState(snapshotInput, templates, { mode: "enabled" });
     if (checked.capability.mode !== "enabled") throw new Error(checked.capability.reason ?? "世界快照校验失败");
     if (!checked.template) throw new Error("世界模板缺失，无法修正");
-    const base = current.snapshot;
     const next = checked.snapshot;
     if (next.templateHash !== base.templateHash || next.templateVersion !== base.templateVersion || next.rulesVersion !== base.rulesVersion) {
       throw new Error("修正不能切换模板或规则版本");

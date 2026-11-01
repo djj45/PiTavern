@@ -44,6 +44,7 @@ import type {
   WorldTemplateLibrarySummaryDto,
   WorldTemplateSummaryDto,
   WorldTemplateVersionDto,
+  WorldSchedulePreviewDto,
 } from "@pitavern/shared/world";
 
 /** 保留 HTTP 状态与响应体的接口错误，供聊天导入/模板编辑区分 409 等状态。 */
@@ -173,6 +174,7 @@ export const api = {
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
   worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),
   previewWorldKnowledge: (template:WorldTemplate,actorId?:string) => fetch("/api/world/knowledge-preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({template,actorId})}).then(r=>json<WorldModelSnapshot>(r)),
+  previewWorldSchedules: (template:WorldTemplate,fromMinute:number,minutes:number) => fetch("/api/world/schedule-preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({template,fromMinute,minutes})}).then(r=>json<WorldSchedulePreviewDto>(r)),
   worldAuthor: (chatId:string) => fetch("/api/chat/world/author",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chatId})}).then(r=>json<{snapshot:WorldSnapshot;template?:WorldTemplate}>(r)),
   worldTemplates: () => fetch("/api/world/templates").then((r) => json<WorldTemplateSummaryDto[]>(r)),
   worldTemplateLibrary: () => fetch("/api/world/template-library").then((r) => json<WorldTemplateLibrarySummaryDto[]>(r)),
