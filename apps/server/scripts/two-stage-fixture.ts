@@ -23,6 +23,7 @@ export async function twoStageFixture(){
     if(step.failure){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'synthetic provider failure'}}));return;}
     res.writeHead(200,{'Content-Type':'text/event-stream'});
     if(step.pause){res.flushHeaders();paused();return;}
+    if (typeof body.prompt === 'string') {res.end('data: '+JSON.stringify({id:'text',choices:[{index:0,text:step.text??'文本补全正文',finish_reason:'stop'}],usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}})+'\n\ndata: [DONE]\n\n');return;}
     const delta=step.calls?{role:'assistant',tool_calls:step.calls.map((c,i)=>({index:i,id:`call-${index}-${i}`,type:'function',function:{name:c.name,arguments:JSON.stringify(c.args)}}))}:{role:'assistant',content:step.text??'掌柜迎接旅人。'};
     res.end(frame(delta,null)+frame({},step.length?'length':step.calls?'tool_calls':'stop')+'data: '+JSON.stringify({choices:[],usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}})+'\n\ndata: [DONE]\n\n');
   }catch(e){problems.push(String(e));res.writeHead(400);res.end(JSON.stringify({error:{message:String(e)}}));}});

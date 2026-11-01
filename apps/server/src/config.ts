@@ -133,6 +133,8 @@ export function loadConfig(): TavernConfig {
   return {
     ...defaults,
     ...raw,
+    twoStage: raw.twoStage === true,
+    renderRetries: Number.isInteger(raw.renderRetries) && raw.renderRetries! >= 0 && raw.renderRetries! <= 2 ? raw.renderRetries! : 0,
     persona: { ...defaults.persona, ...raw.persona },
     worldInfo: { ...defaults.worldInfo, ...raw.worldInfo },
     vectors: { ...defaults.vectors, ...raw.vectors },

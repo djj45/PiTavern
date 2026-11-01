@@ -59,6 +59,24 @@ const mock = http.createServer(async (req, res) => {
   }
   let raw = ''; for await (const part of req) raw += part;
   fs.appendFileSync(path.join(runDir, 'requests.ndjson'), raw + '\n');
+  const body = JSON.parse(raw);
+  const twoStage = body.tools?.some((tool: {function?:{name?:string}}) => tool.function?.name === 'submit_narrative_plan');
+  const contentText = (message:{content?:unknown}) => typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.filter((c:{type?:string})=>c.type==='text').map((c:{text:string})=>c.text).join('') : '';
+  const packetMessage = body.messages?.findLast((message:{role:string;content?:unknown}) => message.role === 'user' && contentText(message).startsWith('{"protocol":"pitavern-narrative-v1"'));
+  if (twoStage || packetMessage) {
+    if (raw.includes('双阶段计时')) await new Promise(resolve=>setTimeout(resolve,600));
+    if (packetMessage && raw.includes('正文失败测试')) {res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'合成正文失败'}}));return;}
+    res.writeHead(200,{'Content-Type':'text/event-stream'});
+    const frame=(delta:object,finish_reason:string|null)=>'data: '+JSON.stringify({id:'two-stage-browser',object:'chat.completion.chunk',model:'fixture',choices:[{index:0,delta,finish_reason}]})+'\n\n';
+    const alreadySettled=body.messages.some((message:{role:string;tool_calls?:Array<{function:{name:string}}>})=>message.tool_calls?.some(call=>call.function.name==='world_command'));
+    const calls=alreadySettled?[{name:'submit_narrative_plan',args:{scene:'旧酒馆',beats:['按照实际工具结果叙述购买与线索'],dialogue:['掌柜回应'],references:[{kind:'actor',id:'innkeeper'}]}}]:[
+      {name:'world_command',args:{commandId:'buy',type:'purchase_item',buyerId:'player',sellerId:'innkeeper',itemId:'sword',quantity:1}},
+      {name:'world_command',args:{commandId:'time',type:'advance_time',minutes:10}},
+      {name:'world_interact',args:{interactionId:'ask_innkeeper_about_cellar'}}];
+    const packet=packetMessage?JSON.parse(contentText(packetMessage)):undefined;
+    const delta=packet?{role:'assistant',content:'双阶段正文：旅人买下长剑。'+(packet.authoritativeState.knownFacts.find((f:{id:string})=>f.id==='hidden_fireplace_passage')?.text??'')+(packet.writingRequest.rewriteDirection?'写作要求：'+packet.writingRequest.rewriteDirection:'')}:{role:'assistant',tool_calls:calls.map((call,index)=>({index,id:'call-'+index+'-'+(alreadySettled?'plan':'settle'),type:'function',function:{name:call.name,arguments:JSON.stringify(call.args)}}))};
+    res.end(frame(delta,null)+frame({},packet?'stop':'tool_calls')+'data: '+JSON.stringify({choices:[],usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}})+'\n\ndata: [DONE]\n\n');return;
+  }
   // 供逐模型连通测试验证失败态；其它请求一律返回成功。
   if (raw.includes('"model":"broken-model"')) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -73,7 +91,7 @@ const mock = http.createServer(async (req, res) => {
 });
 mock.listen(0, '127.0.0.1'); await once(mock, 'listening');
 config.providers = [{ id: 'fixture', name: '本地合成连接', apiKey: 'synthetic-only', baseUrl: `http://127.0.0.1:${(mock.address() as AddressInfo).port}/v1`, models: [{ id: 'fixture', name: '本地模型', contextWindow: 8000, maxTokens: 500 }] }];
-config.defaultProvider = 'fixture'; config.defaultModel = 'fixture'; config.toolsEnabled = false;
+config.defaultProvider = 'fixture'; config.defaultModel = 'fixture'; config.toolsEnabled = process.env.PITAVERN_BROWSER_TWO_STAGE === '1';
 config.contextMode = 'bridge'; config.activePreset = 'browser'; saveConfig(config);
 const characters = new CharacterStore(path.join(config.stDataDir, 'characters'));
 const chats = new ChatStore(config.stDataDir);

@@ -1,7 +1,7 @@
 {
   "name": "@pitavern/server",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -34,7 +34,8 @@
     "verify:character-cards": "tsx scripts/character-cards-verify.ts",
     "verify:chat-migration": "tsx scripts/chat-migration-verify.ts && tsx scripts/chat-migration-apply-verify.ts && tsx scripts/chat-migration-api-verify.ts && tsx scripts/chat-migration-game-verify.ts",
     "verify:context": "tsx scripts/context-baseline-verify.ts && tsx scripts/context-builder-verify.ts && tsx scripts/context-lifecycle-verify.ts && tsx scripts/context-modes-verify.ts && tsx scripts/context-game-verify.ts",
-    "verify:knowledge": "tsx scripts/knowledge-schema-verify.ts && tsx scripts/knowledge-transaction-verify.ts && tsx scripts/knowledge-outlets-verify.ts && tsx scripts/knowledge-lifecycle-verify.ts && tsx scripts/knowledge-game-verify.ts"
+    "verify:knowledge": "tsx scripts/knowledge-schema-verify.ts && tsx scripts/knowledge-transaction-verify.ts && tsx scripts/knowledge-outlets-verify.ts && tsx scripts/knowledge-lifecycle-verify.ts && tsx scripts/knowledge-game-verify.ts",
+    "verify:two-stage": "tsx scripts/two-stage-baseline-verify.ts && tsx scripts/narrative-packet-verify.ts && tsx scripts/two-stage-agents-verify.ts && tsx scripts/two-stage-turn-verify.ts && tsx scripts/narrative-rewrite-verify.ts && tsx scripts/narrative-lifecycle-verify.ts && tsx scripts/two-stage-boundaries-verify.ts && tsx scripts/two-stage-comparison-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

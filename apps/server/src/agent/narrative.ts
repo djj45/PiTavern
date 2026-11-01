@@ -2,7 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { WorldModelSnapshot } from "@pitavern/shared/world";
 import type { StChatLine } from "../stdata/types.ts";
 import { createTavernAgent, historyToAgentMessages, type TavernAgentOptions } from "./engine.ts";
-import { narrativePlanSchema, validatePlan, narrativePrompt, type NarrativePacket, type NarrativePlan } from "../session/narrative.ts";
+import { narrativePlanSchema, validatePlan, narrativePrompt, type narrativeCatalog, type NarrativePacket, type NarrativePlan } from "../session/narrative.ts";
 
 /** A plan seals the entire tool loadout, including ordinary variable/projection tools. */
 export function settlementTools(tools: AgentTool<any>[], view: () => WorldModelSnapshot, signal: AbortSignal) {
@@ -31,7 +31,7 @@ export function settlementTools(tools: AgentTool<any>[], view: () => WorldModelS
 export const RENDER_INSTRUCTION = "你处于只读正文阶段。将服务端叙事数据包写成剧情正文。authoritativeState 和 visibleEvents 是硬事实，suggestedPlan 仅是写作建议；不得虚构已成功的状态变化、知识授权或额外行动。写作要求不是新的结算指令。不要输出工具调用、JSON计划或解释，只输出非空正文。";
 
 export function createNarrativeAgent(options: Pick<TavernAgentOptions, "models" | "model" | "chatId" | "thinkingLevel" | "tokenCounter" | "onContext"> & {
-  packet: NarrativePacket; view: WorldModelSnapshot; history: StChatLine[]; instruction?: string;
+  catalog?: ReturnType<typeof narrativeCatalog>; packet: NarrativePacket; view: WorldModelSnapshot; history: StChatLine[]; instruction?: string;
 }) {
   // Only text is copied. Neither native swipe extras, packets, tool declarations,
   // full world records nor private knowledge can enter via history metadata.
@@ -42,12 +42,12 @@ export function createNarrativeAgent(options: Pick<TavernAgentOptions, "models" 
     const mes = line.mes.slice(-Math.min(remaining, 4000)); remaining -= mes.length;
     history.unshift({ name: line.name, mes, is_user: line.is_user, is_system: false, send_date: line.send_date });
   }
-  const { packet: _packet, view: _view, history: _history, instruction: _instruction, ...agentOptions } = options;
-  return createTavernAgent({ ...agentOptions, completion: "render", tools: [],
+  const { packet: _packet, view: _view, history: _history, instruction: _instruction, catalog: _catalog, ...agentOptions } = options;
+  return createTavernAgent({ ...agentOptions, sampling: options.packet.writing.sampling, completion: "render", tools: [],
     messages: [
       { role: "system", content: options.packet.writing.settings + "\n\n" + RENDER_INSTRUCTION, timestamp: 0 },
       ...historyToAgentMessages(history),
-      { role: "user", content: narrativePrompt(options.packet, options.view, options.instruction), timestamp: 0 },
+      { role: "user", content: narrativePrompt(options.packet, options.view, options.instruction, options.catalog), timestamp: 0 },
     ],
     compression: { enabled: false, keepFullTurns: 6 }, worldSnapshot: () => options.view,
   });

@@ -14,11 +14,11 @@
 
 ## 数据包与恢复
 
-协议 v1，服务端生成结算 ID、回合 ID、模板与知识视角、状态/来源指纹。保存玩家 DTO、实际可见事件、校验计划、原始本轮输入、独立方向要求及写作设置。字符串、条目、引用及总长度有界；未知字段、未知版本和悬空/不可见引用拒绝。自由叙事建议不构成硬事实或知识授权。
+协议 v1，服务端生成结算 ID、回合 ID、模板与知识视角、状态/来源指纹。来源仅绑定实际模型历史（排除系统注释和空行），回合 ID 必须匹配当前用户消息。保存玩家 DTO、实际可见事件、校验计划、原始本轮输入、独立方向要求及写作设置。字符串、条目、引用及总长度有界；未知字段、未知版本和悬空/不可见引用拒绝。自由叙事建议不构成硬事实或知识授权。
 
-数据包写入回复 `extra._pitavernNarrative`，随原生 swipe、剧情候选、隐藏 continuation、JSONL 和备份保存；活动不是恢复来源。默认 HTTP、WS、诊断不输出数据包或原始提示。JSONL/备份仍是作者完整资料；MD 仍只导出活动路径正文。本地作者入口不是多人权限控制。
+数据包写入回复 `extra._pitavernNarrative`，并用 `extra._pitavernNarrativeTextHash` 绑定该候选的实际正文，外部改写正文后同样失效；随原生 swipe、剧情候选、隐藏 continuation、JSONL 和备份保存；活动不是恢复来源。默认 HTTP、WS、诊断不输出数据包或原始提示。JSONL/备份仍是作者完整资料；MD 仍只导出活动路径正文。本地作者入口不是多人权限控制。
 
-v1 字段为 `version/settlementId/turnId/stateHash/sourceHash/templateSourceHash/templateHash/viewpointId/knowledgeKey/state/events/plan/writing/digest`。`plan` 仅允许 scene（1000字）、beats（1–12项）、dialogue（0–12项）、references（0–32项，actor/fact/event）；每项文本1000字，引用128字。写作设置和原输入各32000字，方向4000字；事件最多100项，总包250000字符。digest 检测损坏，不是作者权限签名；导入包即使摘要自洽，也必须与重新构建的玩家投影、真实事件和当前来源完全一致才能用于重写。
+v1 字段为 `version/settlementId/turnId/stateHash/sourceHash/templateSourceHash/templateHash/viewpointId/knowledgeKey/state/events/plan/writing/digest`。`plan` 仅允许 scene（1000字）、beats（1–12项）、dialogue（0–12项）、references（0–32项，actor/fact/event）；每项文本1000字，引用128字。`writing.sampling` 可保存桥接预设的 temperature/maxTokens 及六项公开采样参数，正文/重写沿用，按当前模型重新检查预算；显示名目录仅由服务端从公开角色/地点/物品映射 ID 与名称，不传描述或完整模板。写作设置和原输入各32000字，方向4000字；事件最多100项，总包250000字符。digest 检测损坏，不是作者权限签名；导入包即使摘要自洽，也必须与重新构建的玩家投影、真实事件和当前来源完全一致才能用于重写。
 
 正文阶段依然遵循 0.8 玩家投影。普通历史/角色卡/世界书的自由文字不自动脱敏；不做关键词清洗，也不承诺阻止公开线索推断。回退未知分支、v1 或无世界后，旧活动按记录视角与当前视角过滤，不能因当前无 v2 状态跳过。
 

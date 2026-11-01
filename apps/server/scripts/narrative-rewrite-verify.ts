@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {stateFields} from '../src/stdata/replies.ts';
 import {NARRATIVE_KEY} from '../src/session/narrative.ts';
@@ -9,12 +11,13 @@ import {twoStageFixture,actions,submit} from './two-stage-fixture.ts';
 const f=await twoStageFixture();f.config.twoStage=true;let checks=0;const check=(s:string)=>{checks++;console.log('✓ '+s)};
 const request=(id:string,instruction='缩短并增加对白')=>{const e=f.sessions.snapshot(id)!.rewrite!;assert.equal(e.enabled,true,e.reason ?? "rewrite enabled");return {chatId:id,messageId:e.messageId!,candidate:e.candidate!,revision:e.revision,requestId:randomUUID(),instruction};};
 try{
+ const preset=path.join(f.data,'OpenAI Settings/context.json');fs.writeFileSync(preset,JSON.stringify({...JSON.parse(fs.readFileSync(preset,'utf8')),temperature:0.27,openai_max_tokens:700,top_p:0.8}));
  for(const mode of ['simple','bridge','takeover'] as const){
   f.config.contextMode=mode;const chat=f.chat();f.plan(mode+' initial',[{calls:actions},{calls:[submit]},{text:'原正文，旅人买剑并获知线索。'}]);const initialRevision=f.chats.revisionId(chat.id),sendRequest={requestId:randomUUID(),revision:initialRevision};await f.sessions.send(chat.id,'买剑并询问',undefined,sendRequest);const before=stateFields(f.chats.readMetadata(chat.id)),old=f.chats.readChat(chat.id)!.at(-1)!,packet=old.extra![NARRATIVE_KEY];
   const count=f.requests.length;await f.sessions.send(chat.id,'买剑并询问',undefined,sendRequest);assert.equal(f.requests.length,count);assert.equal(f.chats.readChat(chat.id)!.filter(l=>l.is_user).length,1);check(mode+'：发送成功后同ID重放无请求、无重复回合');
   let lastRequest=request(chat.id);
   for(let i=0;i<3;i++){
-   lastRequest=request(chat.id,'写作方向'+i);f.plan(mode+' rewrite '+i,[{text:'新文字候选'+i,inspect:body=>{assert.ok(!body.tools?.length);assert.ok(!JSON.stringify(body).includes(f.raw.facts[1].description));assert.ok(!JSON.stringify(body).includes(f.raw.interactions[0].description));assert.ok(JSON.stringify(body).includes('写作方向'+i));}}]);await f.sessions.rewrite(lastRequest);assert.equal(f.count(),1);assert.deepEqual(stateFields(f.chats.readMetadata(chat.id)),before);assert.deepEqual(f.chats.readChat(chat.id)!.at(-1)!.extra![NARRATIVE_KEY],packet);
+   lastRequest=request(chat.id,'写作方向'+i);f.plan(mode+' rewrite '+i,[{text:'新文字候选'+i,inspect:body=>{assert.ok(!body.tools?.length);if(mode==='bridge'){assert.equal(body.temperature,0.27);assert.equal(body.max_tokens,700);assert.equal(body.top_p,0.8);}assert.ok(JSON.stringify(body).includes('displayNames'));assert.ok(JSON.stringify(body).includes('长剑'));assert.ok(!JSON.stringify(body).includes(f.raw.facts[1].description));assert.ok(!JSON.stringify(body).includes(f.raw.interactions[0].description));assert.ok(JSON.stringify(body).includes('写作方向'+i));}}]);await f.sessions.rewrite(lastRequest);assert.equal(f.count(),1);assert.deepEqual(stateFields(f.chats.readMetadata(chat.id)),before);assert.deepEqual(f.chats.readChat(chat.id)!.at(-1)!.extra![NARRATIVE_KEY],packet);
   }
   assert.equal(f.sessions.snapshot(chat.id)!.replyChoices!.count,4);assert.equal(f.sessions.snapshot(chat.id)!.rewrite!.enabled,true);const run=f.sessions.activityPage(chat.id).records[0];assert.equal(run.kind,'rewrite');assert.equal(run.tools.length,0);assert.equal(run.usage.responses,1);check(mode+'：连续三次只写正文，余额/库存/时间/知识/变量/计时/事件/结算ID不变，保留4个候选');
   const after=f.chats.revisionId(chat.id),n=f.requests.length;assert.equal((await f.sessions.rewrite(lastRequest)).replayed,true);assert.equal(f.requests.length,n);assert.equal(f.chats.revisionId(chat.id),after);await assert.rejects(()=>f.sessions.rewrite({...lastRequest,instruction:'不同内容复用ID'}),/请求 ID/);

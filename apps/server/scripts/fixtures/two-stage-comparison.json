@@ -1,0 +1,229 @@
+{
+  "syntheticUsagePerResponse": {
+    "input": 1000,
+    "output": 100
+  },
+  "realProvider": "not_requested",
+  "narrativeQuality": "not_evaluated",
+  "reports": [
+    {
+      "mode": "simple",
+      "flow": "single-stage",
+      "elapsedMs": 66.65116599999999,
+      "requests": 2,
+      "inputJsonChars": 15223,
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 2200,
+        "costTotal": 0,
+        "responses": 2,
+        "responsesWithUsage": 2
+      },
+      "hardStateChecks": 4
+    },
+    {
+      "mode": "simple",
+      "flow": "two-stage",
+      "elapsedMs": 26.771457999999996,
+      "requests": 3,
+      "inputJsonChars": 23493,
+      "usage": {
+        "input": 3000,
+        "output": 300,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 3300,
+        "costTotal": 0,
+        "responses": 3,
+        "responsesWithUsage": 3
+      },
+      "hardStateChecks": 4,
+      "stages": [
+        {
+          "phase": "settling",
+          "elapsedMs": 17
+        },
+        {
+          "phase": "validating",
+          "elapsedMs": 1
+        },
+        {
+          "phase": "rendering",
+          "elapsedMs": 4
+        },
+        {
+          "phase": "committing",
+          "elapsedMs": 1
+        }
+      ]
+    },
+    {
+      "mode": "simple",
+      "flow": "rewrite",
+      "elapsedMs": 8.817666999999972,
+      "requests": 1,
+      "inputJsonChars": 6267,
+      "usage": {
+        "input": 1000,
+        "output": 100,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 1100,
+        "costTotal": 0,
+        "responses": 1,
+        "responsesWithUsage": 1
+      },
+      "worldUnchanged": true,
+      "tools": 0
+    },
+    {
+      "mode": "bridge",
+      "flow": "single-stage",
+      "elapsedMs": 46.347375,
+      "requests": 2,
+      "inputJsonChars": 14289,
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 2200,
+        "costTotal": 0,
+        "responses": 2,
+        "responsesWithUsage": 2
+      },
+      "hardStateChecks": 4
+    },
+    {
+      "mode": "bridge",
+      "flow": "two-stage",
+      "elapsedMs": 52.084874999999954,
+      "requests": 3,
+      "inputJsonChars": 22459,
+      "usage": {
+        "input": 3000,
+        "output": 300,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 3300,
+        "costTotal": 0,
+        "responses": 3,
+        "responsesWithUsage": 3
+      },
+      "hardStateChecks": 4,
+      "stages": [
+        {
+          "phase": "settling",
+          "elapsedMs": 44
+        },
+        {
+          "phase": "validating",
+          "elapsedMs": 1
+        },
+        {
+          "phase": "rendering",
+          "elapsedMs": 4
+        },
+        {
+          "phase": "committing",
+          "elapsedMs": 1
+        }
+      ]
+    },
+    {
+      "mode": "bridge",
+      "flow": "rewrite",
+      "elapsedMs": 7.307165999999995,
+      "requests": 1,
+      "inputJsonChars": 6167,
+      "usage": {
+        "input": 1000,
+        "output": 100,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 1100,
+        "costTotal": 0,
+        "responses": 1,
+        "responsesWithUsage": 1
+      },
+      "worldUnchanged": true,
+      "tools": 0
+    },
+    {
+      "mode": "takeover",
+      "flow": "single-stage",
+      "elapsedMs": 9.962249999999983,
+      "requests": 2,
+      "inputJsonChars": 15699,
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 2200,
+        "costTotal": 0,
+        "responses": 2,
+        "responsesWithUsage": 2
+      },
+      "hardStateChecks": 4
+    },
+    {
+      "mode": "takeover",
+      "flow": "two-stage",
+      "elapsedMs": 18.483416999999974,
+      "requests": 3,
+      "inputJsonChars": 24257,
+      "usage": {
+        "input": 3000,
+        "output": 300,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 3300,
+        "costTotal": 0,
+        "responses": 3,
+        "responsesWithUsage": 3
+      },
+      "hardStateChecks": 4,
+      "stages": [
+        {
+          "phase": "settling",
+          "elapsedMs": 11
+        },
+        {
+          "phase": "validating",
+          "elapsedMs": 1
+        },
+        {
+          "phase": "rendering",
+          "elapsedMs": 3
+        },
+        {
+          "phase": "committing",
+          "elapsedMs": 1
+        }
+      ]
+    },
+    {
+      "mode": "takeover",
+      "flow": "rewrite",
+      "elapsedMs": 6.98845799999998,
+      "requests": 1,
+      "inputJsonChars": 6555,
+      "usage": {
+        "input": 1000,
+        "output": 100,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 1100,
+        "costTotal": 0,
+        "responses": 1,
+        "responsesWithUsage": 1
+      },
+      "worldUnchanged": true,
+      "tools": 0
+    }
+  ]
+}

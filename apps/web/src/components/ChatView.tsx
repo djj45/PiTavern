@@ -481,7 +481,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
                   </label>
                 )}
               </div>
-              <div className="ml-auto flex shrink-0 items-center gap-2">
+              <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
                 {chat.world && (
                   <button type="button" onClick={() => setWorldOpen(true)} disabled={locked || !chat.page?.revision}
                     aria-label="打开世界状态" title={`${chat.world.templateName} · ${chat.world.capability.mode === "enabled" ? "世界可写入" : `世界只读${chat.world.capability.reason ? "：" + chat.world.capability.reason : ""}`}`}

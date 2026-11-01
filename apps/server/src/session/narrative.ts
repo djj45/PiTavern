@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import type { WorldModelSnapshot } from "@pitavern/shared/world";
+import type { WorldModelSnapshot, WorldTemplate } from "@pitavern/shared/world";
 import { WORLD_TEMPLATES_KEY } from "@pitavern/shared/world";
 import { worldContentHash } from "../world/hash.ts";
 import { stateFields } from "../stdata/replies.ts";
 import type { StChatLine } from "../stdata/types.ts";
 
 export const NARRATIVE_KEY = "_pitavernNarrative";
+export const NARRATIVE_TEXT_KEY = "_pitavernNarrativeTextHash";
 const strict = { additionalProperties: false };
 const text = (maxLength: number) => Type.String({ minLength: 1, maxLength });
 const id = text(128);
@@ -21,6 +22,10 @@ export const narrativePlanSchema = Type.Object({
   }, strict), { maxItems: 32 }),
 }, strict);
 export type NarrativePlan = Static<typeof narrativePlanSchema>;
+const sampling = Type.Object({
+  temperature: Type.Optional(Type.Number()), maxTokens: Type.Optional(Type.Integer({minimum:1,maximum:1_000_000})),
+  samplingParams: Type.Optional(Type.Object({top_p:Type.Optional(Type.Number()),top_k:Type.Optional(Type.Number()),min_p:Type.Optional(Type.Number()),frequency_penalty:Type.Optional(Type.Number()),presence_penalty:Type.Optional(Type.Number()),repetition_penalty:Type.Optional(Type.Number())},strict)),
+},strict);
 const packetSchema = Type.Object({
   version: Type.Literal(1), settlementId: id, turnId: id,
   stateHash: hash, sourceHash: hash, templateSourceHash: hash,
@@ -29,7 +34,7 @@ const packetSchema = Type.Object({
   // with a freshly built player projection, and rendering uses that fresh view.
   state: Type.Unknown(), events: Type.Array(Type.Unknown(), { maxItems: 100 }),
   plan: narrativePlanSchema,
-  writing: Type.Object({ settings: text(32000), input: text(32000), direction: Type.String({ maxLength: 4000 }) }, strict),
+  writing: Type.Object({ settings: text(32000), input: text(32000), direction: Type.String({ maxLength: 4000 }), sampling: Type.Optional(sampling) }, strict),
   digest: hash,
 }, strict);
 export type NarrativePacket = Static<typeof packetSchema> & { state: WorldModelSnapshot; events: WorldModelSnapshot["recentEvents"] };
@@ -42,7 +47,7 @@ export function validatePlan(input: unknown, view: WorldModelSnapshot): Narrativ
 }
 
 export function narrativeSource(lines: StChatLine[]): string {
-  return worldContentHash(lines.map(line => ({ name: line.name, user: line.is_user, system: line.is_system,
+  return worldContentHash(lines.filter(line => !line.is_system && line.mes.trim()).map(line => ({ name: line.name, user: line.is_user, system: line.is_system,
     text: line.mes, id: line.extra?.messageId })));
 }
 export function narrativeState(metadata: Record<string, unknown>): string { return worldContentHash(stateFields(metadata)); }
@@ -72,6 +77,8 @@ export function createNarrative(input: {
 
 export function validateNarrative(input: unknown, metadata: Record<string, unknown>, source: StChatLine[], view: WorldModelSnapshot): NarrativePacket {
   const packet = parseNarrative(input);
+  const user = source.filter(line => !line.is_system && line.mes.trim()).at(-1);
+  if (!user?.is_user || user.extra?.messageId !== packet.turnId) throw new Error("叙事数据包不属于当前回合");
   if (packet.stateHash !== narrativeState(metadata) || packet.sourceHash !== narrativeSource(source) ||
       packet.templateSourceHash !== narrativeTemplates(metadata) || packet.templateHash !== view.templateHash ||
       packet.viewpointId !== view.viewpointId || packet.knowledgeKey !== view.knowledgeKey ||
@@ -84,10 +91,15 @@ export function validateNarrative(input: unknown, metadata: Record<string, unkno
 
 export const SETTLEMENT_INSTRUCTION = "本轮采用双阶段生成。先执行必要工具完成结算，只能通过 submit_narrative_plan 结束结算。不要输出正文；计划不能自填或改写金钱、库存、时间、知识授权或工具成功结果。引用只能使用当前玩家可见的角色、事实与事件 ID。提交计划后不得再调用任何工具。";
 
-export function narrativePrompt(packet: NarrativePacket, view: WorldModelSnapshot, instruction = ""): string {
+export function narrativeCatalog(template?: WorldTemplate) {
+  const names = (items: Array<{id:string;name:string}>) => items.map(({id,name})=>({id,name}));
+  return {actors:names(template?.actors??[]),locations:names(template?.locations??[]),items:names(template?.items??[])};
+}
+
+export function narrativePrompt(packet: NarrativePacket, view: WorldModelSnapshot, instruction = "", catalog?: ReturnType<typeof narrativeCatalog>): string {
   // Pass a known, server-built projection, not an arbitrary imported packet field.
   return JSON.stringify({ protocol: "pitavern-narrative-v1", settlementId: packet.settlementId,
-    authoritativeState: view, visibleEvents: packet.events, suggestedPlan: packet.plan,
+    displayNames: catalog ?? narrativeCatalog(), authoritativeState: view, visibleEvents: packet.events, suggestedPlan: packet.plan,
     writingRequest: { originalInput: packet.writing.input, originalDirection: packet.writing.direction, rewriteDirection: instruction } });
 }
 

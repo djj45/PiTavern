@@ -1,5 +1,5 @@
 import { createNarrativeAgent, settlementTools } from "../agent/narrative.ts";
-import { createNarrative, validateNarrative, NARRATIVE_KEY, SETTLEMENT_INSTRUCTION, REQUEST_KEY, findGenerationRequest, requestFingerprint, type GenerationRequest } from "./narrative.ts";
+import { createNarrative, narrativeCatalog, validateNarrative, NARRATIVE_KEY, NARRATIVE_TEXT_KEY, SETTLEMENT_INSTRUCTION, REQUEST_KEY, findGenerationRequest, requestFingerprint, type GenerationRequest } from "./narrative.ts";
 import { executeScript, type ScriptResult } from "../script/interpreter.ts";
 import { readGroup, groupSpeakers } from "../stdata/groups.ts";
 import { withImportedScenario } from "../stdata/card-import.ts";
@@ -49,7 +49,7 @@ import { createTokenCounter } from "../context/tokens.ts";
 import { ContextFactCache } from "../context/memory-cache.ts";
 import { globalRegex } from "../stdata/library.ts";
 
-type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext" | "contextFactCache" | "contextSourceRevision" | "worldSnapshot" | "completion" | "settlementComplete"> & { writingSettings?: (settings: string) => void };
+type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext" | "contextFactCache" | "contextSourceRevision" | "worldSnapshot" | "completion" | "settlementComplete"> & { writingSettings?: (settings: string, sampling?: import("../context/bridge.ts").BridgeSampling) => void };
 
 export class WorldChatMigrationConflictError extends Error {
   constructor(message: string) { super(message); this.name = "WorldChatMigrationConflictError"; }
@@ -614,12 +614,14 @@ export class SessionManager {
     const document = this.chats.readDocument(chatId);
     if (!document) throw new Error("聊天不存在");
     if (readGroup(document.metadata)) throw new Error("正文重写暂不支持群聊");
-    const world = this.chats.readWorld(chatId);
+    let world;
+    try { world = this.chats.readWorld(chatId); } catch { throw new Error("世界状态无效，无法重写正文"); }
     if (!world || world.capability.mode !== "enabled" || !this.config.toolsEnabled) throw new Error("正文重写需要已启用的世界");
     const model = resolveModel(this.models(), this.config);
     if (model.api !== "openai-completions" || this.config.outputProtocol !== "native") throw new Error("正文重写仅支持 Chat Completions 与原生文本");
     const last = document.lines.at(-1);
     if (!last || last.is_user || last.is_system || !last.mes.trim()) throw new Error("只能重写活动路径末尾的回复");
+    if (typeof last.extra?.messageId !== "string" || last.extra[NARRATIVE_TEXT_KEY] !== requestFingerprint(last.mes)) throw new Error("正文缺少有效数据包绑定或已被编辑，不能沿用旧结算重写");
     const view = buildPlayerWorldView(world.snapshot, world.template);
     const source = document.lines.slice(0, -1);
     const packet = validateNarrative(last.extra?.[NARRATIVE_KEY], document.metadata, source, view);
@@ -667,10 +669,11 @@ export class SessionManager {
         thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
         tokenCounter: createTokenCounter(model.id, config.providers.find(p=>p.id===model.provider)?.models.find(m=>m.id===model.id)?.tokenizer),
         onContext: context => { generation.context = context; const phase = generation.stages?.at(-1); if (phase) phase.context = context; this.saveActivity(chatId, generation); },
-        packet: current.packet, view: current.view, history: current.source.slice(0,-1), instruction: input.instruction }, generated, config.renderRetries);
+        catalog: narrativeCatalog(current.world.template), packet: current.packet, view: current.view, history: current.source.slice(0,-1), instruction: input.instruction }, generated, config.renderRetries);
       session.controller.signal.throwIfAborted();
       this.stage(chatId, "committing");
-      for (const line of generated) line.extra = { ...line.extra, [NARRATIVE_KEY]: current.packet, [REQUEST_KEY]: { id: input.requestId, hash } };
+      for (const line of generated) line.extra = { ...line.extra, [NARRATIVE_KEY]: current.packet, [NARRATIVE_TEXT_KEY]: requestFingerprint(line.mes), [REQUEST_KEY]: { id: input.requestId, hash } };
+      if (this.chats.revisionId(chatId) !== input.revision) throw new Error("聊天已被修改，正文重写未提交");
       transaction.commit(generated, current.document.metadata);
       committed = true;
       return { replayed: false, revision: this.chats.revisionId(chatId) };
@@ -709,7 +712,7 @@ export class SessionManager {
       const invalid = renderer.state.messages.some(message => message.role === "assistant" &&
         (message.stopReason === "length" || message.content.some(c => c.type === "toolCall")));
       generated.splice(before);
-      if (attempt >= Math.min(2, Math.max(0, retries)) || invalid || session.generation?.context?.overBudget) throw new Error(renderer.state.errorMessage);
+      if (attempt >= (Number.isInteger(retries) ? Math.min(2, Math.max(0, retries)) : 0) || invalid || session.generation?.context?.overBudget) throw new Error(renderer.state.errorMessage);
       const stage = session.generation!.stages!.at(-1)!;
       stage.status = "failed"; stage.finishedAt = new Date().toISOString();
     }
@@ -803,6 +806,7 @@ export class SessionManager {
         extra: { _pitavernBeforeTurn: beforeTurn, ...(group ? { _pitavernSpeakers: speakers } : {}) },
       });
       const transaction = regeneration ?? this.chats.prepareRegeneration(chatId, String(userLine.extra!.messageId), userLine.mes, false);
+      const expectedCommitRevision = this.chats.revisionId(chatId);
       const generation: GenerationRecordDto = {
         id: this.activity.createId(chatId), version: 0, userMessageId: String(userLine.extra?.messageId ?? `line-${document.lines.length}`),
         kind: replacement ? (replyChoices(stored.lines)?.count ? "regenerate" : "retry") : "send",
@@ -877,9 +881,10 @@ export class SessionManager {
         }
         const settlement = twoStage ? settlementTools(tools, () => buildPlayerWorldView(worldTransaction!.snapshot, worldState!.template), session.controller.signal) : undefined;
         const allTools = settlement?.tools ?? (useProtocol ? [...tools, ...createProtocolTools()] : tools);
+        let renderSampling: import("../context/bridge.ts").BridgeSampling | undefined;
         let writingSettings = substituteMacros(buildSystemPrompt(character, config.persona), macroEnv);
         const phaseHooks: ContextHooks = settlement ? { ...contextHooks, completion: "settlement", settlementComplete: settlement.complete,
-          writingSettings: (settings) => { writingSettings = settings; } } : contextHooks;
+          writingSettings: (settings, sampling) => { writingSettings = settings; renderSampling = sampling; } } : contextHooks;
         const phaseInstruction = settlement ? SETTLEMENT_INSTRUCTION + this.instructionBlock(instruction) : instruction;
         // 计时效果状态（sticky/cooldown）：从元数据恢复，扫描内更新，组装后回写
         const timedState = sharedTimedState;
@@ -927,10 +932,10 @@ export class SessionManager {
           const packet = createNarrative({ turnId: String(userLine.extra!.messageId), metadata: { ...pendingMetadata,
             _pitavernEnforcement: structuredClone(session.enforcement), [WORLD_STATE_KEY]: worldTransaction!.snapshot },
             source: [...document.lines, userLine], before: worldBefore!, view, plan: settlement.result(),
-            writing: { settings: writingSettings, input: text, direction: instruction ?? "" } });
+            writing: { settings: writingSettings, input: text, direction: instruction ?? "", ...(renderSampling ? {sampling:renderSampling} : {}) } });
           await this.renderProse(chatId, { models, model, chatId, thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
-            tokenCounter: contextHooks.tokenCounter, onContext: contextHooks.onContext, packet, view, history: document.lines }, generated, config.renderRetries);
-          for (const line of generated.slice(generatedBefore)) line.extra = { ...line.extra, [NARRATIVE_KEY]: packet };
+            tokenCounter: contextHooks.tokenCounter, onContext: contextHooks.onContext, catalog: narrativeCatalog(worldState!.template), packet, view, history: document.lines }, generated, config.renderRetries);
+          for (const line of generated.slice(generatedBefore)) line.extra = { ...line.extra, [NARRATIVE_KEY]: packet, [NARRATIVE_TEXT_KEY]: requestFingerprint(line.mes) };
         }
         if (!session.aborted && !generated.slice(generatedBefore).some((line) => line.mes.trim())) throw new Error(character.name + " 未返回正文，本轮全部回复已撤回");
         if (session.aborted) break;
@@ -940,6 +945,7 @@ export class SessionManager {
         session.controller.signal.throwIfAborted();
         if (twoStage) this.stage(chatId, "committing");
         pendingMetadata._pitavernEnforcement = structuredClone(session.enforcement);
+        if (this.chats.revisionId(chatId) !== expectedCommitRevision) throw new Error("聊天已被修改，请同步后重试；本轮未提交");
         if (worldTransaction) pendingMetadata[WORLD_STATE_KEY] = worldTransaction.commit();
         if (request) for (const line of generated) line.extra = { ...line.extra, [REQUEST_KEY]: { id: request.requestId, hash: requestHash } };
         transaction.commit(generated, pendingMetadata);
@@ -950,7 +956,7 @@ export class SessionManager {
       if (session.generation?.stages) {
         const detail = cause instanceof Error ? cause.message : String(cause);
         session.generation.failureCode = /预算/.test(detail) ? "budget" : /正文为空|正文阶段禁止|正文输出被截断/.test(detail) ? "output" :
-          /变化|冲突/.test(detail) ? "conflict" : /叙事计划|叙事数据包|引用/.test(detail) ? "plan" : "provider";
+          /变化|冲突|修改/.test(detail) ? "conflict" : /叙事计划|叙事数据包|引用/.test(detail) ? "plan" : "provider";
       }
       const error = this.chats.readMetadata(chatId)[WORLD_STATE_KEY] && (this.chats.readMetadata(chatId)[WORLD_STATE_KEY] as {schemaVersion?:number}).schemaVersion===2
         ? new Error("本轮生成未完成，世界与知识未提交。") : cause;
@@ -1081,7 +1087,7 @@ export class SessionManager {
         ...(timedState ? { timed: timedState, messageCount: toolCtx.lines.length } : {}),
       },
     }, model.id, config.providers.find((p) => p.id === model.provider)?.models.find((m) => m.id === model.id)?.tokenizer, signal);
-    contextHooks.writingSettings?.(this.writingSettings(assembled.messages));
+    contextHooks.writingSettings?.(this.writingSettings(assembled.messages), assembled.sampling);
     const messages = [...assembled.messages];
     if (toolCtx.worldDigest) messages.push({ role: "system", content: toolCtx.worldDigest, timestamp: Date.now() });
     if (useProtocol) {
