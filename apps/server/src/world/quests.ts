@@ -19,7 +19,7 @@ export function rejectedQuest(snapshot:WorldSnapshot):WorldQuestResult {
 export function applyQuestAction(snapshot:WorldSnapshot,template:WorldTemplate,input:unknown,turn:number):{snapshot:WorldSnapshot;result:WorldQuestResult} {
   const reject=()=>({snapshot:structuredClone(snapshot),result:rejectedQuest(snapshot)});
   const action=questAction(input),player=template.initial.actorId;
-  if(!action || snapshot.schemaVersion!==3 || template.schemaVersion!==3 || !Number.isSafeInteger(turn) || turn<0 || !actorPresent(snapshot,player,player))return reject();
+  if(!action || snapshot.schemaVersion<3 || template.schemaVersion<3 || !Number.isSafeInteger(turn) || turn<0 || !actorPresent(snapshot,player,player))return reject();
   const q=template.quests!.find(q=>q.id===action.questId),old=snapshot.questStates!.find(s=>s.questId===action.questId);
   if(!q || (!old && !worldConditionsMet(snapshot,template,q.openConditions)))return reject();
   const unchanged=()=>({snapshot:structuredClone(snapshot),result:{status:"unchanged" as const,summary:"任务没有新的进度变化。",revision:snapshot.revision,quests:visibleQuests(snapshot,template,player)}});

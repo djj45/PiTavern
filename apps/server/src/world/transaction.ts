@@ -28,7 +28,7 @@ export class WorldTransaction {
     this.working = structuredClone(this.base);
     this.template = state.template;
     this.access = state.capability;
-    if(this.base.schemaVersion===3)this.initialQuestView=JSON.stringify(visibleQuests(this.base,this.template,this.template?.initial.actorId??""));
+    if(this.base.schemaVersion>=3)this.initialQuestView=JSON.stringify(visibleQuests(this.base,this.template,this.template?.initial.actorId??""));
   }
 
   get status(): "open" | "committed" | "discarded" { return this.phase; }

@@ -15,6 +15,7 @@ export const WORLD_MAX_ITEM_QUANTITY = 1_000_000;
 export const WORLD_MAX_CLOCK_MINUTES = 525_600_000;
 /** 单份快照保留的审计事件数量上限；不等于整个 JSONL 的总体积上限。 */
 export const WORLD_MAX_RECENT_EVENTS = 100;
+export const WORLD_MAX_SCHEDULE_TRIGGERS = 256;
 
 export interface WorldLocationDefinition {
   id: string;
@@ -52,7 +53,7 @@ export interface WorldInitialState {
 }
 
 export interface WorldTemplate {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   templateId: string;
   templateVersion: number;
   rulesVersion: number;
@@ -63,6 +64,7 @@ export interface WorldTemplate {
   facts?: WorldFactDefinition[];
   interactions?: WorldInteractionDefinition[];
   quests?: WorldQuestDefinition[];
+  schedules?: WorldScheduleDefinition[];
 }
 
 /** 模板内容哈希是模板身份；模板更新产生新记录，不覆盖旧记录。 */
@@ -90,7 +92,11 @@ export interface WorldEvent {
   id: string;
   commandId: string;
   turn: number;
-  type: "move" | "purchase" | "transfer" | "advance_time" | "knowledge_learn" | "knowledge_publish" | "quest_accept" | "quest_advance" | "quest_complete";
+  type: "move" | "purchase" | "transfer" | "advance_time" | "knowledge_learn" | "knowledge_publish" | "quest_accept" | "quest_advance" | "quest_complete" | "schedule_move" | "schedule_skip";
+  scheduleId?: string;
+  fromLocationId?: string;
+  locationId?: string;
+  skipReason?: "dead" | "inactive" | "already_there";
   questId?: string;
   stageId?: string;
   factId?: string;
@@ -109,7 +115,7 @@ export interface WorldEvent {
  * recentEvents 只做审计，不用于重放恢复。
  */
 export interface WorldSnapshot {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   revision: number;
   templateHash: string;
   templateVersion: number;
@@ -123,6 +129,7 @@ export interface WorldSnapshot {
   knowledge?: WorldKnowledgeEntry[];
   publishedFactIds?: string[];
   questStates?: WorldQuestState[];
+  scheduleStates?: WorldScheduleState[];
 }
 
 /** 聊天级模板表；旧模板记录必须保留，快照才能持续执行旧规则。 */
@@ -155,6 +162,7 @@ export type WorldCommandErrorCode =
   | "INVALID_QUANTITY"
   | "INVALID_AMOUNT"
   | "TIME_LIMIT"
+  | "SCHEDULE_LIMIT"
   | "COMMAND_CONFLICT"
   | "READ_ONLY";
 
@@ -247,7 +255,7 @@ export interface WorldTemplateExportDto {
 }
 
 
-export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules" | "fact" | "interaction" | "quest";
+export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules" | "fact" | "interaction" | "quest" | "schedule";
 export type WorldTemplateChangeAction = "added" | "removed" | "modified";
 
 /** 0.6.0 模板迁移差异；blocking 变更禁止应用。 */
@@ -381,7 +389,7 @@ export type WorldInteractionEffect =
 export interface WorldInteractionDefinition { id: string; name: string; description?: string; conditions: WorldInteractionCondition[]; effects: WorldInteractionEffect[] }
 export interface WorldKnownFact { id: string; text: string; source: WorldKnowledgeSource | {type: "public"; turn: number} }
 /** Model DTO: never add complete knowledge relations or template rules here. */
-export interface WorldModelSnapshot extends Omit<WorldSnapshot, "knowledge" | "publishedFactIds" | "questStates"> {
+export interface WorldModelSnapshot extends Omit<WorldSnapshot, "knowledge" | "publishedFactIds" | "questStates" | "scheduleStates"> {
   viewpointId: string;
   knowledgeKey: string;
   knownFacts: WorldKnownFact[];
@@ -396,3 +404,16 @@ export interface WorldQuestDefinition { id: string; name: string; description?: 
 export interface WorldQuestState { questId: string; status: "active" | "completed"; acceptedTurn: number; completedStages: Array<{stageId: string; turn: number}>; completedTurn?: number }
 export interface WorldQuestView { id: string; name: string; status: "available" | "active" | "completed"; currentStage?: {id: string; objective: string}; completedStages: Array<{id: string; objective: string; turn: number}> }
 export interface WorldQuestResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; quests?: WorldQuestView[] }
+
+export interface WorldScheduleDefinition {
+  id: string;
+  actorId: string;
+  description?: string;
+  points: Array<{minuteOfDay: number; locationId: string}>;
+}
+export interface WorldScheduleState {
+  scheduleId: string;
+  activatedAt: number;
+  processedThrough: number;
+  lastOccurrenceAt?: number;
+}

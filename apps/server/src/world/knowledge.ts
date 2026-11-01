@@ -22,6 +22,18 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
   const quests = visibleQuests(snapshot, usable, actorId);
   const questIds = new Set(quests.map(q=>q.id));
   const recentEvents = snapshot.recentEvents.flatMap(e=>{
+    if (e.type === "schedule_skip") return [];
+    if (e.type === "schedule_move") {
+      if (!usable || usable.schemaVersion !== 4) return [];
+      const actor = usable.actors.find(a=>a.id===e.actorId);
+      const from = usable.locations.find(l=>l.id===e.fromLocationId);
+      const to = usable.locations.find(l=>l.id===e.locationId);
+      if (!actor || !from || !to) return [];
+      return [{id:e.id,commandId:e.commandId,turn:e.turn,type:e.type,actorId:actor.id,
+        fromLocationId:from.id,locationId:to.id,worldTimeMinutes:e.worldTimeMinutes,
+        summary:`${actor.name}从${from.name}前往${to.name}`}];
+    }
+    if (e.scheduleId !== undefined || e.skipReason !== undefined || e.fromLocationId !== undefined || e.locationId !== undefined) return [];
     if (e.type.startsWith("quest_")) {
       if(!usable || !e.questId || !questIds.has(e.questId) || e.actorId!==actorId) return [];
       const q=quests.find(q=>q.id===e.questId)!;
@@ -43,7 +55,7 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
     schemaVersion:snapshot.schemaVersion,revision:snapshot.revision,templateHash:snapshot.templateHash,
     templateVersion:snapshot.templateVersion,rulesVersion:snapshot.rulesVersion,clockMinutes:snapshot.clockMinutes,
     scene:structuredClone(snapshot.scene),actors:structuredClone(snapshot.actors),money:structuredClone(snapshot.money),inventory:structuredClone(snapshot.inventory),
-    ...(snapshot.schemaVersion===3?{quests,questKey:worldContentHash({actorId,quests})}:{}),
+    ...(snapshot.schemaVersion>=3?{quests,questKey:worldContentHash({actorId,quests})}:{}),
     recentEvents,viewpointId:actorId,knownFacts,publicInteractions,
     knowledgeKey:worldContentHash({actorId,knownFacts,publicInteractions}),
   };

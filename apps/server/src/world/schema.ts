@@ -1,5 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
+import {lastScheduleOccurrence} from "./schedule-time.ts";
 import {
   WORLD_MAX_CLOCK_MINUTES, WORLD_MAX_ITEM_QUANTITY, WORLD_MAX_MONEY, WORLD_MAX_RECENT_EVENTS,
   WORLD_SCHEMA_VERSION, type WorldActorState, type WorldCommand, type WorldSnapshot, type WorldTemplate,
@@ -77,9 +78,22 @@ const quest = Type.Object({id,name:Type.String({minLength:1,maxLength:100}),desc
 const questState = Type.Object({questId:id,status:Type.Union([Type.Literal("active"),Type.Literal("completed")]),acceptedTurn:integer(),
   completedStages:Type.Array(Type.Object({stageId:id,turn:integer()},strict),{maxItems:8}),completedTurn:Type.Optional(integer())},strict);
 const eventV3 = Type.Object({...eventV2.properties,type:Type.Union([...eventV2.properties.type.anyOf,Type.Literal("quest_accept"),Type.Literal("quest_advance"),Type.Literal("quest_complete")]),questId:Type.Optional(id),stageId:Type.Optional(id)},strict);
-export const WorldTemplateSchema = Type.Union([templateV1,templateV2,Type.Object({...templateV2.properties,schemaVersion:Type.Literal(3),quests:Type.Array(quest,{maxItems:64}),
-  initial:Type.Object({...templateV2.properties.initial.properties,actorMoney:Type.Array(Type.Object({actorId:id,money},strict),{maxItems:256})},strict)},strict)]);
-export const WorldSnapshotSchema = Type.Union([snapshotV1,snapshotV2,Type.Object({...snapshotV2.properties,schemaVersion:Type.Literal(3),questStates:Type.Array(questState,{maxItems:64}),recentEvents:Type.Array(eventV3,{maxItems:WORLD_MAX_RECENT_EVENTS})},strict)]);
+const templateV3 = Type.Object({...templateV2.properties,schemaVersion:Type.Literal(3),quests:Type.Array(quest,{maxItems:64}),
+  initial:Type.Object({...templateV2.properties.initial.properties,actorMoney:Type.Array(Type.Object({actorId:id,money},strict),{maxItems:256})},strict)},strict);
+const snapshotV3 = Type.Object({...snapshotV2.properties,schemaVersion:Type.Literal(3),questStates:Type.Array(questState,{maxItems:64}),recentEvents:Type.Array(eventV3,{maxItems:WORLD_MAX_RECENT_EVENTS})},strict);
+const schedule = Type.Object({id,actorId:id,description:Type.Optional(Type.String({maxLength:2000})),
+  points:Type.Array(Type.Object({minuteOfDay:integer(1439),locationId:id},strict),{minItems:1,maxItems:16})},strict);
+const scheduleState = Type.Object({scheduleId:id,activatedAt:clock,processedThrough:clock,lastOccurrenceAt:Type.Optional(clock)},strict);
+const scheduleFields = {scheduleId:id,actorId:id,fromLocationId:id,locationId:id};
+const scheduleEvent = Type.Union([
+  Type.Object({...event.properties,...scheduleFields,type:Type.Literal("schedule_move")},strict),
+  Type.Object({...event.properties,...scheduleFields,type:Type.Literal("schedule_skip"),skipReason:Type.Union([Type.Literal("dead"),Type.Literal("inactive"),Type.Literal("already_there")])},strict),
+]);
+export const WorldTemplateSchema = Type.Union([templateV1,templateV2,templateV3,
+  Type.Object({...templateV3.properties,schemaVersion:Type.Literal(4),schedules:Type.Array(schedule,{maxItems:64})},strict)]);
+export const WorldSnapshotSchema = Type.Union([snapshotV1,snapshotV2,snapshotV3,
+  Type.Object({...snapshotV3.properties,schemaVersion:Type.Literal(4),scheduleStates:Type.Array(scheduleState,{maxItems:64}),
+    recentEvents:Type.Array(Type.Union([eventV3,scheduleEvent]),{maxItems:WORLD_MAX_RECENT_EVENTS})},strict)]);
 
 const commandSchemas = {
   move_to: Type.Object({ commandId: id, type: Type.Literal("move_to"), actorId: id, locationId: id }, strict),
@@ -156,7 +170,7 @@ export function parseWorldTemplate(input: unknown): WorldTemplate {
       }
     }
   }
-  if (template.schemaVersion === 3) {
+  if (template.schemaVersion >= 3) {
     unique(template.quests!.map(q=>q.id),"任务 ID");
     unique(template.initial.actorMoney!.map(m=>m.actorId),"初始金额角色");
     for (const m of template.initial.actorMoney!) if (!actors.has(m.actorId) || m.actorId === template.initial.actorId) invalid("初始NPC金额角色无效");
@@ -172,6 +186,15 @@ export function parseWorldTemplate(input: unknown): WorldTemplate {
         if (c.type === "npc_present") npc(c.actorId);
       }
       q.stages.forEach((s,i)=>{if(s.delivery){if(i!==q.stages.length-1) invalid("只有最终阶段可交付");npc(s.delivery.toActorId);item(s.delivery.itemId);}});
+    }
+  }
+  if (template.schemaVersion === 4) {
+    unique(template.schedules!.map(s=>s.id),"日程 ID");
+    unique(template.schedules!.map(s=>s.actorId),"日程角色");
+    for (const s of template.schedules!) {
+      if (!actors.has(s.actorId) || s.actorId === template.initial.actorId) invalid("日程必须绑定有效NPC");
+      unique(s.points.map(p=>String(p.minuteOfDay)),"日程时间点");
+      if (s.points.some(p=>!template.locations.some(l=>l.id===p.locationId))) invalid("日程地点引用无效");
     }
   }
   return template;
@@ -207,7 +230,7 @@ export function parseWorldSnapshot(input: unknown): WorldSnapshot {
       if (!e.type.startsWith("knowledge_") && (e.factId !== undefined || e.interactionId !== undefined)) invalid("普通事件不能携带知识引用");
     }
   }
-  if (snapshot.schemaVersion === 3) {
+  if (snapshot.schemaVersion >= 3) {
     unique(snapshot.questStates!.map(q=>q.questId),"任务进度");
     for (const q of snapshot.questStates!) {
       unique(q.completedStages.map(s=>s.stageId),"完成阶段");
@@ -215,6 +238,13 @@ export function parseWorldSnapshot(input: unknown): WorldSnapshot {
       if ((q.status === "completed") !== (q.completedTurn !== undefined) || (q.completedTurn !== undefined && q.completedTurn !== turn)) invalid("任务完成记录无效");
     }
     for(const e of snapshot.recentEvents) if(e.type.startsWith("quest_") ? (!e.questId || !e.actorId || (e.type==="quest_accept" ? e.stageId!==undefined : !e.stageId)) : (e.questId!==undefined || e.stageId!==undefined)) invalid("任务事件来源无效");
+  }
+  if (snapshot.schemaVersion === 4) {
+    unique(snapshot.scheduleStates!.map(s=>s.scheduleId),"日程进度");
+    for (const s of snapshot.scheduleStates!) {
+      if (s.activatedAt > s.processedThrough || s.processedThrough !== snapshot.clockMinutes ||
+          (s.lastOccurrenceAt !== undefined && (s.lastOccurrenceAt <= s.activatedAt || s.lastOccurrenceAt > s.processedThrough))) invalid("日程进度区间无效");
+    }
   }
   return snapshot;
 }
@@ -240,7 +270,7 @@ export function validateWorldReferences(snapshot: WorldSnapshot, template: World
     for (const k of snapshot.knowledge!) if (k.source.interactionId && !interactions.has(k.source.interactionId)) invalid("获知交互来源不存在");
     for (const e of snapshot.recentEvents) if ((e.factId && !facts.has(e.factId)) || (e.interactionId && !interactions.has(e.interactionId))) invalid("知识事件引用无效");
   }
-  if (snapshot.schemaVersion === 3) {
+  if (snapshot.schemaVersion >= 3) {
     for(const state of snapshot.questStates!){
       const q=template.quests!.find(q=>q.id===state.questId);
       if(!q || state.completedStages.some((s,i)=>s.stageId!==q.stages[i]?.id) || (state.status === "completed" ? state.completedStages.length!==q.stages.length : state.completedStages.length>=q.stages.length)) invalid("任务进度与模板不一致");
@@ -250,6 +280,23 @@ export function validateWorldReferences(snapshot: WorldSnapshot, template: World
       if(!q || !state || e.actorId!==template.initial.actorId ||
         (e.type==="quest_accept" ? e.turn!==state.acceptedTurn : !state.completedStages.some(s=>s.stageId===e.stageId && s.turn===e.turn)) ||
         (e.type==="quest_complete" && (state.status!=="completed" || e.stageId!==q.stages.at(-1)!.id))) invalid("任务事件引用无效");
+    }
+  }
+  if (snapshot.schemaVersion === 4) {
+    const schedules = template.schedules!;
+    if (snapshot.scheduleStates!.length !== schedules.length) invalid("日程进度必须与模板一一对应");
+    for (const progress of snapshot.scheduleStates!) {
+      const schedule = schedules.find(s=>s.id===progress.scheduleId);
+      if (!schedule || progress.lastOccurrenceAt !== lastScheduleOccurrence(schedule,progress.activatedAt,progress.processedThrough)) invalid("日程进度与模板不一致");
+    }
+    for (const e of snapshot.recentEvents) if (e.type.startsWith("schedule_")) {
+      const schedule = schedules.find(s=>s.id===e.scheduleId);
+      const progress = snapshot.scheduleStates!.find(s=>s.scheduleId===e.scheduleId);
+      if (!schedule || !progress || schedule.actorId !== e.actorId || !locations.has(e.fromLocationId!) ||
+          !schedule.points.some(p=>p.minuteOfDay===e.worldTimeMinutes%1440 && p.locationId===e.locationId) ||
+          e.worldTimeMinutes <= progress.activatedAt ||
+          (e.type === "schedule_move" && e.fromLocationId === e.locationId) ||
+          (e.skipReason === "already_there" && e.fromLocationId !== e.locationId)) invalid("日程事件来源无效");
     }
   }
   if (snapshot.recentEvents.some((entry) => entry.itemId !== undefined && !items.has(entry.itemId))) invalid("事件物品与模板不一致");

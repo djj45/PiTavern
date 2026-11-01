@@ -3,7 +3,7 @@ import {worldConditionsMet} from "./conditions.ts";
 
 /** Only the bound player owns quests. Future objectives and rule internals never cross this DTO. */
 export function visibleQuests(snapshot: WorldSnapshot, template: WorldTemplate | undefined, actorId: string): WorldQuestView[] {
-  if (snapshot.schemaVersion !== 3 || template?.schemaVersion !== 3 || actorId !== template.initial.actorId) return [];
+  if (snapshot.schemaVersion < 3 || !template || template.schemaVersion < 3 || actorId !== template.initial.actorId) return [];
   return template.quests!.flatMap(quest => {
     const state = snapshot.questStates!.find(s => s.questId === quest.id);
     if (!state && !worldConditionsMet(snapshot, template, quest.openConditions)) return [];
