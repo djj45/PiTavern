@@ -85,8 +85,8 @@ npm run build && npm run verify:browser # 57 项真实界面验收，独立合�
 - **M5 接管模式** ✅ agent 原生组装：人物卡/常驻世界书/persona 进 system named sections，关键词条目 0 注入（全靠 worldbook_search）；历史只带近 N 轮（更早靠召回）——上下文成本随需求而非历史增长；`tavern_set_state` 状态投影工具每轮结算现场快照写入 `chat_metadata.projection` 并回注 system，「统计」实时显示（`npm run verify:takeover`）
 - **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，顶栏「主题」打开面板可自由调整界面颜色）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
 - **M7 剧情分支** ✅ 重新生成保留候选并支持多分支树：可回到任意历史回合切换候选，未选中的后续剧情/状态原样保存并可恢复；设置中可开启每次成功回复后自动追加 0–4 个候选，分支面板支持「换条路线」的本次生成指令（`npm run verify:branches`）
-- **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。0.4.0 提供单文件聊天 JSONL 导入 UI；0.5.0 提供世界模板编辑器与版本选择，已有聊天更新模板（热更新）仍属 0.6.0。
-- **角色卡管理（开发中）** 侧栏「角色 → 管理」集中查看/编辑描述、性格、场景、默认/备用开场白、示例对话、系统提示、标签，复制/删除/导入/导出角色卡；名称不可改，PNG 像素与未知字段保留（`npm run verify:character-cards`，8 项）。卡内世界书/正则仍在资料库编辑。契约见 [角色卡管理契约](docs/CHARACTER_MANAGER.md)。
+- **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。0.4.0 提供单文件聊天 JSONL 导入 UI；0.5.0 提供世界模板编辑器与版本选择；0.6.0 提供已有聊天更新模板（含候选/检查点迁移）。
+- **角色卡管理（0.6.0）** 侧栏「角色 → 管理」集中查看/编辑描述、性格、场景、默认/备用开场白、示例对话、系统提示、标签，复制/删除/导入/导出角色卡；名称不可改，PNG 像素与未知字段保留（`npm run verify:character-cards`，8 项）。卡内世界书/正则仍在资料库编辑。契约见 [角色卡管理契约](docs/CHARACTER_MANAGER.md)。
 - **0.6.0（验收候选）** 已有聊天更新模板：单快照差异规划（12 项）、整聊天所有分支/检查点/隐藏后续的纯规划与原子应用（`npm run verify:chat-migration`，25 项）、预览/应用 API 与 Web 更新入口。契约见 [模板迁移契约](docs/WORLD_TEMPLATE_MIGRATION.md)。
 - **0.5.0** 世界模板库：草稿/冲突、不可变发布版本、从内置复制、导入/导出、整库备份恢复、新聊天精确版本选择，以及地点/角色/物品/初始状态编辑器与初始世界预览（`npm run verify:world-templates`，16 项）。已有聊天更新模板仍属 0.6.0。契约见 [世界模板契约](docs/WORLD_TEMPLATES.md)。
 - **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。

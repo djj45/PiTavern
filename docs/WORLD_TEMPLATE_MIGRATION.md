@@ -1,4 +1,4 @@
-# World Template Migration 0.6.0 契约（M0/M1）
+# World Template Migration 0.6.0 契约
 
 状态：0.6.0 验收候选。单快照规划、全聊天规划/原子应用、预览/应用 API 与 Web 入口已实现；最终发布需验收后打 0.6.0 标签。
 
