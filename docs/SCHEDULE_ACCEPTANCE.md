@@ -1,8 +1,8 @@
 # 0.11 酒馆日程固定验收基线（M1）
 
-状态：**契约样本，运行验收 pending_implementation**。以下是后续推进器、HTTP/WS 和游戏闭环必须满足的预期，不是已经通过的测试。真实供应商及真实模型人工验收 `not_requested`。
+状态：**M1 固定基线，M7 待独立复验候选**。下表保留冻结的预期；已接入生产实现的专项脚本及覆盖范围见文末，实际运行证据另存 data/test-runs，不把基线行数计作测试数。真实供应商及真实模型人工验收 `not_requested`。
 
-样本：[schedule-tavern.json](../apps/server/scripts/fixtures/schedule-tavern.json)，从 0.10 的 `quest-tavern.json` 复制玩法数据，使用新模板 ID `schedule-tavern`、schema v4，增加 `innkeeper_daily` 日程及用于视角回归的 `innkeeper_audience` 任务。保留原知识和交付任务。当前 v1–v3 解析器应拒绝此 v4 样本，M1 不把它加入内置模板。
+样本：[schedule-tavern.json](../apps/server/scripts/fixtures/schedule-tavern.json)，从 0.10 的 `quest-tavern.json` 复制玩法数据，使用新模板 ID `schedule-tavern`、schema v4，增加 `innkeeper_daily` 日程及用于视角回归的 `innkeeper_audience` 任务。保留原知识和交付任务。v1–v3 旧结构仍拒绝新字段；当前运行时显式支持 v4。样本不自动加入内置模板，作者通过模板编辑器发布。
 
 ## 时钟和固定数据
 
@@ -90,6 +90,24 @@ T8最后一点 = 第127数学日00:30 = `127*1440+30 = 182910`。预算统计只
 
 ## 后续运行证据
 
-M2开始将对应用例接入真实生产实现；M3规则通过后接生成，M5恢复通过后做完整UI。M7提供 `verify:schedules` 和完整CI记录，统计实际用例，不将本文行数当作测试数。保留任务、知识、双阶段、请求去重坏行及旧版本兼容回归。
+交付顺序保持M2数据、M3纯规则、M4生成、M5恢复、M6界面，各阶段独立提交。M7提供 `verify:schedules` 和完整CI记录，统计实际用例，不将本文行数当作测试数。保留任务、知识、双阶段、请求去重坏行及旧版本兼容回归。
 
 最终门槛：check/build、完整离线回归、Chromium、准确提交Node22/24、真实资料副本不变、最终包SHA-256/全新安装/HTTP/WS/端口回收。独立复验前不发布。真实模型等待/赴约、拒绝原因和多事件叙述人工验收未执行时保持 `not_requested`。
+
+
+## M7 专项入口
+
+`npm run verify:schedules` 使用固定 JSONL 与本地合成 Chat Completions，执行下列生产链路检查：
+
+| 脚本 | 组数 | 覆盖 |
+| --- | ---: | --- |
+| schedule-schema-verify | 7 | v4 严格结构、引用、容量、游标、过滤及旧版哈希 |
+| schedule-rules-verify | 10 | 区间、午夜、多日、排序、预算、死亡跳过及输入不变 |
+| schedule-transaction-verify | 6 | 256 点完整回执、100 条裁剪恢复、幂等/撤销、旧版升级和资金不足 |
+| schedule-game-verify | 34 | 三模式×单/双阶段的实际请求、位置条件、交付、失败/停止、三次重写与重生成 |
+| schedule-boundaries-verify | 13 | 1000 回合、独立缓存、正文超预算、revision冲突、v4至无世界的错误过滤 |
+| schedule-lifecycle-verify | 13 | 候选/隐藏后续/原生swipe、导入重启、备份和全恢复点原子迁移 |
+| schedule-activity-verify | 13 | 一次/分次/并行推进开放→关闭→开放，HTTP/WS/分页/重启过滤及原始记录保持 |
+| schedule-preview-verify | 5 | 作者HTTP只读模拟、预算与引用校验、手工修正边界、玩家出口 |
+
+共88组，纳入完整离线 CI 的第28套。新增2项 Chromium（全套70项）覆盖日程编辑/模拟/发布及390px时钟、在场、候选恢复。准确提交的Node22/24和最终包结果以候选验收记录为准；尚未独立复验，不据合成请求宣称真实模型质量或可玩性提升。

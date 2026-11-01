@@ -1,7 +1,7 @@
 {
   "name": "@pitavern/server",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -36,7 +36,8 @@
     "verify:context": "tsx scripts/context-baseline-verify.ts && tsx scripts/context-builder-verify.ts && tsx scripts/context-lifecycle-verify.ts && tsx scripts/context-modes-verify.ts && tsx scripts/context-game-verify.ts",
     "verify:knowledge": "tsx scripts/knowledge-schema-verify.ts && tsx scripts/knowledge-transaction-verify.ts && tsx scripts/knowledge-outlets-verify.ts && tsx scripts/knowledge-lifecycle-verify.ts && tsx scripts/knowledge-game-verify.ts",
     "verify:two-stage": "tsx scripts/two-stage-baseline-verify.ts && tsx scripts/narrative-packet-verify.ts && tsx scripts/two-stage-agents-verify.ts && tsx scripts/two-stage-turn-verify.ts && tsx scripts/narrative-rewrite-verify.ts && tsx scripts/narrative-lifecycle-verify.ts && tsx scripts/two-stage-boundaries-verify.ts && tsx scripts/two-stage-comparison-verify.ts && tsx scripts/generation-receipt-verify.ts",
-    "verify:quests": "tsx scripts/quest-schema-verify.ts && tsx scripts/quest-rules-verify.ts && tsx scripts/quest-game-verify.ts && tsx scripts/quest-lifecycle-verify.ts && tsx scripts/quest-boundaries-verify.ts && tsx scripts/quest-activity-verify.ts"
+    "verify:quests": "tsx scripts/quest-schema-verify.ts && tsx scripts/quest-rules-verify.ts && tsx scripts/quest-game-verify.ts && tsx scripts/quest-lifecycle-verify.ts && tsx scripts/quest-boundaries-verify.ts && tsx scripts/quest-activity-verify.ts",
+    "verify:schedules": "node --import tsx scripts/schedule-schema-verify.ts && node --import tsx scripts/schedule-rules-verify.ts && node --import tsx scripts/schedule-transaction-verify.ts && node --import tsx scripts/schedule-game-verify.ts && node --import tsx scripts/schedule-boundaries-verify.ts && node --import tsx scripts/schedule-lifecycle-verify.ts && node --import tsx scripts/schedule-activity-verify.ts && node --import tsx scripts/schedule-preview-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

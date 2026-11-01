@@ -1,7 +1,7 @@
 {
   "name": "pitavern",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "PiTavern — 基于 pi 运行时的 agent 化酒馆",
   "workspaces": [
     "apps/*",
@@ -47,7 +47,8 @@
     "verify:context": "npm run verify:context -w apps/server",
     "verify:knowledge": "npm run verify:knowledge -w apps/server",
     "verify:two-stage": "npm run verify:two-stage -w apps/server",
-    "verify:quests": "npm run verify:quests -w apps/server"
+    "verify:quests": "npm run verify:quests -w apps/server",
+    "verify:schedules": "npm run verify:schedules -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

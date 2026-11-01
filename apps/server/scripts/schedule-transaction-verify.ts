@@ -30,4 +30,10 @@ for(const version of [1,2,3]){
 check('v1–v3推进仍不移动；当刻升级不补跑，未来消费already_there，不授予旧分支知识/任务');
 const source=JSON.stringify(initial);for(let i=0;i<3;i++){buildPlayerWorldView(state().snapshot,record.template);assert.deepEqual(state().snapshot,initial);}assert.equal(JSON.stringify(initial),source);
 check('重复读取、状态解析和玩家投影完全只读');
+const prep=new WorldTransaction(state(),1);prep.quest({questId:'cellar_sword',action:'accept'});
+prep.execute({commandId:'buy',type:'purchase_item',buyerId:'player',sellerId:'innkeeper',itemId:'sword',quantity:1});
+prep.interact({interactionId:'ask_innkeeper_about_cellar'});prep.quest({questId:'cellar_sword',action:'advance'});prep.execute(wait(10));
+const poor=prep.commit();poor.money.innkeeper=29;const poorTx=new WorldTransaction(state(poor),2);poorTx.execute(wait(20));
+const beforeDelivery=poorTx.snapshot;assert.equal(poorTx.quest({questId:'cellar_sword',action:'advance'}).status,'rejected');assert.deepEqual(poorTx.snapshot,beforeDelivery);assert.equal(poorTx.snapshot.clockMinutes,30);assert.equal(poorTx.snapshot.money.player,83);assert.equal(poorTx.snapshot.questStates![0].status,'active');assert.equal(poorTx.snapshot.inventory.find(i=>i.ownerId==='player'&&i.itemId==='sword')!.quantity,1);
+poorTx.discard();assert.deepEqual(poorTx.snapshot,poor);check('NPC资金不足不收剑/领奖/完成；工具拒绝保留先前暂存移动，整轮失败则连时间一起撤销');
 console.log(`${checks} 组日程事务与持久化检查通过`);
