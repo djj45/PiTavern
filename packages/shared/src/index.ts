@@ -178,7 +178,18 @@ export interface ContextDiagnosticsDto {
   workingSet?: ContextWorkingSetDto;
 }
 
+export type GenerationPhase = "settling" | "validating" | "rendering" | "committing";
+export interface GenerationStageDto {
+  phase: GenerationPhase; startedAt: string; finishedAt?: string;
+  provider: string; model: string; usage: GenerationUsageDto;
+  status: "running" | "succeeded" | "failed" | "aborted" | "interrupted";
+  context?: ContextDiagnosticsDto;
+}
+
 export interface GenerationRecordDto {
+  knowledgeKey?: string;
+  failureCode?: "budget" | "output" | "conflict" | "plan" | "provider";
+  stages?: GenerationStageDto[];
   contentHidden?: boolean;
   id: string;
   version: number;
@@ -263,6 +274,8 @@ export interface ConnectionDto {
   thinkingLevel: ReasoningLevel;
   /** native=纯文本流式；game_tool=强制工具调用防截断 */
   outputProtocol: "native" | "game_tool";
+  twoStage?: boolean;
+  renderRetries?: number;
   protocolStrict: boolean;
   compression: { enabled: boolean; keepFullTurns: number };
   /** 接管模式：历史保留轮数与状态投影开关 */
@@ -591,6 +604,7 @@ export interface ChatImportResultDto {
 }
 
 export interface ChatSnapshotDto {
+  generationPhase?: GenerationPhase;
   id: string;
   character: string;
   messages: ChatMessageDto[];
@@ -658,6 +672,7 @@ export type ServerEvent =
   | { type: "pong" }
   /** 本轮生成开始 */
   | { type: "chat.started"; chatId: string; message: ChatMessageDto; startedAt: string }
+  | { type: "chat.phase"; chatId: string; phase: GenerationPhase }
   | { type: "chat.regenerating"; chatId: string; startedAt: string }
   | { type: "chat.speaker"; chatId: string; character: string; stagedMessages: ChatMessageDto[] }
   /** Absolute persisted activity state; safe to replay after reconnect. */
@@ -709,7 +724,7 @@ export interface LibraryBackupPreviewDto {
   files: number;
   bytes: number;
   counts: Record<string, number>;
-  settings?: Pick<ConnectionDto, "persona" | "contextMode" | "activePreset" | "activeWorlds" | "worldInfo" | "outputProtocol" | "protocolStrict" | "compression" | "takeover" | "branches"> & { thinkingLevel: string; toolsEnabled: boolean };
+  settings?: Pick<ConnectionDto, "persona" | "contextMode" | "activePreset" | "activeWorlds" | "worldInfo" | "outputProtocol" | "twoStage" | "renderRetries" | "protocolStrict" | "compression" | "takeover" | "branches"> & { thinkingLevel: string; toolsEnabled: boolean };
 }
 
 export interface LibraryHistoryDto { id: string; createdAt: string; bytes: number; revision: string }

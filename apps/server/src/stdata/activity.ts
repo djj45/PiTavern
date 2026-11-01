@@ -72,6 +72,7 @@ export class ActivityStore {
         record.status = "interrupted";
         record.finishedAt = new Date().toISOString();
         record.error = "服务重启，上一轮未正常结束；已保留收到的用量和工具记录";
+        for (const stage of record.stages ?? []) if (stage.status === "running") { stage.status = "interrupted"; stage.finishedAt = record.finishedAt; }
         record.version++;
         for (const tool of record.tools) if (tool.status === "running") {
           tool.status = "error";

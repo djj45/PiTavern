@@ -1,3 +1,5 @@
+import { createNarrativeAgent, settlementTools } from "../agent/narrative.ts";
+import { createNarrative, NARRATIVE_KEY, SETTLEMENT_INSTRUCTION } from "./narrative.ts";
 import { executeScript, type ScriptResult } from "../script/interpreter.ts";
 import { readGroup, groupSpeakers } from "../stdata/groups.ts";
 import { withImportedScenario } from "../stdata/card-import.ts";
@@ -5,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
+import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, GenerationPhase, ReasoningLevel, ServerEvent } from "@pitavern/shared";
 import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatMigrationPreviewDto, type WorldChatMigrationResultDto, type WorldChatStateDto, type WorldTemplateRecord, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction, createWorldTemplateRecord } from "../world/index.ts";
 import { planChatWorldMigration } from "../world/chat-migration.ts";
@@ -47,7 +49,7 @@ import { createTokenCounter } from "../context/tokens.ts";
 import { ContextFactCache } from "../context/memory-cache.ts";
 import { globalRegex } from "../stdata/library.ts";
 
-type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext" | "contextFactCache" | "contextSourceRevision" | "worldSnapshot">;
+type ContextHooks = Pick<TavernAgentOptions, "tokenCounter" | "instruct" | "onContext" | "contextFactCache" | "contextSourceRevision" | "worldSnapshot" | "completion" | "settlementComplete"> & { writingSettings?: (settings: string) => void };
 
 export class WorldChatMigrationConflictError extends Error {
   constructor(message: string) { super(message); this.name = "WorldChatMigrationConflictError"; }
@@ -106,13 +108,13 @@ export class SessionManager {
     const session=this.sessions.get(chatId), staged=session?.running && session.worldTransaction?.status==="open" ? session.worldTransaction.snapshot : state?.snapshot;
     const key=staged ? buildPlayerWorldView(staged,state?.template).knowledgeKey : undefined;
     return {...page,knowledgeKey:key,records:page.records.map(record=>{
-      const recordKey=record.context?.workingSet?.knowledgeKey;
+      const recordKey=record.knowledgeKey ?? record.context?.workingSet?.knowledgeKey;
       // Activity survives chat backup restoration. A v2 record still needs its
       // original knowledge authorization after restoring v1 or no world.
       // Pre-knowledge records retain legacy behavior outside a v2 world.
       if(recordKey===key || (recordKey===undefined && staged?.schemaVersion!==2)) return record;
       const {context:_,...rest}=record;
-      return {...rest,contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
+      return {...rest,stages:rest.stages?.map(({context:_,...stage})=>stage),contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
     })};
   }
   activityPage(chatId: string, before?: string) { return this.activityForPlayer(chatId,this.activity.page(chatId, before)); }
@@ -122,6 +124,8 @@ export class SessionManager {
   }
 
   private saveActivity(chatId: string, generation: GenerationRecordDto): void {
+    const live = this.sessions.get(chatId)?.worldTransaction;
+    if (generation.stages && live?.status === "open") generation.knowledgeKey = buildPlayerWorldView(live.snapshot, this.chats.readWorld(chatId)?.template).knowledgeKey;
     try {
       this.activity.save(chatId, generation);
       const session = this.sessions.get(chatId);
@@ -371,6 +375,7 @@ export class SessionManager {
       ...(greetings ? { greetingChoices: greetings.choices } : {}),
       running: session?.running ?? false, streamingText: session?.streamingText ?? "",
       ...(session?.running && session.generation?.startedAt ? { generationStartedAt: session.generation.startedAt } : {}),
+      ...(session?.running && session.generation?.stages?.length ? { generationPhase: session.generation.stages.at(-1)!.phase } : {}),
       activity, activityError,
       world: this.worldView(document.metadata),
       memberDisplays: Object.fromEntries((readGroup(document.metadata)?.members ?? []).map((name) => [name, this.displayConfig(name, document.metadata, document.lines)])),
@@ -604,6 +609,42 @@ export class SessionManager {
     return this.generate(chatId, "", { messageId, expectedText }, undefined, instruction);
   }
 
+  private async renderProse(chatId: string, options: Parameters<typeof createNarrativeAgent>[0], generated: StChatLine[], retries: number): Promise<void> {
+    const session = this.sessions.get(chatId)!;
+    for (let attempt = 0; ; attempt++) {
+      session.controller!.signal.throwIfAborted();
+      this.stage(chatId, "rendering");
+      session.streamingText = "";
+      this.emit({ type: "chat.speaker", chatId, character: session.character, stagedMessages: chatMessages(generated) });
+      const renderer = createNarrativeAgent(options);
+      session.agent = renderer;
+      const before = generated.length;
+      this.wireAgent(renderer, chatId, false, generated);
+      await renderer.continue();
+      session.controller!.signal.throwIfAborted();
+      if (!renderer.state.errorMessage) {
+        if (!generated.slice(before).some(line => line.mes.trim())) throw new Error("正文为空，本轮未提交");
+        return;
+      }
+      const invalid = renderer.state.messages.some(message => message.role === "assistant" &&
+        (message.stopReason === "length" || message.content.some(c => c.type === "toolCall")));
+      generated.splice(before);
+      if (attempt >= Math.min(2, Math.max(0, retries)) || invalid || session.generation?.context?.overBudget) throw new Error(renderer.state.errorMessage);
+      const stage = session.generation!.stages!.at(-1)!;
+      stage.status = "failed"; stage.finishedAt = new Date().toISOString();
+    }
+  }
+
+  private stage(chatId: string, phase: GenerationPhase): void {
+    const run = this.sessions.get(chatId)?.generation;
+    if (!run) return;
+    const previous = run.stages?.at(-1);
+    if (previous) { if (previous.status === "running") previous.status = "succeeded"; previous.finishedAt = new Date().toISOString(); }
+    (run.stages ??= []).push({ phase, startedAt: new Date().toISOString(), status: "running", provider: run.provider, model: run.model, usage: emptyUsage() });
+    this.saveActivity(chatId, run);
+    this.emit({ type: "chat.phase", chatId, phase });
+  }
+
   /** Both normal sends and regeneration stage state and replies until the entire turn succeeds. */
   private async generate(chatId: string, text: string, replacement?: { messageId: string; expectedText: string }, requestedSpeakers?: string[], instruction?: string): Promise<void> {
     if (this.writeBlocked) {
@@ -666,6 +707,8 @@ export class SessionManager {
         ? (worldState.capability.mode === "enabled" ? "enabled" as const : "read-only" as const)
         : undefined;
       session.worldTransaction = worldTransaction;
+      const twoStage = config.twoStage && !group && !textCompletion && config.outputProtocol === "native" && worldState?.capability.mode === "enabled" && worldToolsAvailable;
+      const worldBefore = twoStage ? buildPlayerWorldView(worldTransaction!.snapshot, worldState!.template) : undefined;
       const variables = structuredClone(document.metadata.variables && typeof document.metadata.variables === "object" && !Array.isArray(document.metadata.variables)
         ? document.metadata.variables as Record<string, unknown> : {});
       const beforeTurn = {
@@ -684,6 +727,7 @@ export class SessionManager {
       };
       session.generation = generation;
       this.saveActivity(chatId, generation);
+      if (twoStage) this.stage(chatId, "settling");
       const provider = config.providers.find((item) => item.id === model.provider);
       const contextHooks: ContextHooks = {
         worldSnapshot: () => worldTransaction ? buildPlayerWorldView(worldTransaction.snapshot,worldState?.template) : undefined,
@@ -691,7 +735,7 @@ export class SessionManager {
         contextSourceRevision: this.chats.revisionId(chatId),
         tokenCounter: createTokenCounter(model.id, provider?.models.find((item) => item.id === model.id)?.tokenizer),
         instruct: provider?.instruct,
-        onContext: (context) => { generation.context = context; this.saveActivity(chatId, generation); },
+        onContext: (context) => { generation.context = context; const phase = generation.stages?.at(-1); if (phase) phase.context = context; this.saveActivity(chatId, generation); },
       };
       text = userLine.mes;
       if (regeneration) {
@@ -744,11 +788,16 @@ export class SessionManager {
           // 状态投影：工具写 chat_metadata.projection，下一轮组装回注 system section
           toolCtx.setState = (projection: string) => {
             writeMetadata({ projection });
-            if (!regeneration) this.emit({ type: "chat.projection", chatId, projection });
+            if (!regeneration && !twoStage) this.emit({ type: "chat.projection", chatId, projection });
           };
           tools = [...tools, createSetStateTool(toolCtx)];
         }
-        const allTools = useProtocol ? [...tools, ...createProtocolTools()] : tools;
+        const settlement = twoStage ? settlementTools(tools, () => buildPlayerWorldView(worldTransaction!.snapshot, worldState!.template), session.controller.signal) : undefined;
+        const allTools = settlement?.tools ?? (useProtocol ? [...tools, ...createProtocolTools()] : tools);
+        let writingSettings = substituteMacros(buildSystemPrompt(character, config.persona), macroEnv);
+        const phaseHooks: ContextHooks = settlement ? { ...contextHooks, completion: "settlement", settlementComplete: settlement.complete,
+          writingSettings: (settings) => { writingSettings = settings; } } : contextHooks;
+        const phaseInstruction = settlement ? SETTLEMENT_INSTRUCTION + this.instructionBlock(instruction) : instruction;
         // 计时效果状态（sticky/cooldown）：从元数据恢复，扫描内更新，组装后回写
         const timedState = sharedTimedState;
         const previewEnv = { ...macroEnv, variables: structuredClone(variables) };
@@ -759,26 +808,26 @@ export class SessionManager {
         ) : undefined;
         session.controller.signal.throwIfAborted();
         const agent = config.contextMode === "bridge"
-          ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, contextHooks, timedState, vectorMatches, pendingMetadata, session.controller.signal, instruction)
+          ? await this.buildBridgeAgent(chatId, character, model, models, toolCtx, allTools, useProtocol, config, phaseHooks, timedState, vectorMatches, pendingMetadata, session.controller.signal, phaseInstruction)
           : config.contextMode === "takeover"
-            ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...pendingMetadata, variables }, character, contextHooks, instruction)
+            ? this.buildTakeoverAgent(model, models, toolCtx, allTools, useProtocol, config, { ...pendingMetadata, variables }, character, phaseHooks, phaseInstruction)
             : createTavernAgent({
                 models, model, chatId, thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
                 templateNames: { char: character.name, user: config.persona.name },
                 systemPrompt: substituteMacros(buildSystemPrompt(character, config.persona), macroEnv) + this.toolGuidance(tools.length > 0, worldGuidance) +
                   (worldDigestText ? `\n\n${worldDigestText}` : "") +
-                  (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : "") + this.instructionBlock(instruction),
+                  (useProtocol ? `\n\n${OUTPUT_PROTOCOL_INSTRUCTION}` : "") + this.instructionBlock(phaseInstruction),
                 history: historyToAgentMessages((group ? history : document.lines).map((line) => ({ ...line, mes: substituteMacros(line.mes, macroEnv) }))), tools: allTools,
                 outputProtocol: config.outputProtocol, protocolStrict: config.protocolStrict,
                 compression: config.compression,
-                ...contextHooks,
+                ...phaseHooks,
                 contextAssembly: { mode: "simple", historyMessages: toolCtx.lines.filter((line) => !line.is_system && line.mes.trim()).length,
                   omittedHistoryMessages: 0, worldInfoTotal: toolCtx.worldEntries.length,
                   worldInfo: toolCtx.worldEntries.slice(0, 200).map((entry) => ({ uid: entry.uid, world: entry.world,
                     label: entry.key.join("、").slice(0, 80) || entry.uid, status: "skipped", reason: "简洁模式不自动注入世界书" })) },
               });
         session.agent = agent;
-        this.wireAgent(agent, chatId, useProtocol, generated);
+        this.wireAgent(agent, chatId, useProtocol, generated, twoStage);
         writeMetadata({ variables, ...(timedState ? { timedWorldInfo: timedState } : {}) });
         if (group) await agent.prompt("请 " + character.name + " 接着发言。");
         else if (config.contextMode === "simple") {
@@ -788,11 +837,25 @@ export class SessionManager {
         }
         else await agent.continue();
         if (agent.state.errorMessage && !session.aborted) throw new Error(agent.state.errorMessage);
+        if (settlement && !session.aborted) {
+          session.controller.signal.throwIfAborted();
+          this.stage(chatId, "validating");
+          const view = buildPlayerWorldView(worldTransaction!.snapshot, worldState!.template);
+          const packet = createNarrative({ turnId: String(userLine.extra!.messageId), metadata: { ...pendingMetadata,
+            _pitavernEnforcement: structuredClone(session.enforcement), [WORLD_STATE_KEY]: worldTransaction!.snapshot },
+            source: [...document.lines, userLine], before: worldBefore!, view, plan: settlement.result(),
+            writing: { settings: writingSettings, input: text, direction: instruction ?? "" } });
+          await this.renderProse(chatId, { models, model, chatId, thinkingLevel: this.thinkingLevelFor(config, model.provider, model.id),
+            tokenCounter: contextHooks.tokenCounter, onContext: contextHooks.onContext, packet, view, history: document.lines }, generated, config.renderRetries);
+          for (const line of generated.slice(generatedBefore)) line.extra = { ...line.extra, [NARRATIVE_KEY]: packet };
+        }
         if (!session.aborted && !generated.slice(generatedBefore).some((line) => line.mes.trim())) throw new Error(character.name + " 未返回正文，本轮全部回复已撤回");
         if (session.aborted) break;
       }
       if (!session.aborted) {
         if (!generated.some((line) => line.mes.trim())) throw new Error(regeneration ? "模型未返回正文，已保留原回复" : "模型未返回正文，状态未改变，可重试本轮");
+        session.controller.signal.throwIfAborted();
+        if (twoStage) this.stage(chatId, "committing");
         pendingMetadata._pitavernEnforcement = structuredClone(session.enforcement);
         if (worldTransaction) pendingMetadata[WORLD_STATE_KEY] = worldTransaction.commit();
         transaction.commit(generated, pendingMetadata);
@@ -800,6 +863,11 @@ export class SessionManager {
         if (!regeneration) for (const line of generated) this.emit({ type: "chat.done", chatId, message: chatMessages([line])[0] });
       }
     } catch (cause) {
+      if (session.generation?.stages) {
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        session.generation.failureCode = /预算/.test(detail) ? "budget" : /正文为空|正文阶段禁止|正文输出被截断/.test(detail) ? "output" :
+          /变化|冲突/.test(detail) ? "conflict" : /叙事计划|叙事数据包|引用/.test(detail) ? "plan" : "provider";
+      }
       const error = this.chats.readMetadata(chatId)[WORLD_STATE_KEY] && (this.chats.readMetadata(chatId)[WORLD_STATE_KEY] as {schemaVersion?:number}).schemaVersion===2
         ? new Error("本轮生成未完成，世界与知识未提交。") : cause;
       if (session.generation && !session.aborted) session.generation.error = error instanceof Error ? error.message : String(error);
@@ -817,6 +885,7 @@ export class SessionManager {
         const run = session.generation;
         run.status = committed ? "succeeded" : session.aborted ? "aborted" : "failed";
         run.finishedAt = new Date().toISOString();
+        const phase = run.stages?.at(-1); if (phase) { phase.status = run.status; phase.finishedAt = run.finishedAt; }
         for (const tool of run.tools) if (tool.status === "running") {
           tool.status = "error"; tool.summary = session.aborted ? "本轮已停止" : "本轮已结束";
         }
@@ -928,6 +997,7 @@ export class SessionManager {
         ...(timedState ? { timed: timedState, messageCount: toolCtx.lines.length } : {}),
       },
     }, model.id, config.providers.find((p) => p.id === model.provider)?.models.find((m) => m.id === model.id)?.tokenizer, signal);
+    contextHooks.writingSettings?.(this.writingSettings(assembled.messages));
     const messages = [...assembled.messages];
     if (toolCtx.worldDigest) messages.push({ role: "system", content: toolCtx.worldDigest, timestamp: Date.now() });
     if (useProtocol) {
@@ -981,6 +1051,7 @@ export class SessionManager {
         useProtocol,
       },
     });
+    contextHooks.writingSettings?.(this.writingSettings(assembled.messages));
     const messages = [
       ...assembled.messages,
       ...(toolCtx.worldDigest ? [{ role: "system" as const, content: toolCtx.worldDigest, timestamp: Date.now() }] : []),
@@ -1005,6 +1076,13 @@ export class SessionManager {
           status: entry.constant && !entry.disabled && entry.content.trim() ? "included" : "skipped",
           reason: entry.disabled ? "已禁用" : !entry.content.trim() ? "内容为空" : entry.constant ? "常驻条目" : "接管模式按需检索" })) },
     });
+  }
+
+  private writingSettings(messages: import("@earendil-works/pi-ai").Message[]): string {
+    return messages.filter(message => message.role === "system" || (message as {pitavernContext?:string}).pitavernContext === "instruction")
+      .map(message => message.role === "system" ? [message.content, ...Object.values(message.sections ?? {})].join("\n") :
+        typeof message.content === "string" ? message.content : message.content.filter(c => c.type === "text").map(c => (c as {text:string}).text).join("\n"))
+      .join("\n\n") || "根据当前玩家可见状态，输出中文剧情正文。";
   }
 
   /** 世界书条目收集：卡内书 + 卡片引用世界 + 全局启用世界，按 world+uid 去重 */
@@ -1045,7 +1123,7 @@ export class SessionManager {
   }
 
   /** Agent events stream immediately; assistant messages remain staged until the turn commits. */
-  private wireAgent(agent: Agent, chatId: string, useProtocol: boolean, generated: StChatLine[]): void {
+  private wireAgent(agent: Agent, chatId: string, useProtocol: boolean, generated: StChatLine[], suppressProse = false): void {
     // game_tool 流式：按 contentIndex 累积参数原文，宽松提取 content 增量转发
     const streamState = new Map<number, { name: string; raw: string; sent: number }>();
 
@@ -1055,6 +1133,7 @@ export class SessionManager {
           streamState.clear();
           break;
         case "message_update": {
+          if (suppressProse) break;
           const { assistantMessageEvent } = event;
           if (assistantMessageEvent.type === "text_delta") {
             this.emit({ type: "chat.delta", chatId, delta: assistantMessageEvent.delta });
@@ -1090,6 +1169,12 @@ export class SessionManager {
             const amount = (value: number) => Number.isFinite(value) && value >= 0 ? value : 0;
             for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) run.usage[key] += amount(usage[key]);
             run.usage.costTotal += amount(usage.cost.total);
+            const stage = run.stages?.at(-1);
+            if (stage) {
+              for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) stage.usage[key] += amount(usage[key]);
+              stage.usage.costTotal += amount(usage.cost.total); stage.usage.responses++;
+              if (usage.totalTokens > 0 || usage.input > 0 || usage.output > 0 || usage.cacheRead > 0 || usage.cacheWrite > 0) stage.usage.responsesWithUsage++;
+            }
             run.usage.responses++;
             if (usage.totalTokens > 0 || usage.input > 0 || usage.output > 0 || usage.cacheRead > 0 || usage.cacheWrite > 0) run.usage.responsesWithUsage++;
             this.saveActivity(chatId, run);
@@ -1102,6 +1187,7 @@ export class SessionManager {
             totalTokens: event.message.usage.totalTokens,
             costTotal: event.message.usage.cost.total,
           });
+          if (suppressProse) break;
           const textContent = event.message.content
             .filter((c): c is { type: "text"; text: string } => c.type === "text")
             .map((c) => c.text)

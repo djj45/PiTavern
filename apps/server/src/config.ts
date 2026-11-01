@@ -77,6 +77,8 @@ export interface TavernConfig {
   toolsEnabled: boolean;
   /** native=纯文本流式；game_tool=强制工具调用防截断（game_content + tavern_think） */
   outputProtocol: "native" | "game_tool";
+  twoStage: boolean;
+  renderRetries: number;
   /** game_tool 下向中转透传 tool_choice=required（不兼容的中转可关） */
   protocolStrict: boolean;
   compression: CompressionConfig;
@@ -113,6 +115,8 @@ export function defaultConfig(): TavernConfig {
     vectors: { enabled: false, providerId: "", model: "", queryMessages: 2, maxEntries: 5, scoreThreshold: 0.3 },
     toolsEnabled: true,
     outputProtocol: "native",
+    twoStage: false,
+    renderRetries: 0,
     protocolStrict: true,
     compression: { enabled: true, keepFullTurns: 6 },
     takeover: { recentTurns: 3, stateProjection: true },

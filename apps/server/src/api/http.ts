@@ -248,6 +248,8 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       vectors: config.vectors,
       thinkingLevel: config.thinkingLevel,
       outputProtocol: config.outputProtocol,
+      twoStage: config.twoStage,
+      renderRetries: config.renderRetries,
       protocolStrict: config.protocolStrict,
       compression: config.compression,
       takeover: config.takeover,
@@ -339,6 +341,14 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       }
       if (body.outputProtocol === "native" || body.outputProtocol === "game_tool") next.outputProtocol = body.outputProtocol;
       if (typeof body.protocolStrict === "boolean") next.protocolStrict = body.protocolStrict;
+      if (body.twoStage !== undefined) {
+        if (typeof body.twoStage !== "boolean") throw new Error("双阶段开关必须为布尔值");
+        next.twoStage = body.twoStage;
+      }
+      if (body.renderRetries !== undefined) {
+        if (!Number.isInteger(body.renderRetries) || body.renderRetries < 0 || body.renderRetries > 2) throw new Error("正文重试次数须为0到2");
+        next.renderRetries = body.renderRetries;
+      }
       if (body.compression && typeof body.compression === "object") {
         const c = body.compression as Partial<ConnectionDto["compression"]>;
         if (typeof c.enabled === "boolean") next.compression.enabled = c.enabled;
