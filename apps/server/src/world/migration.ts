@@ -119,7 +119,7 @@ export function diffWorldTemplateRecords(from: WorldTemplateRecord, to: WorldTem
   compareDefinitions("item", from.template.items as ItemDefinition[], to.template.items as ItemDefinition[], changes, blocking,
     (before, after) => "固定价格 " + before.price + " → " + after.price + (before.name !== after.name ? "；名称 " + before.name + " → " + after.name : ""));
   if (from.template.schemaVersion !== to.template.schemaVersion) {
-    const change:WorldTemplateChangeDto = {entity:"template",action:"modified",label:"世界 schema",detail:`v${from.template.schemaVersion} → v${to.template.schemaVersion}`,...(to.template.schemaVersion === 1 ? {blocking:true} : {})};
+    const change:WorldTemplateChangeDto = {entity:"template",action:"modified",label:"世界 schema",detail:`v${from.template.schemaVersion} → v${to.template.schemaVersion}`,...(to.template.schemaVersion < from.template.schemaVersion ? {blocking:true} : {})};
     changes.push(change); if(change.blocking) blocking.push(change);
   }
   const oldFacts = new Map((from.template.facts ?? []).map(f=>[f.id,f]));
@@ -139,6 +139,15 @@ export function diffWorldTemplateRecords(from: WorldTemplateRecord, to: WorldTem
   if(JSON.stringify(from.template.interactions ?? [])!==JSON.stringify(to.template.interactions ?? [])) {
     changes.push(modifiedChange("interaction","","揭示交互","规则变化只影响未来交互，不撤销既有知识；删除仍被来源引用的交互会阻断迁移"));
   }
+  const nextQuests=new Map((to.template.quests??[]).map(q=>[q.id,q]));
+  for(const quest of from.template.quests??[]){
+    const next=nextQuests.get(quest.id);
+    if(!next || JSON.stringify(next)!==JSON.stringify(quest)){
+      const change:WorldTemplateChangeDto={entity:"quest",action:next?"modified":"removed",id:quest.id,label:"已有任务定义",detail:"首版不支持修改、删除或改ID；新规则请新建任务ID",blocking:true};changes.push(change);blocking.push(change);
+    }
+  }
+  for(const quest of to.template.quests??[])if(!(from.template.quests??[]).some(q=>q.id===quest.id))changes.push(addedChange("quest",quest.id,quest.name,"只增加定义，不接取、推进或奖励"));
+  if(JSON.stringify(from.template.quests??[])!==JSON.stringify(to.template.quests??[]))warnings.push("任务只增加定义，各恢复点保持原有进度；新增任务未接取，不自动奖励。");
   compareInitial(from.template, to.template, changes, blocking, warnings);
   return { changes, blocking, warnings };
 }
@@ -176,7 +185,8 @@ export function planWorldSnapshotMigration(snapshotInput: unknown, from: WorldTe
           } else {
             const next = structuredClone(source);
             next.schemaVersion = to.template.schemaVersion;
-            if (source.schemaVersion === 1 && to.template.schemaVersion === 2) {next.knowledge=[];next.publishedFactIds=[];}
+            if (source.schemaVersion === 1 && to.template.schemaVersion >= 2) {next.knowledge=[];next.publishedFactIds=[];}
+            if(source.schemaVersion<3 && to.template.schemaVersion===3)next.questStates=[];
             next.templateHash = to.contentHash;
             next.templateVersion = to.template.templateVersion;
             next.rulesVersion = to.template.rulesVersion;

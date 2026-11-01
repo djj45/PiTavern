@@ -1,3 +1,4 @@
+import {hasQuestHistory} from "../world/quest-scope.ts";
 import { createNarrativeAgent, settlementTools } from "../agent/narrative.ts";
 import { createNarrative, narrativeCatalog, validateNarrative, NARRATIVE_KEY, NARRATIVE_TEXT_KEY, SETTLEMENT_INSTRUCTION, REQUEST_KEY, findGenerationRequest, requestFingerprint, type GenerationRequest } from "./narrative.ts";
 import { executeScript, type ScriptResult } from "../script/interpreter.ts";
@@ -367,6 +368,7 @@ export class SessionManager {
     const { messages, ...page } = this.chats.page(chatId);
     const choices = replyChoices(document.lines);
     const branches = branchPoints(document.lines);
+    if(this.questHistory(chatId))for(const point of branches)for(const candidate of point.candidates)if(candidate.index!==point.selected)candidate.preview="切换后查看该路线正文";
     const greetings = greetingCatalog(document.lines, this.characters.getCharacter(document.character), !!readGroup(document.metadata));
     let activity: ChatSnapshotDto["activity"];
     let activityError = session?.activityError;
@@ -469,15 +471,28 @@ export class SessionManager {
     this.changed(chatId);
   }
 
+  private questHistory(chatId:string):boolean { return hasQuestHistory(this.chats.readSource(chatId).source); }
+
+  private playerBranchIndex(chatId:string,index:BranchIndexDto):BranchIndexDto {
+    if(!this.questHistory(chatId))return index;
+    const walk=(nodes:BranchIndexDto["nodes"]):BranchIndexDto["nodes"]=>nodes.map(node=>({...node,...(!node.isActive?{
+      title:`第 ${node.turn} 轮路线`,name:undefined,note:undefined,tags:[],userPreview:"",assistantPreview:"",preview:"切换后查看该路线正文",pathText:"",pathLabels:node.pathLabels.map(()=>"路线")}:{}),children:walk(node.children)}));
+    return {...index,nodes:walk(index.nodes)};
+  }
+
   branchIndex(chatId: string): BranchIndexDto {
     const before = this.chats.revisionId(chatId);
     const index = this.chats.branchIndex(chatId);
     if (this.chats.revisionId(chatId) !== before) this.changed(chatId);
-    return index;
+    return this.playerBranchIndex(chatId,index);
   }
 
   branchPreview(chatId: string, nodeId: string, offset: number, limit: number) {
     const before = this.chats.revisionId(chatId);
+    if(this.questHistory(chatId)){
+      const nodes:BranchIndexDto["nodes"]=[];const walk=(list:BranchIndexDto["nodes"])=>{for(const n of list){nodes.push(n);walk(n.children);}};walk(this.chats.branchIndex(chatId).nodes);
+      if(!nodes.some(n=>n.id===nodeId&&n.isActive))throw new Error("请先切换到该路线再查看正文");
+    }
     const preview = this.chats.branchPreview(chatId, nodeId, offset, limit);
     if (this.chats.revisionId(chatId) !== before) this.changed(chatId);
     return preview;
@@ -487,6 +502,10 @@ export class SessionManager {
     const before = this.chats.revisionId(chatId);
     const result = this.chats.searchBranches(chatId, query, cursor, limit);
     if (this.chats.revisionId(chatId) !== before) this.changed(chatId);
+    if(this.questHistory(chatId)){
+      const active=new Set<string>();const walk=(list:BranchIndexDto["nodes"])=>{for(const n of list){if(n.isActive)active.add(n.id);walk(n.children);}};walk(this.chats.branchIndex(chatId).nodes);
+      return {...result,matches:result.matches.filter(m=>active.has(m.nodeId))};
+    }
     return result;
   }
 
@@ -496,7 +515,7 @@ export class SessionManager {
     if (this.sessions.get(chatId)?.autoBranching) throw new Error("正在自动生成候选分支，请稍候或点击停止");
     const index = this.chats.selectReplyPath(chatId, steps, revision);
     this.changed(chatId);
-    return index;
+    return this.playerBranchIndex(chatId,index);
   }
 
   updateBranchMeta(chatId: string, nodeId: string, patch: BranchMetaPatchDto, revision: string): BranchIndexDto {
@@ -504,7 +523,7 @@ export class SessionManager {
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再修改路线");
     const index = this.chats.updateBranchMeta(chatId, nodeId, patch, revision);
     this.changed(chatId);
-    return index;
+    return this.playerBranchIndex(chatId,index);
   }
 
   updateBranchMetas(chatId: string, nodeIds: string[], patch: BranchMetaPatchDto, revision: string): BranchIndexDto {
@@ -512,7 +531,7 @@ export class SessionManager {
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再批量修改路线");
     const index = this.chats.updateBranchMetas(chatId, nodeIds, patch, revision);
     this.changed(chatId);
-    return index;
+    return this.playerBranchIndex(chatId,index);
   }
 
   restoreBackup(chatId: string, backupId: string, revision: string): void {
