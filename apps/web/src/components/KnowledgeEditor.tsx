@@ -1,3 +1,4 @@
+import {QuestLog} from "./QuestLog.tsx";
 import {useRef,useState} from "react";
 import type {WorldTemplate,WorldInteractionCondition,WorldModelSnapshot} from "@pitavern/shared/world";
 import {api} from "../api.ts";
@@ -56,7 +57,7 @@ export function KnowledgeEditor({template,change,busy}:{template:WorldTemplate;c
           <button type="button" disabled={busy} className={buttonClass} onClick={()=>update(d=>{d.interactions!.splice(i,1)})}>删除交互 {i+1}</button>
         </fieldset>)}
       </section>
-      <section aria-label="知识视角预览" className="space-y-2"><h4>以玩家／指定角色查看（服务端预览）</h4><select className={fieldClass} aria-label="知识预览视角" value={perspective} onChange={e=>{setPerspective(e.target.value);setResult(null);setError('')}}><option value="player">玩家</option>{template.actors.map(a=><option key={a.id} value={'actor:'+a.id}>{a.name}</option>)}</select><button type="button" disabled={busy} className={buttonClass} onClick={()=>{setError('');const key=previewKey;void api.previewWorldKnowledge(template,perspective==='player'?undefined:perspective.slice(6)).then(view=>{if(latestPreviewKey.current===key)setResult({key,view})}).catch((e:Error)=>{if(latestPreviewKey.current===key)setError(e.message)})}}>刷新视角预览</button>{error && <p role="alert" className="text-xs text-red-300">{error}</p>}{preview && <ul aria-label="预览已知事实" className="space-y-1 text-xs">{preview.knownFacts.map(f=><li key={f.id} className="break-words">{f.text} · 来源 {f.source.type}</li>)}</ul>}</section>
+      <section aria-label="知识视角预览" className="space-y-2"><h4>以玩家／指定角色查看（服务端预览）</h4><select className={fieldClass} aria-label="知识预览视角" value={perspective} onChange={e=>{setPerspective(e.target.value);setResult(null);setError('')}}><option value="player">玩家</option>{template.actors.map(a=><option key={a.id} value={'actor:'+a.id}>{a.name}</option>)}</select><button type="button" disabled={busy} className={buttonClass} onClick={()=>{setError('');const key=previewKey;void api.previewWorldKnowledge(template,perspective==='player'?undefined:perspective.slice(6)).then(view=>{if(latestPreviewKey.current===key)setResult({key,view})}).catch((e:Error)=>{if(latestPreviewKey.current===key)setError(e.message)})}}>刷新视角预览</button>{error && <p role="alert" className="text-xs text-red-300">{error}</p>}{preview && <ul aria-label="预览已知事实" className="space-y-1 text-xs">{preview.knownFacts.map(f=><li key={f.id} className="break-words">{f.text} · 来源 {f.source.type}</li>)}</ul>}{preview?.quests&&<QuestLog quests={preview.quests}/>}</section>
     </>}
   </section>;
 }

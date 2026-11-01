@@ -1,3 +1,4 @@
+import {QuestLog} from "./QuestLog.tsx";
 import { useEffect, useState } from "react";
 import type { WorldChatMigrationPreviewDto, WorldChatStateDto, WorldEvent, WorldSnapshot, WorldTemplate, WorldTemplateSummaryDto, WorldTemplateVersionDto } from "@pitavern/shared/world";
 import { api, ApiError } from "../api.ts";
@@ -119,7 +120,7 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
 
   useEffect(() => {
     setVersions([]); setTargetHash(""); setMigration(null); setMigrationError("");
-    if(world?.snapshot?.schemaVersion===2 && !author) return;
+    if((world?.snapshot?.schemaVersion??0)>=2 && !author) return;
     const templateId = world?.template?.templateId;
     if (!templateId) return;
     let cancelled = false;
@@ -288,6 +289,7 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
                 </p>
               )}
               {statusView(world)}
+              {snapshot?.quests&&<QuestLog quests={snapshot.quests}/>}
               <section aria-label="已知线索" className="space-y-2 rounded-lg border border-tavern-border p-3">
                 <h3 className="text-sm font-medium">已知线索</h3>
                 {snapshot?.knownFacts.length ? <ul className="space-y-2 text-sm">{snapshot.knownFacts.map(fact=><li key={fact.id} className="break-words"><p>{fact.text}</p><p className="text-xs text-tavern-dim">来源：{fact.source.type === "public" ? "公共事实" : fact.source.type === "initial" ? "初始已知" : `第 ${fact.source.turn} 轮交互`}{"interactionId" in fact.source && fact.source.interactionId ? ` · ${snapshot.publicInteractions.find(i=>i.id===("interactionId" in fact.source ? fact.source.interactionId : undefined))?.name ?? "交互"}` : ""}{"fromActorId" in fact.source && fact.source.fromActorId ? ` · ${nameOf(template?.actors,fact.source.fromActorId)}` : ""}</p></li>)}</ul> : <p className="text-xs text-tavern-dim">尚无已知线索。</p>}
@@ -295,7 +297,7 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
               <div className="space-y-2"><button type="button" disabled={busy || authorLoading} onClick={()=>{if(author){setAuthor(null);setEditing(false);setDraft("");}else void loadAuthor();}} className="rounded border border-tavern-border px-3 py-2 text-sm">{author ? "关闭作者视图" : authorLoading ? "读取作者视图…" : "作者视图（含秘密）"}</button>
                 {author && <section aria-label="作者世界视图" className="space-y-2 rounded border border-amber-400/40 p-3 text-xs"><h3 className="font-medium">作者视图：完整事实与知情关系</h3><p>本地管理数据包含全部秘密。JSONL、模板导出和备份也包含完整秘密；分享前需另行处理。此视图不会发送给玩家模型。</p><button type="button" disabled={busy || authorLoading} onClick={()=>void loadAuthor()} className="rounded border border-tavern-border px-2 py-1">刷新作者视图</button><details><summary>查看完整模板与知识快照 JSON</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(author,null,2)}</pre></details></section>}
               </div>
-              {(snapshot?.schemaVersion!==2 || author) && <section aria-label="更新世界模板" className="rounded-lg border border-tavern-border bg-tavern-bg/50 p-3">
+              {((snapshot?.schemaVersion??0)<2 || author) && <section aria-label="更新世界模板" className="rounded-lg border border-tavern-border bg-tavern-bg/50 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-sm font-medium text-tavern-text">更新模板</h3>
                   <span className="text-xs text-tavern-dim">覆盖全部候选、检查点与隐藏后续；历史正文不变</span>
@@ -392,7 +394,7 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
                 </div>
               ) : (
                 <div className="flex items-center justify-end gap-2">
-                  {(snapshot?.schemaVersion!==2 || author) && <button type="button" onClick={()=>void startEdit()} disabled={locked || authorLoading || !snapshot || !template}
+                  {((snapshot?.schemaVersion??0)<2 || author) && <button type="button" onClick={()=>void startEdit()} disabled={locked || authorLoading || !snapshot || !template}
                     className="rounded-lg border border-tavern-border px-3 py-1.5 text-sm text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text disabled:opacity-40">修正状态</button>}
                   <button type="button" onClick={onClose} disabled={locked}
                     className="rounded-lg border border-tavern-border px-3 py-1.5 text-sm text-tavern-dim hover:text-tavern-text disabled:opacity-40">关闭</button>

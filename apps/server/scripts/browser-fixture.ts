@@ -63,6 +63,20 @@ const mock = http.createServer(async (req, res) => {
   const twoStage = body.tools?.some((tool: {function?:{name?:string}}) => tool.function?.name === 'submit_narrative_plan');
   const contentText = (message:{content?:unknown}) => typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.filter((c:{type?:string})=>c.type==='text').map((c:{text:string})=>c.text).join('') : '';
   const packetMessage = body.messages?.findLast((message:{role:string;content?:unknown}) => message.role === 'user' && contentText(message).startsWith('{"protocol":"pitavern-narrative-v1"'));
+  const questFlow=body.tools?.some((tool:{function?:{name?:string}})=>tool.function?.name==='world_quest');
+  const questPacket=packetMessage?JSON.parse(contentText(packetMessage)):undefined;
+  if(questFlow || questPacket?.authoritativeState.schemaVersion===3){
+    const frame=(delta:object,finish_reason:string|null)=>'data: '+JSON.stringify({id:'quest-browser',object:'chat.completion.chunk',model:'fixture',choices:[{index:0,delta,finish_reason}]})+'\n\n';
+    const lastUser=contentText(body.messages.findLast((m:{role:string})=>m.role==='user')??{});
+    const settled=body.messages.some((m:{tool_calls?:Array<{function:{name:string}}>})=>m.tool_calls?.some(c=>c.function.name==='world_quest'));
+    const operation=(action:string)=>({name:'world_quest',args:{questId:'cellar_sword',action}});
+    const plan={name:'submit_narrative_plan',args:{scene:'旧酒馆',beats:['依据实际任务状态叙述'],dialogue:['掌柜回应'],references:[{kind:'quest',id:'cellar_sword'}]}};
+    let calls=settled||raw.includes('任务不交付')?[plan]:lastUser.includes('任务调查')?[operation('accept'),{name:'world_command',args:{commandId:'buy',type:'purchase_item',buyerId:'player',sellerId:'innkeeper',itemId:'sword',quantity:1}},{name:'world_interact',args:{interactionId:'ask_innkeeper_about_cellar'}},operation('advance')]:lastUser.includes('任务交付')?[operation('advance')]:[plan];
+    if(!twoStage && settled)calls=[];
+    const text=questPacket?'任务正文：'+(questPacket.authoritativeState.quests?.find((q:{id:string})=>q.id==='cellar_sword')?.status==='completed'?'已交付长剑并领取奖励。':'当前任务尚未完成。'):'任务回应。';
+    const delta=questPacket||!calls.length?{role:'assistant',content:text}:{role:'assistant',tool_calls:calls.map((c,index)=>({index,id:'quest-'+index+'-'+(settled?'plan':'act'),type:'function',function:{name:c.name,arguments:JSON.stringify(c.args)}}))};
+    res.writeHead(200,{'Content-Type':'text/event-stream'});res.end(frame(delta,null)+frame({},questPacket||!calls.length?'stop':'tool_calls')+'data: '+JSON.stringify({choices:[],usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}})+'\n\ndata: [DONE]\n\n');return;
+  }
   if (twoStage || packetMessage) {
     if (raw.includes('双阶段计时')) await new Promise(resolve=>setTimeout(resolve,600));
     if (packetMessage && raw.includes('正文失败测试')) {res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'合成正文失败'}}));return;}
@@ -90,7 +104,7 @@ const mock = http.createServer(async (req, res) => {
   res.end(frame({ role: 'assistant', content: '模型原文' }, null) + frame({}, 'stop') + 'data: [DONE]\n\n');
 });
 mock.listen(0, '127.0.0.1'); await once(mock, 'listening');
-config.providers = [{ id: 'fixture', name: '本地合成连接', apiKey: 'synthetic-only', baseUrl: `http://127.0.0.1:${(mock.address() as AddressInfo).port}/v1`, models: [{ id: 'fixture', name: '本地模型', contextWindow: 8000, maxTokens: 500 }] }];
+config.providers = [{ id: 'fixture', name: '本地合成连接', apiKey: 'synthetic-only', baseUrl: `http://127.0.0.1:${(mock.address() as AddressInfo).port}/v1`, models: [{ id: 'fixture', name: '本地模型', contextWindow: process.env.PITAVERN_BROWSER_QUESTS==='1'?24000:8000, maxTokens: 500 }] }];
 config.defaultProvider = 'fixture'; config.defaultModel = 'fixture'; config.toolsEnabled = process.env.PITAVERN_BROWSER_TWO_STAGE === '1';
 config.contextMode = 'bridge'; config.activePreset = 'browser'; saveConfig(config);
 const characters = new CharacterStore(path.join(config.stDataDir, 'characters'));

@@ -1,0 +1,48 @@
+import type {WorldTemplate,WorldInteractionCondition as Condition} from "@pitavern/shared/world";
+import {buttonClass,fieldClass} from "./libraryStyles.ts";
+const nextId=(prefix:string,rows:Array<{id:string}>)=>{let i=1;while(rows.some(r=>r.id===prefix+i))i++;return prefix+i;};
+type Props={template:WorldTemplate;change:(fn:(t:WorldTemplate)=>void)=>void;busy:boolean};
+function Conditions({template,values,onChange,label,busy}:{template:WorldTemplate;values:Condition[];onChange:(v:Condition[])=>void;label:string;busy:boolean}){
+ const make=(type:Condition['type']):Condition=>type==='at_location'?{type,locationId:template.initial.locationId}:type==='npc_present'?{type,actorId:template.actors.find(a=>a.id!==template.initial.actorId)?.id??''}:type==='has_item'?{type,itemId:template.items[0]?.id??'',quantity:1}:{type,actorId:template.initial.actorId,factId:template.facts?.[0]?.id??''};
+ const update=(i:number,value:Condition)=>onChange(values.map((c,j)=>j===i?value:c));
+ const select=(name:string,value:string,options:Array<{id:string;name?:string}>,set:(v:string)=>void)=><select aria-label={label+' '+name} className={fieldClass} disabled={busy} value={value} onChange={e=>set(e.target.value)}><option value="">请选择</option>{options.map(o=><option key={o.id} value={o.id}>{o.name??o.id}</option>)}</select>;
+ return <div className="min-w-0 space-y-2"><p className="text-xs">{label}（全部满足；空条件始终成立）</p>{values.map((c,i)=><div key={i} className="grid min-w-0 gap-2 rounded border border-tavern-border p-2 sm:grid-cols-2">
+ <select aria-label={`${label} 条件 ${i+1} 类型`} className={fieldClass} disabled={busy} value={c.type} onChange={e=>update(i,make(e.target.value as Condition['type']))}><option value="at_location">玩家位于地点</option><option value="npc_present">NPC在场</option><option value="has_item">玩家持有物品</option><option value="knows_fact">角色已知事实</option></select>
+ {'locationId' in c&&select(`条件 ${i+1} 地点`,c.locationId,template.locations,v=>update(i,{...c,locationId:v}))}
+ {'actorId' in c&&select(`条件 ${i+1} 角色`,c.actorId,template.actors.filter(a=>c.type!=='npc_present'||a.id!==template.initial.actorId),v=>update(i,{...c,actorId:v}))}
+ {'factId' in c&&select(`条件 ${i+1} 事实`,c.factId,template.facts??[],v=>update(i,{...c,factId:v}))}
+ {'itemId' in c&&<>{select(`条件 ${i+1} 物品`,c.itemId,template.items,v=>update(i,{...c,itemId:v}))}<input aria-label={`${label} 条件 ${i+1} 数量`} type="number" min={1} max={1000000} className={fieldClass} disabled={busy} value={c.quantity} onChange={e=>update(i,{...c,quantity:Number(e.target.value)})}/></>}
+ <button type="button" className={buttonClass} disabled={busy} onClick={()=>onChange(values.filter((_,j)=>j!==i))}>删除{label}条件 {i+1}</button>
+ </div>)}<button type="button" className={buttonClass} disabled={busy||values.length>=16} onClick={()=>onChange([...values,make('at_location')])}>添加{label}条件</button></div>;
+}
+export function QuestEditor({template:t,change,busy}:Props){
+ const npcs=t.actors.filter(a=>a.id!==t.initial.actorId),quests=t.quests??[];
+ const options=(rows:Array<{id:string;name:string}>)=>rows.map(r=><option key={r.id} value={r.id}>{r.name}</option>);
+ return <section aria-label="任务规则" className="min-w-0 space-y-3 rounded-lg border border-tavern-border p-3">
+ <h3 className="font-medium">线性任务（作者管理）</h3><p className="text-xs text-tavern-dim">开放后才展示名称与当前目标。未来阶段、条件、奖励规则和内部备注不发给玩家模型；请勿在可见目标中提前写秘密。已有任务修改会阻断旧聊天迁移，新规则请新建ID。</p>
+ {t.schemaVersion!==3?<><p className="text-xs">任务使用v3，启用后保存发布；已有聊天需预览、备份并显式迁移，不自动接取或领奖。</p><button type="button" className={buttonClass} disabled={busy} onClick={()=>change(d=>{d.schemaVersion=3;d.facts??=[];d.interactions??=[];d.initial.knowledge??=[];d.initial.actorMoney=[];d.quests=[];})}>启用任务规则（v3）</button></>:<>
+ <fieldset className="space-y-2"><legend className="text-sm">NPC初始资金</legend><p className="text-xs text-tavern-dim">奖励从实际余额和库存支付，只有新聊天使用这些初始资金；迁移不会补钱。物品来源在初始库存中配置。</p>{npcs.map(a=><label key={a.id} className="block text-xs">{a.name}<input className={fieldClass} aria-label={`${a.name} 初始资金`} type="number" min={0} max={1000000000000} disabled={busy} value={t.initial.actorMoney?.find(m=>m.actorId===a.id)?.money??0} onChange={e=>change(d=>{d.initial.actorMoney=d.initial.actorMoney!.filter(m=>m.actorId!==a.id);d.initial.actorMoney.push({actorId:a.id,money:Number(e.target.value)});})}/></label>)}</fieldset>
+ <button type="button" className={buttonClass} disabled={busy||quests.length>=64||!npcs.length} onClick={()=>change(d=>{d.quests!.push({id:nextId('quest-',quests),name:'新任务',openConditions:[],stages:[{id:'stage-1',objective:'完成当前目标',conditions:[]}],reward:{fromActorId:npcs[0].id,money:0,items:[]}});})}>添加任务</button>
+ {quests.map((q,i)=><fieldset key={i} className="min-w-0 space-y-3 rounded border border-tavern-border p-3"><legend>任务 {i+1}</legend>
+ <label className="block text-xs">稳定ID<input aria-label={`任务 ${i+1} ID`} className={fieldClass} maxLength={128} disabled={busy} value={q.id} onChange={e=>change(d=>{d.quests![i].id=e.target.value;})}/></label>
+ <label className="block text-xs">开放后名称<input aria-label={`任务 ${i+1} 名称`} className={fieldClass} maxLength={100} disabled={busy} value={q.name} onChange={e=>change(d=>{d.quests![i].name=e.target.value;})}/></label>
+ <label className="block text-xs">内部备注<textarea aria-label={`任务 ${i+1} 内部备注`} className={fieldClass} maxLength={2000} disabled={busy} value={q.description??''} onChange={e=>change(d=>{d.quests![i].description=e.target.value;})}/></label>
+ <Conditions template={t} values={q.openConditions} label={`任务 ${i+1} 开放`} busy={busy} onChange={v=>change(d=>{d.quests![i].openConditions=v;})}/>
+ {q.stages.map((stage,j)=><fieldset key={j} className="min-w-0 space-y-2 rounded border border-tavern-border p-2"><legend>阶段 {j+1}</legend>
+ <label className="block text-xs">稳定阶段ID<input aria-label={`任务 ${i+1} 阶段 ${j+1} ID`} className={fieldClass} maxLength={128} disabled={busy} value={stage.id} onChange={e=>change(d=>{d.quests![i].stages[j].id=e.target.value;})}/></label>
+ <label className="block text-xs">当前阶段公开目标<textarea aria-label={`任务 ${i+1} 阶段 ${j+1} 目标`} className={fieldClass} maxLength={1000} disabled={busy} value={stage.objective} onChange={e=>change(d=>{d.quests![i].stages[j].objective=e.target.value;})}/></label>
+ <Conditions template={t} values={stage.conditions} label={`任务 ${i+1} 阶段 ${j+1}`} busy={busy} onChange={v=>change(d=>{d.quests![i].stages[j].conditions=v;})}/>
+ {j===q.stages.length-1&&<><label className="block text-xs"><input type="checkbox" aria-label={`任务 ${i+1} 最终交付`} disabled={busy||!t.items.length} checked={!!stage.delivery} onChange={e=>change(d=>{if(e.target.checked)d.quests![i].stages[j].delivery={toActorId:npcs[0]?.id??'',itemId:t.items[0]?.id??'',quantity:1};else delete d.quests![i].stages[j].delivery;})}/>最终交付物品</label>{stage.delivery&&<div className="grid min-w-0 gap-2 sm:grid-cols-3">
+ <label className="text-xs">接收NPC<select aria-label={`任务 ${i+1} 交付NPC`} className={fieldClass} disabled={busy} value={stage.delivery.toActorId} onChange={e=>change(d=>{d.quests![i].stages[j].delivery!.toActorId=e.target.value;})}>{options(npcs)}</select></label>
+ <label className="text-xs">物品<select aria-label={`任务 ${i+1} 交付物品`} className={fieldClass} disabled={busy} value={stage.delivery.itemId} onChange={e=>change(d=>{d.quests![i].stages[j].delivery!.itemId=e.target.value;})}>{options(t.items)}</select></label>
+ <label className="text-xs">数量<input aria-label={`任务 ${i+1} 交付数量`} className={fieldClass} type="number" min={1} max={1000000} disabled={busy} value={stage.delivery.quantity} onChange={e=>change(d=>{d.quests![i].stages[j].delivery!.quantity=Number(e.target.value);})}/></label></div>}</>}
+ <button type="button" className={buttonClass} disabled={busy||q.stages.length===1} onClick={()=>change(d=>{d.quests![i].stages.splice(j,1);})}>删除任务 {i+1} 阶段 {j+1}</button></fieldset>)}
+ <button type="button" className={buttonClass} disabled={busy||q.stages.length>=8||!!q.stages.at(-1)?.delivery} onClick={()=>change(d=>{d.quests![i].stages.push({id:nextId('stage-',q.stages),objective:'完成当前目标',conditions:[]});})}>添加任务 {i+1} 阶段</button>
+ <div className="grid min-w-0 gap-2 sm:grid-cols-2"><label className="text-xs">奖励支付NPC<select aria-label={`任务 ${i+1} 奖励NPC`} className={fieldClass} disabled={busy} value={q.reward.fromActorId} onChange={e=>change(d=>{d.quests![i].reward.fromActorId=e.target.value;})}>{options(npcs)}</select></label><label className="text-xs">固定金币<input aria-label={`任务 ${i+1} 奖励金币`} className={fieldClass} type="number" min={0} max={1000000000000} disabled={busy} value={q.reward.money} onChange={e=>change(d=>{d.quests![i].reward.money=Number(e.target.value);})}/></label></div>
+ {q.reward.items.map((item,j)=><div key={j} className="grid min-w-0 gap-2 sm:grid-cols-3"><select aria-label={`任务 ${i+1} 奖励物品 ${j+1}`} className={fieldClass} disabled={busy} value={item.itemId} onChange={e=>change(d=>{d.quests![i].reward.items[j].itemId=e.target.value;})}>{options(t.items)}</select><input aria-label={`任务 ${i+1} 奖励数量 ${j+1}`} className={fieldClass} type="number" min={1} max={1000000} disabled={busy} value={item.quantity} onChange={e=>change(d=>{d.quests![i].reward.items[j].quantity=Number(e.target.value);})}/><button type="button" className={buttonClass} disabled={busy} onClick={()=>change(d=>{d.quests![i].reward.items.splice(j,1);})}>删除奖励物品 {j+1}</button></div>)}
+ <button type="button" className={buttonClass} disabled={busy||q.reward.items.length>=16||!t.items.length} onClick={()=>change(d=>{d.quests![i].reward.items.push({itemId:t.items[0].id,quantity:1});})}>添加任务 {i+1} 奖励物品</button>
+ <button type="button" className={buttonClass} disabled={busy} onClick={()=>change(d=>{d.quests!.splice(i,1);})}>删除任务 {i+1}</button>
+ </fieldset>)}
+ </>}
+ </section>;
+}
