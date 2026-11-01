@@ -323,8 +323,12 @@ export class WorldTemplateLibrary {
     return record;
   }
 
-  /** 按不可变版本哈希读取，供新聊天选择精确版本。 */
+  /** 按不可变版本哈希读取，供新聊天选择精确版本；只允许当前模板库仍列出的版本。 */
   resolveHash(contentHash: string): WorldTemplateRecord {
+    const entries = Object.values(this.readIndex().templates);
+    if (!entries.some((entry) => entry.versions.some((version) => version.contentHash === contentHash))) {
+      throw new WorldTemplateNotFoundError("模板版本不存在或已删除");
+    }
     return this.readVersion(contentHash);
   }
 

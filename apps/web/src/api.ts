@@ -29,17 +29,16 @@ import type {
   LibraryHistoryPageDto,
   LibraryHistoryPreviewDto,
 } from "@pitavern/shared";
-import type { WorldSnapshot, WorldTemplateSummaryDto } from "@pitavern/shared/world";
+import type {
+  WorldSnapshot,
+  WorldTemplate,
+  WorldTemplateEditorDto,
+  WorldTemplateLibrarySummaryDto,
+  WorldTemplateSummaryDto,
+  WorldTemplateVersionDto,
+} from "@pitavern/shared/world";
 
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `${res.status} ${res.statusText}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-/** 保留 HTTP 状态与响应体的接口错误，供聊天导入区分重复（409）与校验失败（422）。 */
+/** 保留 HTTP 状态与响应体的接口错误，供聊天导入/模板编辑区分 409 等状态。 */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
@@ -49,6 +48,14 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
   }
+}
+
+async function json<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(body.error ?? `${res.status} ${res.statusText}`, res.status, body);
+  }
+  return res.json() as Promise<T>;
 }
 
 const chatImportBody = (file: File) => ({
@@ -138,6 +145,32 @@ export const api = {
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
   worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),
   worldTemplates: () => fetch("/api/world/templates").then((r) => json<WorldTemplateSummaryDto[]>(r)),
+  worldTemplateLibrary: () => fetch("/api/world/template-library").then((r) => json<WorldTemplateLibrarySummaryDto[]>(r)),
+  worldTemplateEditor: (id: string) => fetch("/api/world/template-library/" + encodeURIComponent(id))
+    .then((r) => json<WorldTemplateEditorDto>(r)),
+  createWorldTemplateBlank: (name?: string, description?: string) => fetch("/api/world/template-library", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "blank", ...(name ? { name } : {}), ...(description ? { description } : {}) }),
+  }).then((r) => json<WorldTemplateEditorDto>(r)),
+  copyBuiltinWorldTemplate: (sourceId: string, name?: string, description?: string) => fetch("/api/world/template-library", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "copy", sourceId, ...(name ? { name } : {}), ...(description ? { description } : {}) }),
+  }).then((r) => json<WorldTemplateEditorDto>(r)),
+  saveWorldTemplateDraft: (id: string, draft: { revision: number; name: string; description?: string; template: WorldTemplate }) =>
+    fetch("/api/world/template-library/" + encodeURIComponent(id), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft),
+    }).then((r) => json<WorldTemplateEditorDto>(r)),
+  publishWorldTemplate: (id: string, revision: number) => fetch("/api/world/template-library/" + encodeURIComponent(id) + "/publish", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision }),
+  }).then((r) => json<WorldTemplateEditorDto>(r)),
+  worldTemplateVersions: (id: string) => fetch("/api/world/template-library/" + encodeURIComponent(id) + "/versions")
+    .then((r) => json<WorldTemplateVersionDto[]>(r)),
+  importWorldTemplate: (payload: unknown) => fetch("/api/world/template-library/import", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }).then((r) => json<WorldTemplateEditorDto>(r)),
+  deleteWorldTemplate: (id: string) => fetch("/api/world/template-library/" + encodeURIComponent(id), { method: "DELETE" })
+    .then((r) => json<{ ok: boolean }>(r)),
+  worldTemplateExportUrl: (id: string) => "/api/world/template-library/" + encodeURIComponent(id) + "/export",
   initializeWorld: (chatId: string, templateId: string, revision: string, allowExisting = true) =>
     fetch("/api/chat/world/initialize", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatId, templateId, revision, allowExisting }) }).then((r) => json<{ ok: boolean }>(r)),

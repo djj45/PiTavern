@@ -14,6 +14,7 @@ interface SidebarProps {
   onOpenChat: (chatId: string) => void;
   onNewChat: (worldTemplateId?: string) => void;
   onImportChat: () => void;
+  onOpenWorldTemplates: () => void;
   onNewGroup: (name: string, members: string[]) => Promise<boolean>;
   onDeleteChat: (chatId: string) => void;
   /** 置顶/重命名/归档成功后刷新对话列表。 */
@@ -35,6 +36,7 @@ export function Sidebar({
   onOpenChat,
   onNewChat,
   onImportChat,
+  onOpenWorldTemplates,
   onNewGroup,
   onDeleteChat,
   onChatsChanged,
@@ -128,6 +130,13 @@ export function Sidebar({
               {worldTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
             </select>
           </label>
+          <button
+            type="button"
+            onClick={() => { onClose(); onOpenWorldTemplates(); }}
+            className="mb-2 w-full rounded border border-tavern-border px-3 py-1.5 text-sm hover:border-tavern-accent-dim hover:bg-tavern-raised"
+          >
+            世界模板
+          </button>
           <button
             type="button"
           onClick={() => onNewChat(worldTemplateId || undefined)}

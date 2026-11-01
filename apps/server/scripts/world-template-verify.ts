@@ -146,7 +146,8 @@ assert.equal(chats.readWorld(chatV1.id)!.template!.items[0].price, 30);
 assert.equal(chats.readWorld(chatV2.id)!.snapshot.templateVersion, 2);
 assert.equal(chats.readWorld(chatV2.id)!.template!.items[0].price, 40);
 assert.equal(chats.readWorld(chatV2.id)!.snapshot.templateHash, v2Hash);
-check("删除模板目录条目不影响已有聊天/分支内嵌版本");
+assert.throws(() => library.resolveHash(v2Hash), WorldTemplateNotFoundError, "已删除模板不应再供新聊天选择");
+check("删除模板目录条目不影响已有聊天/分支内嵌版本，且不再供新聊天选择");
 
 // D. 受控 HTTP + 整库备份 -------------------------------------------------------
 const httpRoot = path.join(run, "http");
