@@ -25,6 +25,24 @@ fs.writeFileSync(path.join(config.stDataDir, 'characters/picture.png'), cardPng(
 fs.writeFileSync(path.join(config.stDataDir, 'characters/greetings.json'), JSON.stringify({ name: '多开局向导',
   first_mes: '请先选择开局。\n' + Array.from({ length: 8 }, (_, i) => `${i + 1}.合成场景${i + 1}`).join('\n'),
   alternate_greetings: Array.from({ length: 8 }, (_, i) => `合成开局${i + 1}：{{user}}抵达地点${i + 1}。`) }));
+// 角色卡管理页导入夹具：放在 characters/ 之外，避免启动时就出现在列表里。
+fs.mkdirSync(path.join(runDir, 'fixtures'), { recursive: true });
+fs.writeFileSync(path.join(runDir, 'fixtures/import-card.json'), JSON.stringify({
+  spec: 'chara_card_v2', spec_version: '2.0',
+  data: { name: '导入向导', description: '从夹具 JSON 导入的角色', personality: '沉稳', scenario: '档案室',
+    first_mes: '导入开场白：{{user}}抵达档案室。', alternate_greetings: ['导入备用一', '导入备用二'],
+    mes_example: '<START>', creator_notes: '浏览器导入夹具', system_prompt: '保持简洁',
+    post_history_instructions: '', tags: ['导入', '合成'], extensions: { world: 'browser', unknownCard: { keep: true } } },
+}));
+fs.writeFileSync(path.join(runDir, 'fixtures/import-card.png'), cardPng(fixtureCard('导入图片向导')));
+// 重启后仍应保留保存结果的角色卡；只在首次启动时创建，重启不覆盖。
+const persistCardPath = path.join(config.stDataDir, 'characters/persist.json');
+if (!fs.existsSync(persistCardPath)) {
+  fs.writeFileSync(persistCardPath, JSON.stringify({ spec: 'chara_card_v2', data: {
+    name: '持久向导', description: '重启后应保留保存结果', first_mes: '持久开场白', tags: ['持久'],
+    character_book: fixtureBook(), extensions: { unknownCard: { keep: true } },
+  } }));
+}
 const mock = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url?.endsWith('/models')) {
     fs.appendFileSync(path.join(runDir, 'model-requests.ndjson'), JSON.stringify({ method: req.method, url: req.url }) + '\n');

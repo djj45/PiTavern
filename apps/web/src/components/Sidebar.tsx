@@ -14,6 +14,7 @@ interface SidebarProps {
   onOpenChat: (chatId: string) => void;
   onNewChat: (worldTemplateId?: string) => void;
   onImportChat: () => void;
+  onOpenCharacterManager: () => void;
   onOpenWorldTemplates: () => void;
   onNewGroup: (name: string, members: string[]) => Promise<boolean>;
   onDeleteChat: (chatId: string) => void;
@@ -36,6 +37,7 @@ export function Sidebar({
   onOpenChat,
   onNewChat,
   onImportChat,
+  onOpenCharacterManager,
   onOpenWorldTemplates,
   onNewGroup,
   onDeleteChat,
@@ -162,6 +164,14 @@ export function Sidebar({
         <section className="p-2">
           <h3 className="flex items-center gap-2 px-2 pb-1 text-xs font-medium text-tavern-dim">
             <span>角色 {characters.length > 0 && `(${characters.length})`}</span>
+            <button
+              type="button"
+              aria-label="管理角色卡"
+              onClick={() => { onClose(); onOpenCharacterManager(); }}
+              className="rounded border border-tavern-border px-1.5 py-0.5 text-tavern-dim hover:border-tavern-accent-dim hover:text-tavern-text"
+            >
+              管理
+            </button>
             <button
               type="button"
               disabled={importing}

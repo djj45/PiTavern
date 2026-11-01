@@ -16,6 +16,7 @@ import type { TavernConfig } from "../config.ts";
 import { defaultConfig, saveConfig, seedDataDirs } from "../config.ts";
 import { listPresets, presetsDir } from "../context/preset.ts";
 import { normalizeWorldFile } from "../context/worldinfo.ts";
+import { CharacterCardConflictError, CharacterCardManager, CharacterCardNotFoundError } from "../stdata/character-cards.ts";
 import { validateAuthorNote } from "../context/author-note.ts";
 import { normalizeInstruct } from "../context/instruct.ts";
 import { embedTexts } from "../context/vectors.ts";
@@ -84,6 +85,12 @@ function parseBranchPatch(value: unknown): BranchMetaPatchDto | null {
   };
 }
 
+function characterCardError(res: Response, error: unknown): void {
+  if (error instanceof CharacterCardNotFoundError) { res.status(404).json({ error: error.message }); return; }
+  if (error instanceof CharacterCardConflictError) { res.status(409).json({ error: error.message }); return; }
+  res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+}
+
 function worldTemplateError(res: Response, error: unknown): void {
   if (error instanceof WorldTemplateNotFoundError) { res.status(404).json({ error: error.message }); return; }
   if (error instanceof WorldTemplateConflictError) { res.status(409).json({ error: error.message }); return; }
@@ -100,6 +107,11 @@ export function createHttpApp(deps: HttpDeps): express.Express {
   const library = new LibraryStore(deps.stDataDir);
   const libraryBackups = new LibraryBackupStore(deps.stDataDir);
   const chatImports = new ChatImportService(deps.stDataDir, chats, characters);
+  const characterCards = new CharacterCardManager(deps.stDataDir, characters, chats);
+  const allowCharacterCardWrite = (res: Response): boolean => {
+    try { sessions.assertIdle(); return true; }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); return false; }
+  };
   app.use("/api", (req, res, next) => {
     if (sessions.writeBlocked && req.path !== "/status" && !backupControlPath(req.path)) return res.status(503).json({ error: sessions.writeBlocked });
     next();
@@ -470,6 +482,60 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  /** 角色卡管理：列表/编辑视图/保存/复制/删除/导出。写操作要求空闲并广播资料变更。 */
+  app.get("/api/character-cards", (_req, res) => {
+    try { res.json(characterCards.list()); }
+    catch (error) { characterCardError(res, error); }
+  });
+
+  app.get("/api/character-cards/:name/export", (req, res) => {
+    try {
+      const exported = characterCards.export(String(req.params.name));
+      res.setHeader("Content-Type", exported.contentType);
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(exported.fileName)}`);
+      res.send(exported.buffer);
+    } catch (error) { characterCardError(res, error); }
+  });
+
+  app.get("/api/character-cards/:name", (req, res) => {
+    try { res.json(characterCards.read(String(req.params.name))); }
+    catch (error) { characterCardError(res, error); }
+  });
+
+  app.put("/api/character-cards/:name", (req, res) => {
+    if (!allowCharacterCardWrite(res)) return;
+    const { revision, fields } = req.body ?? {};
+    if (typeof revision !== "string") { res.status(400).json({ error: "缺少角色卡版本" }); return; }
+    try {
+      const editor = characterCards.save(String(req.params.name), revision, fields);
+      sessions.libraryChanged();
+      res.json(editor);
+    } catch (error) { characterCardError(res, error); }
+  });
+
+  app.post("/api/character-cards/:name/duplicate", (req, res) => {
+    if (!allowCharacterCardWrite(res)) return;
+    const requested = req.body?.name;
+    if (requested !== undefined && typeof requested !== "string") {
+      res.status(400).json({ error: "新角色名称必须是文本" });
+      return;
+    }
+    try {
+      const summary = characterCards.duplicate(String(req.params.name), requested);
+      sessions.libraryChanged();
+      res.json(summary);
+    } catch (error) { characterCardError(res, error); }
+  });
+
+  app.delete("/api/character-cards/:name", (req, res) => {
+    if (!allowCharacterCardWrite(res)) return;
+    try {
+      const result = characterCards.delete(String(req.params.name));
+      sessions.libraryChanged();
+      res.json(result);
+    } catch (error) { characterCardError(res, error); }
   });
 
   app.get("/api/characters", (_req, res) => {

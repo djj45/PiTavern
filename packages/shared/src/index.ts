@@ -270,6 +270,60 @@ export interface CharacterDto {
   creator: string;
 }
 
+
+export type CharacterCardFormat = "png" | "json";
+
+/** 角色卡管理列表项。 */
+export interface CharacterCardSummaryDto {
+  name: string;
+  avatarUrl: string;
+  format: CharacterCardFormat;
+  /** 相对 dataDir 的文件路径，例如 characters/角色.png。 */
+  file: string;
+  description: string;
+  tags: string[];
+  firstMesPreview: string;
+  alternateGreetings: number;
+  characterBookEntries: number;
+  worldName?: string;
+  chatCount: number;
+  /** 文件字节 SHA-256；保存冲突检查使用。 */
+  revision: string;
+}
+
+/** 角色卡编辑视图；name 不可修改。 */
+export interface CharacterCardEditorDto extends CharacterCardSummaryDto {
+  spec: string;
+  personality: string;
+  scenario: string;
+  firstMes: string;
+  mesExample: string;
+  creatorNotes: string;
+  systemPrompt: string;
+  postHistoryInstructions: string;
+  alternateGreetingTexts: string[];
+  creator: string;
+  characterVersion: string;
+}
+
+export interface CharacterCardFieldsDto {
+  description: string;
+  personality: string;
+  scenario: string;
+  firstMes: string;
+  mesExample: string;
+  creatorNotes: string;
+  systemPrompt: string;
+  postHistoryInstructions: string;
+  alternateGreetings: string[];
+  tags: string[];
+}
+
+export interface CharacterCardDeleteResultDto {
+  name: string;
+  chatCount: number;
+}
+
 export interface GroupChatDto { name: string; members: string[] }
 
 export interface ChatSummaryDto {

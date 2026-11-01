@@ -15,6 +15,10 @@ import type {
   ChatPageDto,
   ChatSnapshotDto,
   ChatSummaryDto,
+  CharacterCardDeleteResultDto,
+  CharacterCardEditorDto,
+  CharacterCardFieldsDto,
+  CharacterCardSummaryDto,
   CharacterDto,
   ConnectionDto,
   DiscoveredModelDto,
@@ -142,6 +146,22 @@ export const api = {
     }).then((r) => json<{ ok: boolean; provider?: string; model?: string; error?: string }>(r)),
   testVectors: () => fetch("/api/vectors/test", { method: "POST" }).then((r) => json<{ ok: boolean; dimensions: number }>(r)),
   characters: () => fetch("/api/characters").then((r) => json<CharacterDto[]>(r)),
+  characterCards: () => fetch("/api/character-cards").then((r) => json<CharacterCardSummaryDto[]>(r)),
+  characterCard: (name: string) => fetch("/api/character-cards/" + encodeURIComponent(name))
+    .then((r) => json<CharacterCardEditorDto>(r)),
+  saveCharacterCard: (name: string, revision: string, fields: CharacterCardFieldsDto) =>
+    fetch("/api/character-cards/" + encodeURIComponent(name), {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision, fields }),
+    }).then((r) => json<CharacterCardEditorDto>(r)),
+  duplicateCharacterCard: (name: string, newName?: string) =>
+    fetch("/api/character-cards/" + encodeURIComponent(name) + "/duplicate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newName?.trim() ? { name: newName.trim() } : {}),
+    }).then((r) => json<CharacterCardSummaryDto>(r)),
+  deleteCharacterCard: (name: string) => fetch("/api/character-cards/" + encodeURIComponent(name), { method: "DELETE" })
+    .then((r) => json<CharacterCardDeleteResultDto>(r)),
+  characterCardExportUrl: (name: string) => "/api/character-cards/" + encodeURIComponent(name) + "/export",
   presets: () => fetch("/api/presets").then((r) => json<PresetSummaryDto[]>(r)),
   worlds: () => fetch("/api/worlds").then((r) => json<WorldSummaryDto[]>(r)),
   worldTemplates: () => fetch("/api/world/templates").then((r) => json<WorldTemplateSummaryDto[]>(r)),

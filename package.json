@@ -41,7 +41,8 @@
     "verify:release": "node scripts/release-verify.mjs",
     "verify:chat-import": "npm run verify:chat-import -w apps/server",
     "verify:world-templates": "npm run verify:world-templates -w apps/server",
-    "verify:world-migration": "npm run verify:world-migration -w apps/server"
+    "verify:world-migration": "npm run verify:world-migration -w apps/server",
+    "verify:character-cards": "npm run verify:character-cards -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

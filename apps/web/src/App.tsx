@@ -14,6 +14,7 @@ import { ActivityPanel } from "./components/ActivityPanel.tsx";
 import { readCustomColors, THEME_KEYS, THEME_PALETTES, THEME_VARS, validHex, type ThemeKey, type ThemePalette } from "./theme.ts";
 const LibraryDialog = lazy(() => import("./components/LibraryDialog.tsx"));
 const WorldTemplatesDialog = lazy(() => import("./components/WorldTemplatesDialog.tsx"));
+const CharacterManagerDialog = lazy(() => import("./components/CharacterManagerDialog.tsx"));
 
 export function App() {
   const [connection, setConnection] = useState<ConnectionDto | null>(null);
@@ -26,6 +27,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [worldTemplatesOpen, setWorldTemplatesOpen] = useState(false);
+  const [characterManagerOpen, setCharacterManagerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [maintenance, setMaintenance] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -310,6 +312,7 @@ export function App() {
       <div className="relative flex min-h-0 flex-1">
         <Sidebar characters={characters} worldTemplates={worldTemplates} selectedCharacter={selectedCharacter} onSelectCharacter={setSelectedCharacter}
           chats={chats} activeChatId={activeChatId} onOpenChat={openChat} onNewChat={newChat} onImportChat={() => setImportOpen(true)}
+          onOpenCharacterManager={() => setCharacterManagerOpen(true)}
           onOpenWorldTemplates={() => { setWorldTemplatesOpen(true); void refreshWorldTemplates(); }} onNewGroup={async (name, members) => {
             try { const { id } = await api.createGroup(name, members); setSelectedCharacter(null); openChat(id); await refreshChats(); return true; }
             catch (error) { showNotice("创建群聊失败: " + (error as Error).message); return false; }
@@ -346,6 +349,13 @@ export function App() {
       </Suspense>}
       {worldTemplatesOpen && <Suspense fallback={<p role="status" className="fixed bottom-4 right-4 rounded bg-tavern-panel p-3">正在打开世界模板…</p>}>
         <WorldTemplatesDialog onClose={() => setWorldTemplatesOpen(false)} onChanged={() => { void refreshWorldTemplates(); void refreshChats(selectedCharacterRef.current); }} />
+      </Suspense>}
+      {characterManagerOpen && <Suspense fallback={<p role="status" className="fixed bottom-4 right-4 rounded bg-tavern-panel p-3">正在打开角色卡管理…</p>}>
+        <CharacterManagerDialog onClose={() => setCharacterManagerOpen(false)} onChanged={() => {
+          void refreshCharacters();
+          void refreshWorldTemplates();
+          void refreshChats(selectedCharacterRef.current);
+        }} />
       </Suspense>}
       {importOpen && <ImportChatDialog characters={characters} onClose={() => setImportOpen(false)} onImported={importedChat} />}
     </div>
