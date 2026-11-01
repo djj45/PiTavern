@@ -128,6 +128,12 @@ export function findGenerationRequest(source: string, id: string, fingerprint: s
       // arbitrary authored data for a committed reply receipt.
     }
   };
-  for (const line of source.split("\n")) if (line.trim()) walk(JSON.parse(line));
+  for (const line of source.split("\n")) {
+    if (!line.trim()) continue;
+    let value: unknown;
+    try { value = JSON.parse(line); }
+    catch { continue; } // Match the chat reader: ignore damaged rows without rewriting them.
+    walk(value); // Receipt conflicts must still propagate after a successful parse.
+  }
   return found;
 }
