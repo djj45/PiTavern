@@ -9,7 +9,7 @@ import {buildModels} from '../src/providers/models.ts';
 import {ChatStore} from '../src/stdata/chats.ts';
 import {CharacterStore} from '../src/stdata/characters.ts';
 import {SessionManager} from '../src/session/manager.ts';
-export type MockStep={text?:string;calls?:Array<{name:string;args:unknown}>;failure?:boolean;pause?:boolean;length?:boolean;inspect?:(body:any)=>void};
+export type MockStep={text?:string;calls?:Array<{name:string;args:unknown}>;failure?:boolean;failureMessage?:string;pause?:boolean;length?:boolean;inspect?:(body:any)=>void};
 export async function twoStageFixture(template?:unknown){
   const root=path.resolve(import.meta.dirname,'../../../data/test-runs');fs.mkdirSync(root,{recursive:true});
   const run=fs.mkdtempSync(path.join(root,'two-stage-'));process.env.PITAVERN_CONFIG=path.join(run,'config.json');
@@ -20,7 +20,7 @@ export async function twoStageFixture(template?:unknown){
     let text='';for await(const part of req)text+=part;
     const body=JSON.parse(text),step=steps[index++];requests.push({label,body});fs.appendFileSync(path.join(run,'requests.ndjson'),JSON.stringify({label,body})+'\n');
     if(!step)throw new Error('unexpected request '+label+' #'+index);step.inspect?.(body);
-    if(step.failure){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'synthetic provider failure'}}));return;}
+    if(step.failure){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:step.failureMessage??'synthetic provider failure'}}));return;}
     res.writeHead(200,{'Content-Type':'text/event-stream'});
     if(step.pause){res.flushHeaders();paused();return;}
     if (typeof body.prompt === 'string') {res.end('data: '+JSON.stringify({id:'text',choices:[{index:0,text:step.text??'文本补全正文',finish_reason:'stop'}],usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}})+'\n\ndata: [DONE]\n\n');return;}

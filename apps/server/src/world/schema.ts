@@ -214,7 +214,7 @@ export function parseWorldSnapshot(input: unknown): WorldSnapshot {
       let turn=q.acceptedTurn;for(const s of q.completedStages){if(s.turn<turn)invalid("任务阶段回合倒退");turn=s.turn;}
       if ((q.status === "completed") !== (q.completedTurn !== undefined) || (q.completedTurn !== undefined && q.completedTurn !== turn)) invalid("任务完成记录无效");
     }
-    for(const e of snapshot.recentEvents) if(e.type.startsWith("quest_") ? (!e.questId || !e.actorId || (e.type!=="quest_accept" && !e.stageId)) : (e.questId!==undefined || e.stageId!==undefined)) invalid("任务事件来源无效");
+    for(const e of snapshot.recentEvents) if(e.type.startsWith("quest_") ? (!e.questId || !e.actorId || (e.type==="quest_accept" ? e.stageId!==undefined : !e.stageId)) : (e.questId!==undefined || e.stageId!==undefined)) invalid("任务事件来源无效");
   }
   return snapshot;
 }
@@ -245,7 +245,12 @@ export function validateWorldReferences(snapshot: WorldSnapshot, template: World
       const q=template.quests!.find(q=>q.id===state.questId);
       if(!q || state.completedStages.some((s,i)=>s.stageId!==q.stages[i]?.id) || (state.status === "completed" ? state.completedStages.length!==q.stages.length : state.completedStages.length>=q.stages.length)) invalid("任务进度与模板不一致");
     }
-    for(const e of snapshot.recentEvents) if(e.questId){const q=template.quests!.find(q=>q.id===e.questId);if(!q || (e.stageId && !q.stages.some(s=>s.id===e.stageId)) || e.actorId!==template.initial.actorId) invalid("任务事件引用无效");}
+    for(const e of snapshot.recentEvents) if(e.questId){
+      const q=template.quests!.find(q=>q.id===e.questId),state=snapshot.questStates!.find(s=>s.questId===e.questId);
+      if(!q || !state || e.actorId!==template.initial.actorId ||
+        (e.type==="quest_accept" ? e.turn!==state.acceptedTurn : !state.completedStages.some(s=>s.stageId===e.stageId && s.turn===e.turn)) ||
+        (e.type==="quest_complete" && (state.status!=="completed" || e.stageId!==q.stages.at(-1)!.id))) invalid("任务事件引用无效");
+    }
   }
   if (snapshot.recentEvents.some((entry) => entry.itemId !== undefined && !items.has(entry.itemId))) invalid("事件物品与模板不一致");
 }

@@ -982,7 +982,9 @@ export class SessionManager {
         session.generation.failureCode = /预算/.test(detail) ? "budget" : /正文为空|正文阶段禁止|正文输出被截断/.test(detail) ? "output" :
           /变化|冲突|修改/.test(detail) ? "conflict" : /叙事计划|叙事数据包|引用/.test(detail) ? "plan" : "provider";
       }
-      const error = this.chats.readMetadata(chatId)[WORLD_STATE_KEY] && (this.chats.readMetadata(chatId)[WORLD_STATE_KEY] as {schemaVersion?:number}).schemaVersion===2
+      const protectedWorld = (session.worldTransaction?.snapshot.schemaVersion ?? 0) >= 2 ||
+        ((this.chats.readMetadata(chatId)[WORLD_STATE_KEY] as {schemaVersion?:number} | undefined)?.schemaVersion ?? 0) >= 2;
+      const error = protectedWorld
         ? new Error("本轮生成未完成，世界与知识未提交。") : cause;
       if (session.generation && !session.aborted) session.generation.error = error instanceof Error ? error.message : String(error);
       if (!session.aborted) this.emit({ type: "chat.error", chatId, message: error instanceof Error ? error.message : String(error) });
