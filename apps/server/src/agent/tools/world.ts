@@ -63,7 +63,7 @@ export function createWorldCommandTool(ctx: ToolContext): AgentTool<ReturnType<t
     name: "world_command",
     label: "世界命令",
     description:
-      "提交世界硬状态命令：move_to / transfer_item / purchase_item / advance_time。先查询再提交；价格由模板决定，不接受定价参数。返回 staged 只表示本轮暂存，整轮成功后才提交，失败或停止会撤销。涉及金钱、物品、位置或时间变化时，必须先调用本工具再叙述结果。",
+      "提交世界硬状态命令：move_to / transfer_item / purchase_item / advance_time。先查询再提交；价格由模板决定，不接受定价参数。advance_time推进世界分钟并执行作者安排的NPC移动，之后重新查询人物位置；不自动接取/推进任务或传播知识，等待过长被拒时缩短等待。返回 staged 只表示本轮暂存，整轮成功后才提交，失败或停止会撤销。涉及金钱、物品、位置或时间变化时，必须先调用本工具再叙述结果。",
     parameters,
     execute: async (_id, params) => {
       if (!ctx.world) return { content: text("当前聊天没有启用世界状态。"), details: { summary: "世界未启用" }, isError: true };
@@ -120,6 +120,6 @@ export function createWorldQuestTool(ctx:ToolContext):AgentTool<any> {
 export function createWorldTools(ctx: ToolContext): AgentTool<any>[] {
   if (!ctx.world) return [];
   const mode = ctx.world.state.capability.mode;
-  if (mode === "enabled") return [createWorldQueryTool(ctx), createWorldCommandTool(ctx), ...((ctx.world.state.template?.schemaVersion??0)>=2?[createWorldInteractTool(ctx)]:[]), ...(ctx.world.state.template?.schemaVersion===3?[createWorldQuestTool(ctx)]:[])];
+  if (mode === "enabled") return [createWorldQueryTool(ctx), createWorldCommandTool(ctx), ...((ctx.world.state.template?.schemaVersion??0)>=2?[createWorldInteractTool(ctx)]:[]), ...((ctx.world.state.template?.schemaVersion??0)>=3?[createWorldQuestTool(ctx)]:[])];
   return mode === "read-only" ? [createWorldQueryTool(ctx)] : [];
 }

@@ -159,7 +159,7 @@ function capsule(facts: ContextFact[]): Message {
 }
 function withAuthority(messages: AgentMessage[], world?: WorldSnapshot | WorldModelSnapshot): AgentMessage[] {
   if (!world) return messages;
-  if (world.schemaVersion >= 2 && (!("viewpointId" in world) || "knowledge" in world || "publishedFactIds" in world || "questStates" in world)) throw new Error("v2 世界必须先构建玩家投影，禁止注入原始快照");
+  if (world.schemaVersion >= 2 && (!("viewpointId" in world) || "knowledge" in world || "publishedFactIds" in world || "questStates" in world || "scheduleStates" in world || "schedules" in world)) throw new Error("世界必须先构建玩家投影，禁止注入原始快照");
   const recentEvents = world.recentEvents;
   const state = {schemaVersion:world.schemaVersion,revision:world.revision,templateHash:world.templateHash,templateVersion:world.templateVersion,rulesVersion:world.rulesVersion,
     clockMinutes:world.clockMinutes,scene:world.scene,actors:world.actors,money:world.money,inventory:world.inventory,

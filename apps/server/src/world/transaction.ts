@@ -82,7 +82,7 @@ export class WorldTransaction {
     } else {
       const candidate = structuredClone(this.working);
       try {
-        result = applyWorldCommand(candidate, this.template, command, this.turn);
+        result = applyWorldCommand(candidate, this.template, command, this.turn, ()=>{this.changedQuestView=true;});
         this.replaceWorking(candidate);
       } catch (error) {
         if (!(error instanceof WorldRuleError)) throw error;

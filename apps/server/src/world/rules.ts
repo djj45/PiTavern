@@ -5,6 +5,7 @@ import {
   type WorldCommandStaged, type WorldEvent, type WorldSnapshot, type WorldTemplate,
 } from "@pitavern/shared/world";
 import { presentActorIds } from "./schema.ts";
+import {advanceSchedules,ScheduleAdvanceError} from "./schedules.ts";
 
 export class WorldRuleError extends Error {
   constructor(readonly error: WorldCommandError) { super(error.message); }
@@ -37,11 +38,24 @@ function transfer(snapshot: WorldSnapshot, fromId: string, toId: string, itemId:
 }
 
 /** 仅在事务的单命令私有副本上执行；异常时由事务丢弃此副本。 */
-export function applyWorldCommand(snapshot: WorldSnapshot, template: WorldTemplate, command: WorldCommand, turn: number): WorldCommandStaged {
+export function applyWorldCommand(snapshot: WorldSnapshot, template: WorldTemplate, command: WorldCommand, turn: number, observeQuestChange?:()=>void): WorldCommandStaged {
   const revision = add(snapshot.revision, 1, Number.MAX_SAFE_INTEGER, "INVALID_COMMAND");
   let effect: Omit<WorldEvent, "id" | "commandId" | "turn" | "worldTimeMinutes">;
+  let scheduleEvents: WorldEvent[] = [];
+  let questViewsChanged = false;
   if (command.type === "advance_time") {
-    snapshot.clockMinutes = add(snapshot.clockMinutes, command.minutes, WORLD_MAX_CLOCK_MINUTES, "TIME_LIMIT");
+    const target = add(snapshot.clockMinutes, command.minutes, WORLD_MAX_CLOCK_MINUTES, "TIME_LIMIT");
+    if (snapshot.schemaVersion === 4) {
+      try {
+        const advanced = advanceSchedules(snapshot,template,target);
+        Object.assign(snapshot,advanced.snapshot);
+        scheduleEvents = advanced.events.map(e=>({...e,id:randomUUID(),commandId:command.commandId,turn}));
+        questViewsChanged = advanced.questViewsChanged;
+      } catch (error) {
+        if (error instanceof ScheduleAdvanceError) reject(error.code,error.message);
+        throw error;
+      }
+    } else snapshot.clockMinutes = target;
     effect = { type: "advance_time", summary: `时间推进 ${command.minutes} 分钟` };
   } else if (command.type === "move_to") {
     const actor = activeActor(snapshot, command.actorId);
@@ -77,6 +91,15 @@ export function applyWorldCommand(snapshot: WorldSnapshot, template: WorldTempla
   }
   const event: WorldEvent = { ...effect, id: randomUUID(), commandId: command.commandId, turn, worldTimeMinutes: snapshot.clockMinutes };
   snapshot.revision = revision;
-  snapshot.recentEvents = [...snapshot.recentEvents, event].slice(-WORLD_MAX_RECENT_EVENTS);
-  return { status: "staged", commandId: command.commandId, summary: event.summary, event, revision };
+  snapshot.recentEvents = [...snapshot.recentEvents,...scheduleEvents,event].slice(-WORLD_MAX_RECENT_EVENTS);
+  if (questViewsChanged) observeQuestChange?.();
+  // The full bounded execution is represented in the receipt before the audit tail is trimmed.
+  // Only actual, public moves cross this boundary; skip reasons and schedule IDs stay internal.
+  const changes = scheduleEvents.filter(e=>e.type==="schedule_move").map(e=>{
+    const actor = template.actors.find(a=>a.id===e.actorId)!.name;
+    const from = template.locations.find(l=>l.id===e.fromLocationId)!.name;
+    const to = template.locations.find(l=>l.id===e.locationId)!.name;
+    return `${e.worldTimeMinutes}分钟：${actor}从${from}前往${to}`;
+  });
+  return { status: "staged", commandId: command.commandId, summary: [event.summary,...changes].join("\n"), event, revision };
 }

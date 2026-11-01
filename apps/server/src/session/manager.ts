@@ -133,7 +133,7 @@ export class SessionManager {
 
   private saveActivity(chatId: string, generation: GenerationRecordDto): void {
     const live = this.sessions.get(chatId)?.worldTransaction;
-    if (live?.status === "open" && (generation.stages || live.snapshot.schemaVersion===3)) {
+    if (live?.status === "open" && (generation.stages || live.snapshot.schemaVersion>=3)) {
       const view=buildPlayerWorldView(live.snapshot,this.chats.readWorld(chatId)?.template);
       generation.knowledgeKey=view.knowledgeKey;generation.questKey=view.questKey;
     }
