@@ -190,6 +190,8 @@ export interface GenerationStageDto {
 export interface GenerationRecordDto {
   knowledgeKey?: string;
   questKey?: string;
+  /** A whole record is only safe to show when every captured quest view was identical. */
+  questScope?: { version: 1; key: string; mixed: boolean };
   failureCode?: "budget" | "output" | "conflict" | "plan" | "provider";
   stages?: GenerationStageDto[];
   contentHidden?: boolean;

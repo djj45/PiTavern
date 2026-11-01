@@ -8,6 +8,7 @@ import { parseWorldCommand, WorldValidationError } from "./schema.ts";
 import { actorKnows, buildPlayerWorldView } from "./knowledge.ts";
 import type { WorldState } from "./state.ts";
 import {applyQuestAction,questAction,rejectedQuest} from "./quests.ts";
+import {visibleQuests} from "./quest-view.ts";
 
 /** 只在内存中结算；commit 返回独立快照，文件提交与并发校验由 M2 调用者负责。 */
 export class WorldTransaction {
@@ -18,6 +19,8 @@ export class WorldTransaction {
   private readonly receiptMap = new Map<string, WorldCommandReceipt>();
   private phase: "open" | "committed" | "discarded" = "open";
   private readonly questReceipts = new Map<string,WorldQuestResult>();
+  private readonly initialQuestView?: string;
+  private changedQuestView = false;
 
   constructor(state: WorldState, private readonly turn: number) {
     if (!Number.isSafeInteger(turn) || turn < 0) throw new WorldValidationError("回合数必须是非负安全整数");
@@ -25,11 +28,21 @@ export class WorldTransaction {
     this.working = structuredClone(this.base);
     this.template = state.template;
     this.access = state.capability;
+    if(this.base.schemaVersion===3)this.initialQuestView=JSON.stringify(visibleQuests(this.base,this.template,this.template?.initial.actorId??""));
   }
 
   get status(): "open" | "committed" | "discarded" { return this.phase; }
   get snapshot(): WorldSnapshot { return structuredClone(this.working); }
   get receipts(): WorldCommandReceipt[] { return structuredClone([...this.receiptMap.values()]); }
+  get questViewsChanged(): boolean { return this.changedQuestView; }
+
+  private replaceWorking(snapshot: WorldSnapshot): void {
+    this.working=snapshot;
+    // Observe mutations themselves: parallel tool callbacks can arrive after a
+    // temporary authorization has already disappeared again.
+    if(this.initialQuestView!==undefined && !this.changedQuestView)
+      this.changedQuestView=JSON.stringify(visibleQuests(snapshot,this.template,this.template?.initial.actorId??""))!==this.initialQuestView;
+  }
 
   quest(input:unknown):WorldQuestResult {
     if(this.phase!=="open" || this.access.mode!=="enabled" || !this.template)return rejectedQuest(this.working);
@@ -38,7 +51,7 @@ export class WorldTransaction {
     if(previous)return structuredClone(previous);
     const applied=applyQuestAction(this.working,this.template,action,this.turn);
     // Failed conditions can be met by a later legitimate tool action in this turn.
-    if(applied.result.status!=="rejected"){this.working=applied.snapshot;this.questReceipts.set(key,structuredClone(applied.result));}
+    if(applied.result.status!=="rejected"){this.replaceWorking(applied.snapshot);this.questReceipts.set(key,structuredClone(applied.result));}
     return applied.result;
   }
 
@@ -70,7 +83,7 @@ export class WorldTransaction {
       const candidate = structuredClone(this.working);
       try {
         result = applyWorldCommand(candidate, this.template, command, this.turn);
-        this.working = candidate;
+        this.replaceWorking(candidate);
       } catch (error) {
         if (!(error instanceof WorldRuleError)) throw error;
         result = { status: "rejected", commandId, error: error.error };
@@ -114,7 +127,7 @@ export class WorldTransaction {
     if (events.length && (next.revision === Number.MAX_SAFE_INTEGER || next.knowledge!.length > 2048)) return reject();
     if (events.length) next.revision++;
     next.recentEvents = [...next.recentEvents,...events].slice(-100);
-    this.working = next;
+    this.replaceWorking(next);
     return {status:events.length?"staged":"unchanged",summary:events.length?"交互已暂存，整轮成功后提交；失败或停止会撤销。":"交互完成，没有新的知识变化。",revision:next.revision,knownFacts:buildPlayerWorldView(next,template).knownFacts};
   }
 

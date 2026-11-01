@@ -112,12 +112,17 @@ export class SessionManager {
     return {...page,knowledgeKey:key,questKey,records:page.records.map(record=>{
       const recordKey=record.knowledgeKey ?? record.context?.workingSet?.knowledgeKey;
       const recordQuestKey=record.questKey ?? record.context?.workingSet?.questKey;
+      // The last questKey cannot authorize earlier tools/prompts from the same
+      // turn. Legacy v3 records have no trustworthy per-turn scope proof.
+      const scope=record.questScope;
+      const questScopeMatches=recordQuestKey===undefined ? scope===undefined :
+        scope?.version===1 && scope.mixed===false && scope.key===recordQuestKey;
       // Activity survives chat backup restoration. A v2 record still needs its
       // original knowledge authorization after restoring v1 or no world.
       // Pre-knowledge records retain legacy behavior outside a v2 world.
-      if((recordKey===key || (recordKey===undefined && (staged?.schemaVersion??0)<2)) && recordQuestKey===questKey) return record;
+      if(questScopeMatches && (recordKey===key || (recordKey===undefined && (staged?.schemaVersion??0)<2)) && recordQuestKey===questKey) return record;
       const {context:_,...rest}=record;
-      return {...rest,stages:rest.stages?.map(({context:_,...stage})=>stage),contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
+      return {...rest,stages:rest.stages?.map(({context:_,...stage})=>stage),contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识或任务视角发生变化，历史工具内容已隐藏"}))};
     })};
   }
   activityPage(chatId: string, before?: string) { return this.activityForPlayer(chatId,this.activity.page(chatId, before)); }
@@ -131,6 +136,12 @@ export class SessionManager {
     if (live?.status === "open" && (generation.stages || live.snapshot.schemaVersion===3)) {
       const view=buildPlayerWorldView(live.snapshot,this.chats.readWorld(chatId)?.template);
       generation.knowledgeKey=view.knowledgeKey;generation.questKey=view.questKey;
+    }
+    if(generation.questKey!==undefined){
+      // Keep the first scope and a monotonic mixed flag; returning to the first
+      // view must never erase evidence of an intermediate authorization.
+      generation.questScope ??= {version:1,key:generation.questKey,mixed:false};
+      if(generation.questScope.key!==generation.questKey || live?.questViewsChanged)generation.questScope.mixed=true;
     }
     try {
       this.activity.save(chatId, generation);

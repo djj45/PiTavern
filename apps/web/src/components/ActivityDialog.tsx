@@ -129,7 +129,7 @@ export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; 
           {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
         </nav>
         {run ? <div className="min-w-0 space-y-4">
-          {run.contentHidden && <p className="text-xs text-tavern-dim">知识视角已变化，该记录仅显示用量与状态；上下文及工具内容已隐藏。</p>}
+          {run.contentHidden && <p className="text-xs text-tavern-dim">知识或任务视角发生变化，或旧记录缺少完整视角来源；该记录仅显示用量与状态，上下文及工具内容已隐藏。</p>}
           <p className="text-sm">{KIND[run.kind]} · {GENERATION_STATUS[run.status]} · {run.provider} / {run.model}</p>
           {run.error && <p className="break-words text-xs text-amber-300">{run.error}</p>}
           <p className="text-xs text-tavern-dim">接口回传：输入 {number(run.usage.input)} · 输出 {number(run.usage.output)} · 缓存读取 {number(run.usage.cacheRead)} · 缓存写入 {number(run.usage.cacheWrite)} · 合计 {number(run.usage.totalTokens)} tokens。{run.usage.responsesWithUsage}/{run.usage.responses} 次模型响应含非零用量。</p>
