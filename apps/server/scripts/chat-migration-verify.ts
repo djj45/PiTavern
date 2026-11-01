@@ -121,6 +121,49 @@ assert.equal(missingPlan.applyable, false);
 assert.ok(missingPlan.blocking.some((location) => location.blocking.some((change) => change.detail?.includes("源模板记录不存在"))));
 check("缺失源模板记录阻断；同模板版本按各自记录规划");
 
+// 写入目标记录不能修复后续候选缺失/损坏的源记录；候选顺序不影响判断。
+for (const corrupt of [false, true]) {
+  for (const reverse of [false, true]) {
+    const table = {
+      [base.contentHash]: base,
+      ...(corrupt ? { [target.contentHash]: { ...target, template: { ...target.template, items: [] } } } : {}),
+    };
+    const versions = [
+      { state: { [WORLD_STATE_KEY]: activeSnapshot }, messages: [assistant] },
+      { state: { [WORLD_STATE_KEY]: createInitialWorldSnapshot(target) }, messages: [assistant] },
+    ];
+    if (reverse) versions.reverse();
+    const invalidSource = [
+      { user_name: "旅人", chat_metadata: { [WORLD_STATE_KEY]: activeSnapshot, [WORLD_TEMPLATES_KEY]: table } },
+      { ...user, extra: { _pitavernReplies: { selected: 0, versions } } },
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n";
+    const invalidPlan = planChatWorldMigration(invalidSource, target);
+    assert.equal(invalidPlan.applyable, false, `损坏=${corrupt}，反序=${reverse}`);
+    assert.equal(invalidPlan.counts.blocked, 1);
+    assert.equal(invalidPlan.nextSource, undefined);
+    assert.equal(invalidPlan.blocking[0]!.sourceHash, target.contentHash);
+    assert.equal(invalidPlan.blocking[0]!.kind, "candidate");
+  }
+}
+check("缺失/损坏的目标同哈希源记录始终阻断，不受活动世界写入及候选顺序影响");
+
+// 同哈希元数据更新也必须让每个候选读取原始源记录。
+const renamed = createWorldTemplateRecord(baseTemplate, { name: "新名称", description: "新描述" });
+const metadataSource = [
+  { user_name: "旅人", chat_metadata: { [WORLD_STATE_KEY]: activeSnapshot, [WORLD_TEMPLATES_KEY]: { [base.contentHash]: base } } },
+  { ...user, extra: { _pitavernReplies: { selected: 0, versions: [
+    { state: { [WORLD_STATE_KEY]: activeSnapshot }, messages: [assistant] },
+    { state: { [WORLD_STATE_KEY]: activeSnapshot, [WORLD_TEMPLATES_KEY]: { [base.contentHash]: base } }, messages: [assistant] },
+  ] } } },
+].map((line) => JSON.stringify(line)).join("\n") + "\n";
+const renamedPlan = planChatWorldMigration(metadataSource, renamed);
+assert.equal(renamedPlan.applyable, true);
+assert.equal(renamedPlan.counts.migrated, 3);
+assert.ok(renamedPlan.locations.every((location) => location.sourceName === base.name));
+assert.ok(renamedPlan.locations.every((location) => location.changes.some((change) => change.entity === "template")));
+assert.equal(planChatWorldMigration(renamedPlan.nextSource!, renamed).noop, true);
+check("同哈希名称/描述迁移使用各自原始记录，所有候选均报告差异，再次规划为 no-op");
+
 // 无 world 的聊天不返回可应用计划。
 const noWorld = [JSON.stringify({ user_name: "旅人", character_name: "掌柜", chat_metadata: {} }), JSON.stringify({ ...assistant, extra: {} })].join("\n") + "\n";
 const noWorldChat = planChatWorldMigration(noWorld, target);

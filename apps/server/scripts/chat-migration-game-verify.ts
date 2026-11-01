@@ -118,5 +118,32 @@ assert.ok(appliedAgain.backupId);
 assert.equal(JSON.parse(fs.readFileSync(chatFile, "utf8").split("\n")[0]).chat_metadata[WORLD_STATE_KEY].templateHash, targetRecord.contentHash);
 check("恢复迁移前备份并再次迁移成功");
 
+// 旧/导入结构只有候选局部模板表，且头部完全没有 chat_metadata。
+const localUser = structuredClone(userLine);
+delete (localUser.extra as { _pitavernBeforeTurn?: unknown })._pitavernBeforeTurn;
+localUser.extra._pitavernReplies.versions[0].state = {} as typeof localUser.extra._pitavernReplies.versions[0]["state"];
+Object.assign(localUser.extra._pitavernReplies.versions[1].state, {
+  [WORLD_TEMPLATES_KEY]: { [sourceRecord.contentHash]: sourceRecord },
+});
+const localSource = [
+  { user_name: "旅人", character_name: "掌柜" }, localUser, assistant,
+].map((line) => JSON.stringify(line)).join("\n") + "\n";
+const localChat = chats.createChat("掌柜", null);
+fs.writeFileSync(localChat.file, localSource);
+const localRead = chats.readSource(localChat.id);
+const localPlan = planChatWorldMigration(localRead.source, targetRecord);
+assert.equal(localPlan.applyable, true);
+const localHeader = JSON.parse(localPlan.nextSource!.split("\n")[0]);
+assert.equal(localHeader.chat_metadata?.[WORLD_TEMPLATES_KEY]?.[targetRecord.contentHash]?.name, targetRecord.name);
+assert.equal(localHeader.chat_metadata[WORLD_STATE_KEY], undefined, "无世界的活动路径不初始化");
+chats.applyWorldMigration(localChat.id, localRead.revision, localPlan.sourceHash, localPlan.nextSource!);
+chats.selectReply(localChat.id, "user-1", 1, chats.revisionId(localChat.id));
+const localWorld = new ChatStore(dataDir).readWorld(localChat.id)!;
+assert.equal(localWorld.capability.mode, "enabled", localWorld.capability.reason ?? "候选世界应可写");
+assert.equal(localWorld.snapshot.templateHash, targetRecord.contentHash);
+assert.deepEqual(localWorld.snapshot.money, before.money);
+assert.deepEqual(localWorld.snapshot.inventory, before.inventory);
+check("无头部 metadata 的局部模板候选迁移、应用、切换与重启后世界仍可写");
+
 assert.notEqual(backupBeforeRestore, source);
 console.log("\n" + checks + " 项检查全部通过。测试数据保留：" + runDir);

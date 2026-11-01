@@ -125,9 +125,9 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
     setLoadingVersions(true);
     void api.worldTemplateVersions(templateId).then((list) => {
       if (cancelled) return;
-      const candidates = list.filter((version) => version.contentHash !== world?.snapshot?.templateHash);
-      setVersions(candidates);
-      setTargetHash(candidates[0]?.contentHash ?? "");
+      // 同哈希的发布名称/描述也可能变化；是否无需迁移由整聊天预览判断。
+      setVersions(list);
+      setTargetHash(list[0]?.contentHash ?? "");
     }).catch(() => {
       // 内置模板没有模板库版本列表，不提供更新入口。
     }).finally(() => {
@@ -293,7 +293,7 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
                 </div>
                 {loadingVersions && <p className="mt-2 text-xs text-tavern-dim">正在读取已发布版本…</p>}
                 {!loadingVersions && versions.length === 0 && (
-                  <p className="mt-2 text-xs leading-5 text-tavern-dim">没有其他已发布版本。内置模板不能在这里更新；自定义模板需先在「世界模板」中发布新版本。</p>
+                  <p className="mt-2 text-xs leading-5 text-tavern-dim">没有可用的已发布版本。内置模板不能在这里更新；自定义模板需先在「世界模板」中发布。</p>
                 )}
                 {versions.length > 0 && (
                   <div className="mt-2 space-y-2">

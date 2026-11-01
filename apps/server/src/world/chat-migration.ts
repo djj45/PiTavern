@@ -69,7 +69,8 @@ export function planChatWorldMigration(source: string, target: WorldTemplateReco
   const header = parsed.header;
   const metadata = object(header.chat_metadata) ?? {};
   const headerTable = object(metadata[WORLD_TEMPLATES_KEY]);
-  const headerTableMutable: JsonRecord = headerTable ?? {};
+  // 源表只读；目标写入独立输出表，不能把缺失/损坏的源记录提前“修好”。
+  const outputHeaderTable: JsonRecord = { ...headerTable };
   const locations: WorldChatMigrationLocationDto[] = [];
   const warnings: string[] = [];
   const seenStates = new WeakSet<object>();
@@ -90,15 +91,16 @@ export function planChatWorldMigration(source: string, target: WorldTemplateReco
     if (nodes > MAX_NODES) throw new WorldChatMigrationLimitError("聊天分支节点超过 50000 个，不能生成整份迁移计划");
   };
 
-  const updateTargetTable = (localTable: JsonRecord | undefined): void => {
+  const updateTargetTable = (container: JsonRecord, localTable: JsonRecord | undefined): void => {
     // 头部表是聊天的权威表；局部表（旧/导入结构）若原本有源记录也同步更新。
-    headerTableMutable[target.contentHash] = target;
+    outputHeaderTable[target.contentHash] = target;
     if (!targetTableUpdated) {
-      metadata[WORLD_TEMPLATES_KEY] = headerTableMutable;
+      metadata[WORLD_TEMPLATES_KEY] = outputHeaderTable;
+      header.chat_metadata = metadata;
       headerDirty = true;
       targetTableUpdated = true;
     }
-    if (localTable && localTable !== headerTableMutable) localTable[target.contentHash] = target;
+    if (localTable && container !== metadata) container[WORLD_TEMPLATES_KEY] = { ...localTable, [target.contentHash]: target };
   };
 
   const visitState = (
@@ -131,7 +133,7 @@ export function planChatWorldMigration(source: string, target: WorldTemplateReco
     }
     const sourceHash = sourceHashOf(snapshot);
     const localTable = object(container[WORLD_TEMPLATES_KEY]);
-    const sourceRecord = recordFrom(localTable, sourceHash) ?? recordFrom(headerTableMutable, sourceHash);
+    const sourceRecord = recordFrom(localTable, sourceHash) ?? recordFrom(headerTable, sourceHash);
     if (!sourceRecord) {
       const change = blockingChange("聊天快照引用的源模板记录不存在", "源模板缺失");
       locations.push({
@@ -161,7 +163,7 @@ export function planChatWorldMigration(source: string, target: WorldTemplateReco
     if (plan.applyable && plan.snapshot) {
       container[WORLD_STATE_KEY] = plan.snapshot;
       markDirty();
-      updateTargetTable(localTable);
+      updateTargetTable(container, localTable);
       migrated += 1;
       locations.push({
         path, kind, label, sourceHash, sourceName: sourceRecord.name, sourceDescription: sourceRecord.description,

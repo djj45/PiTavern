@@ -20,7 +20,7 @@ interface EditorDto {
   initialSnapshot?: WorldSnapshot;
 }
 interface ChatWorldSnapshot {
-  world?: { templateName: string; snapshot: { templateHash: string; templateVersion: number } };
+  world?: { templateName: string; snapshot: WorldSnapshot };
 }
 
 const test = base.extend<{ app: AppFixture }>({
@@ -481,4 +481,52 @@ test('世界状态更新模板：全分支迁移、备份恢复与 390px 可操�
   const restoredWorld = await (await request.get(`${app.baseURL}/api/chats/${chatRoute}`)).json() as ChatWorldSnapshot;
   expect(restoredWorld.world?.snapshot.templateHash).toBe(published.publishedHash);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('同哈希名称/描述发布可从 UI 迁移，世界数值不变，再次预览无需迁移', async ({ page, app, request }) => {
+  const blank = await (await request.post(app.baseURL + '/api/world/template-library', {
+    data: { action: 'blank', name: '元数据旧名称' },
+  })).json() as EditorDto;
+  const route = `${app.baseURL}/api/world/template-library/${encodeURIComponent(blank.id)}`;
+  const published = await (await request.post(route + '/publish', {
+    data: { revision: blank.draftRevision },
+  })).json() as EditorDto;
+  await page.goto(app.baseURL);
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await createWorldChat(page, blank.id);
+  const chats = await (await request.get(app.baseURL + '/api/chats')).json() as Array<{ id: string; character: string }>;
+  const chat = chats.find((entry) => entry.character === '浏览器向导')!;
+  const chatRoute = `${app.baseURL}/api/chats/${chat.id.split('/').map(encodeURIComponent).join('/')}`;
+  const before = await (await request.get(chatRoute)).json() as ChatWorldSnapshot;
+  const saved = await (await request.put(route, {
+    data: { revision: published.draftRevision, name: '元数据新名称', description: '仅更新名称与描述', template: published.draft },
+  })).json() as EditorDto;
+  const renamed = await (await request.post(route + '/publish', {
+    data: { revision: saved.draftRevision },
+  })).json() as EditorDto;
+  expect(renamed.publishedHash).toBe(published.publishedHash);
+
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  const world = page.getByRole('dialog', { name: '世界状态' });
+  await expect(world.getByLabel('目标模板版本')).toBeVisible();
+  await world.getByLabel('目标模板版本').selectOption(renamed.publishedHash!);
+  await world.getByRole('button', { name: '预览迁移差异' }).click();
+  await expect(world.getByLabel('迁移差异')).toContainText('名称/描述');
+  await expect(world.getByLabel('迁移差异')).toContainText('描述已更新');
+  page.once('dialog', (confirm) => void confirm.accept());
+  await world.getByRole('button', { name: '应用迁移并备份' }).click();
+  await expect(world.getByRole('status')).toContainText('模板已更新');
+  const after = await (await request.get(chatRoute)).json() as ChatWorldSnapshot;
+  expect(after.world?.templateName).toBe('元数据新名称');
+  const exported = await request.get(chatRoute + '/export?format=jsonl');
+  expect(exported.ok()).toBeTruthy();
+  const header = JSON.parse((await exported.text()).split('\n')[0]);
+  expect(header.chat_metadata._pitavernWorldTemplates[renamed.publishedHash!].description).toBe('仅更新名称与描述');
+  expect(after.world?.snapshot).toEqual(before.world?.snapshot);
+
+  await world.getByRole('button', { name: '关闭世界状态' }).click();
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  await world.getByRole('button', { name: '预览迁移差异' }).click();
+  await expect(world.getByText('目标已是当前版本，无需迁移。', { exact: true })).toBeVisible();
+  await expect(world.getByRole('button', { name: '应用迁移并备份' })).toHaveCount(0);
 });
