@@ -28,7 +28,9 @@ try {
   const started = Date.now();
   while (Date.now() - started < 180_000) {
     if (launcher.exitCode !== null) throw new Error('启动脚本提前退出，请查看 ' + directory + '/startup.log');
-    try { const status = await fetch(baseURL + '/api/status', { signal: AbortSignal.timeout(500) }); if (status.ok) { assert.equal((await status.json()).version, manifest.version); ready = true; break; } } catch { /* Await readiness. */ }
+    let status;
+    try { status = await fetch(baseURL + '/api/status', { signal: AbortSignal.timeout(500) }); } catch { /* Await readiness. */ }
+    if (status?.ok) { assert.equal((await status.json()).version, manifest.version, 'HTTP 版本必须与发布包一致'); ready = true; break; }
     await new Promise((r) => setTimeout(r, 250));
   }
   assert.ok(ready, '全新安装在三分钟内启动');
