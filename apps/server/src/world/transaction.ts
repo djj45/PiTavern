@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type {
-  WorldCommandErrorCode, WorldCommandReceipt, WorldCommandRejected, WorldCommandResult, WorldEngineCapability, WorldSnapshot, WorldTemplate, WorldInteractionResult, WorldEvent,
+  WorldCommandErrorCode, WorldCommandReceipt, WorldCommandRejected, WorldCommandResult, WorldEngineCapability, WorldSnapshot, WorldTemplate, WorldInteractionResult, WorldEvent, WorldQuestResult,
 } from "@pitavern/shared/world";
 import { worldContentHash } from "./hash.ts";
 import { applyWorldCommand, WorldRuleError } from "./rules.ts";
 import { parseWorldCommand, WorldValidationError } from "./schema.ts";
 import { actorKnows, buildPlayerWorldView } from "./knowledge.ts";
 import type { WorldState } from "./state.ts";
+import {applyQuestAction,questAction,rejectedQuest} from "./quests.ts";
 
 /** 只在内存中结算；commit 返回独立快照，文件提交与并发校验由 M2 调用者负责。 */
 export class WorldTransaction {
@@ -16,6 +17,7 @@ export class WorldTransaction {
   private readonly access: WorldEngineCapability;
   private readonly receiptMap = new Map<string, WorldCommandReceipt>();
   private phase: "open" | "committed" | "discarded" = "open";
+  private readonly questReceipts = new Map<string,WorldQuestResult>();
 
   constructor(state: WorldState, private readonly turn: number) {
     if (!Number.isSafeInteger(turn) || turn < 0) throw new WorldValidationError("回合数必须是非负安全整数");
@@ -28,6 +30,17 @@ export class WorldTransaction {
   get status(): "open" | "committed" | "discarded" { return this.phase; }
   get snapshot(): WorldSnapshot { return structuredClone(this.working); }
   get receipts(): WorldCommandReceipt[] { return structuredClone([...this.receiptMap.values()]); }
+
+  quest(input:unknown):WorldQuestResult {
+    if(this.phase!=="open" || this.access.mode!=="enabled" || !this.template)return rejectedQuest(this.working);
+    const action=questAction(input);if(!action)return rejectedQuest(this.working);
+    const key=JSON.stringify(action),previous=this.questReceipts.get(key);
+    if(previous)return structuredClone(previous);
+    const applied=applyQuestAction(this.working,this.template,action,this.turn);
+    // Failed conditions can be met by a later legitimate tool action in this turn.
+    if(applied.result.status!=="rejected"){this.working=applied.snapshot;this.questReceipts.set(key,structuredClone(applied.result));}
+    return applied.result;
+  }
 
   execute(input: unknown): WorldCommandResult {
     const commandId = input && typeof input === "object" && typeof (input as { commandId?: unknown }).commandId === "string"
@@ -70,7 +83,7 @@ export class WorldTransaction {
   /** Only public interaction IDs are accepted. Knowledge is never a model-authored command. */
   interact(input: unknown): WorldInteractionResult {
     const reject = (): WorldInteractionResult => ({status:"rejected",summary:"当前无法完成该交互。世界状态没有变化。",revision:this.working.revision});
-    if (this.phase !== "open" || this.access.mode !== "enabled" || !this.template || this.template.schemaVersion !== 2) return reject();
+    if (this.phase !== "open" || this.access.mode !== "enabled" || !this.template || this.template.schemaVersion < 2) return reject();
     if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input,"interactionId") || typeof (input as {interactionId?:unknown}).interactionId !== "string") return reject();
     const interaction = this.template.interactions?.find(i=>i.id===(input as {interactionId:string}).interactionId);
     if (!interaction) return reject();
@@ -115,6 +128,7 @@ export class WorldTransaction {
     if (this.phase !== "open") throw new WorldValidationError("世界事务已结束");
     this.working = structuredClone(this.base);
     this.receiptMap.clear();
+    this.questReceipts.clear();
     this.phase = "discarded";
   }
 }
