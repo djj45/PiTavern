@@ -77,13 +77,15 @@ export function ContextDiagnostics({ context }: { context: ContextDiagnosticsDto
 
 export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; activity: ChatActivityDto; onClose: () => void }) {
   const [older, setOlder] = useState<GenerationRecordDto[]>([]);
-  const knowledgeKey=useRef(activity.knowledgeKey);knowledgeKey.current=activity.knowledgeKey;
-  useEffect(()=>{setOlder([]);setBefore(activity.before);setSelected(activity.records[0]?.id)},[chatId,activity.knowledgeKey]);
+  const scope=JSON.stringify([chatId,activity.knowledgeKey]);
+  const [olderScope,setOlderScope]=useState(scope);
+  const knowledgeKey=useRef(scope);knowledgeKey.current=scope;
+  useEffect(()=>{setOlder([]);setOlderScope(scope);setBefore(activity.before);setSelected(activity.records[0]?.id)},[scope]);
   const [before, setBefore] = useState(activity.before);
   const [selected, setSelected] = useState(activity.records[0]?.id);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const map = new Map(older.map((record) => [record.id, record]));
+  const map = new Map((olderScope===scope?older:[]).map((record) => [record.id, record]));
   for (const record of activity.records) map.set(record.id, record);
   const records = [...map.values()].sort((a, b) => b.id.localeCompare(a.id));
   const run = records.find((record) => record.id === selected) ?? records[0];

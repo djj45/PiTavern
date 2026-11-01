@@ -71,7 +71,7 @@ export class WorldTransaction {
   interact(input: unknown): WorldInteractionResult {
     const reject = (): WorldInteractionResult => ({status:"rejected",summary:"当前无法完成该交互。世界状态没有变化。",revision:this.working.revision});
     if (this.phase !== "open" || this.access.mode !== "enabled" || !this.template || this.template.schemaVersion !== 2) return reject();
-    if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 1 || typeof (input as {interactionId?:unknown}).interactionId !== "string") return reject();
+    if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input,"interactionId") || typeof (input as {interactionId?:unknown}).interactionId !== "string") return reject();
     const interaction = this.template.interactions?.find(i=>i.id===(input as {interactionId:string}).interactionId);
     if (!interaction) return reject();
     const snapshot = this.working, template = this.template, player = template.initial.actorId;

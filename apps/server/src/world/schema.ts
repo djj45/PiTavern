@@ -175,6 +175,7 @@ export function parseWorldSnapshot(input: unknown): WorldSnapshot {
     for (const entry of snapshot.knowledge!) if (entry.source.turn < 0 || (entry.source.fromActorId && !snapshot.actors[entry.source.fromActorId])) invalid("获知来源无效");
     for (const e of snapshot.recentEvents) {
       if (e.type.startsWith("knowledge_") && (!e.factId || !e.interactionId || (e.type === "knowledge_learn" && !e.actorId))) invalid("知识事件缺少来源");
+      if (!e.type.startsWith("knowledge_") && (e.factId !== undefined || e.interactionId !== undefined)) invalid("普通事件不能携带知识引用");
     }
   }
   return snapshot;

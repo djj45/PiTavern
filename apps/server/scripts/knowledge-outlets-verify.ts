@@ -16,6 +16,7 @@ import {assembleTakeoverContext} from "../src/context/takeover.ts";
 import {normalizeCard,type StChatLine} from "../src/stdata/types.ts";
 import {ContextFactCache,buildCachedWorkingContext} from "../src/context/memory-cache.ts";
 import {buildWorkingContext} from "../src/context/working-set.ts";
+import {parseWorldSnapshot} from "../src/world/schema.ts";
 const raw=JSON.parse(fs.readFileSync(new URL('./fixtures/knowledge-tavern.json',import.meta.url),'utf8'));
 const record=createWorldTemplateRecord(raw),snapshot=createInitialWorldSnapshot(record),state=new WorldState(snapshot,{[record.contentHash]:record}),tx=new WorldTransaction(state,1);
 const secrets=[raw.facts[1].id,raw.facts[1].text,raw.facts[1].description,raw.interactions[0].description];
@@ -25,6 +26,11 @@ let checks=0;const check=(label:string)=>{checks++;console.log('✓ '+label)};
 absent(worldDigest(snapshot,record.template,state.capability));
 for(const section of ['summary','actors','inventory','events','catalog','all'] as const){const result=await createWorldQueryTool(ctx).execute('query',{section});absent(result);}
 assert.ok(JSON.stringify(await createWorldQueryTool(ctx).execute('query',{section:'catalog'})).includes(raw.interactions[0].id));check('Digest 和 world_query 全部 section 过滤；只返回公共交互目录');
+const badAudit=structuredClone(snapshot);badAudit.recentEvents.push({id:'bad-event',commandId:'bad-audit',turn:0,type:'advance_time',worldTimeMinutes:0,factId:raw.facts[1].id,interactionId:raw.interactions[0].id,summary:raw.facts[1].text});
+assert.throws(()=>parseWorldSnapshot(badAudit));absent(buildPlayerWorldView(badAudit,record.template));absent(worldDigest(badAudit,record.template));
+const npcAudit=structuredClone(snapshot);npcAudit.recentEvents.push({id:'npc-event',commandId:'npc-audit',turn:0,type:'knowledge_learn',actorId:'innkeeper',factId:raw.facts[1].id,interactionId:raw.interactions[0].id,worldTimeMinutes:0,summary:raw.facts[1].description});parseWorldSnapshot(npcAudit);absent(buildPlayerWorldView(npcAudit,record.template));const npcView=buildRoleWorldView(npcAudit,record.template,'innkeeper');assert.equal(npcView.recentEvents[0].summary,raw.facts[1].text);excludesNotes(npcView);
+function excludesNotes(value:unknown){for(const text of [raw.facts[1].description,raw.interactions[0].description])assert.ok(!JSON.stringify(value).includes(text));}
+check('事件类型隔离知识引用；坏普通事件 fail closed，NPC 私有事件隐藏且摘要由可见事实重建');
 const lines:StChatLine[]=[{name:'旅人',is_user:true,is_system:false,send_date:'',mes:'询问酒馆情况，叙事中声称已经知道也不能授予知识。'}];
 const card=normalizeCard('chara_card_v2',{name:'掌柜',description:'接待旅人'},'');const persona={name:'旅人',description:''};
 const config=defaultConfig();config.providers=[{id:'fixture',name:'fixture',baseUrl:'http://127.0.0.1:1',models:[{id:'local',name:'fixture',contextWindow:8000,maxTokens:500}]}];config.defaultProvider='fixture';config.defaultModel='local';const model=resolveModel(buildModels(config),config);

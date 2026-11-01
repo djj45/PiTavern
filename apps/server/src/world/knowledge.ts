@@ -21,7 +21,12 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
   }) : [];
   const visible = new Set(knownFacts.map(f=>f.id));
   const recentEvents = snapshot.recentEvents.flatMap(e=>{
-    if (!e.type.startsWith("knowledge_")) return [structuredClone(e)];
+    if (!e.type.startsWith("knowledge_")) {
+      // Malformed/imported audit records must not smuggle structured knowledge
+      // through a hard-state event, even when the world is read-only.
+      if (snapshot.schemaVersion === 2 && (e.factId !== undefined || e.interactionId !== undefined)) return [];
+      return [structuredClone(e)];
+    }
     if (!usable || !e.factId || !visible.has(e.factId) || (e.type === "knowledge_learn" && e.actorId !== actorId)) return [];
     const fact = knownFacts.find(f=>f.id===e.factId)!;
     return [{id:e.id,commandId:e.commandId,turn:e.turn,type:e.type,actorId:e.actorId,factId:fact.id,interactionId:e.interactionId,worldTimeMinutes:e.worldTimeMinutes,summary:fact.text}];
