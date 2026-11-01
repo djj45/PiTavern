@@ -64,6 +64,10 @@ export interface WorldTemplate {
 export interface WorldTemplateRecord {
   contentHash: string;
   template: WorldTemplate;
+  /** 模板库显示名；不参与内容哈希。 */
+  name?: string;
+  /** 模板库描述；不参与内容哈希。 */
+  description?: string;
 }
 
 export interface WorldActorState {
@@ -189,6 +193,47 @@ export interface WorldEngineCapability {
 }
 
 /** 世界模板选择器使用的轻量摘要；模板正文按需读取。 */
+
+/** 已发布模板版本摘要。 */
+export interface WorldTemplateVersionDto {
+  contentHash: string;
+  templateVersion: number;
+  rulesVersion: number;
+  createdAt: string;
+  name: string;
+  description?: string;
+}
+
+/** 模板编辑器列表项；draftDirty 表示草稿与最新发布内容不同。 */
+export interface WorldTemplateLibrarySummaryDto {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+  draftRevision: number;
+  publishedHash?: string;
+  publishedVersion?: number;
+  versionCount: number;
+  draftDirty: boolean;
+}
+
+/** 模板编辑器完整视图；initialSnapshot 由当前草稿生成。 */
+export interface WorldTemplateEditorDto extends WorldTemplateLibrarySummaryDto {
+  draft: WorldTemplate;
+  published?: WorldTemplateRecord;
+  versions: WorldTemplateVersionDto[];
+  initialSnapshot?: WorldSnapshot;
+}
+
+export interface WorldTemplateExportDto {
+  format: "pitavern-world-template";
+  version: 1;
+  name: string;
+  description?: string;
+  template: WorldTemplate;
+}
+
 export interface WorldTemplateSummaryDto {
   id: string;
   name: string;
@@ -199,6 +244,8 @@ export interface WorldTemplateSummaryDto {
   locations: number;
   actors: number;
   items: number;
+  /** builtin=内置只读模板；library=模板库最新已发布版本。 */
+  source?: "builtin" | "library";
 }
 
 /** ChatSnapshotDto.world：当前聊天的世界视图；快照损坏时只带 error 和只读能力。 */

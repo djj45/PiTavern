@@ -32,6 +32,8 @@ import { LibraryBackupStore } from "../stdata/library-backup.ts";
 import { attachLibraryBackupJobs, backupControlPath } from "./library-backup-jobs.ts";
 import { atomicWrite } from "../stdata/files.ts";
 import { ChatImportError, ChatImportService } from "../stdata/chat-import.ts";
+import { WorldValidationError } from "../world/index.ts";
+import { WorldTemplateConflictError, WorldTemplateNotFoundError } from "../world/template-library.ts";
 
 export interface HttpDeps {
   config: TavernConfig;
@@ -80,6 +82,16 @@ function parseBranchPatch(value: unknown): BranchMetaPatchDto | null {
     ...(patch.archived !== undefined ? { archived: patch.archived as boolean } : {}),
     ...(patch.tags !== undefined ? { tags: patch.tags as string[] } : {}),
   };
+}
+
+function worldTemplateError(res: Response, error: unknown): void {
+  if (error instanceof WorldTemplateNotFoundError) { res.status(404).json({ error: error.message }); return; }
+  if (error instanceof WorldTemplateConflictError) { res.status(409).json({ error: error.message }); return; }
+  if (error instanceof WorldValidationError) {
+    res.status(400).json({ error: error.message, issues: error.issues });
+    return;
+  }
+  res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
 }
 
 export function createHttpApp(deps: HttpDeps): express.Express {
@@ -774,14 +786,103 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     res.json(sessions.worldTemplates());
   });
 
-  app.post("/api/chat/world/initialize", (req, res) => {
-    const { chatId, templateId, revision, allowExisting } = req.body ?? {};
-    if ([chatId, templateId, revision].some((value) => typeof value !== "string") || (allowExisting !== undefined && typeof allowExisting !== "boolean")) {
-      res.status(400).json({ error: "世界初始化参数无效" });
+  /** 0.5.0 模板库：草稿/发布/版本选择；写操作与资料库写一样要求空闲。 */
+  app.get("/api/world/template-library", (_req, res) => {
+    try { res.json(sessions.worldTemplateLibrary.list()); }
+    catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.get("/api/world/template-library/:id", (req, res) => {
+    try { res.json(sessions.worldTemplateLibrary.get(String(req.params.id))); }
+    catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.post("/api/world/template-library", (req, res) => {
+    const { action, name, description, sourceId } = req.body ?? {};
+    if (action !== "blank" && action !== "copy") { res.status(400).json({ error: "模板创建动作无效" }); return; }
+    if (action === "copy" && typeof sourceId !== "string") { res.status(400).json({ error: "缺少复制来源模板" }); return; }
+    if (name !== undefined && typeof name !== "string") { res.status(400).json({ error: "模板名称无效" }); return; }
+    if (description !== undefined && typeof description !== "string") { res.status(400).json({ error: "模板描述无效" }); return; }
+    try {
+      sessions.assertIdle();
+      const result = action === "copy"
+        ? sessions.worldTemplateLibrary.copyBuiltIn(sourceId, name, description)
+        : sessions.worldTemplateLibrary.createBlank(name, description);
+      sessions.libraryChanged();
+      res.json(result);
+    } catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.put("/api/world/template-library/:id", (req, res) => {
+    const { revision, name, description, template } = req.body ?? {};
+    if (!Number.isInteger(revision) || !template || typeof template !== "object" || Array.isArray(template)) {
+      res.status(400).json({ error: "模板保存参数无效" });
       return;
     }
     try {
-      sessions.initializeChatWorld(chatId, templateId, revision, allowExisting ?? true);
+      sessions.assertIdle();
+      const result = sessions.worldTemplateLibrary.saveDraft(String(req.params.id), revision, { name, description, template });
+      sessions.libraryChanged();
+      res.json(result);
+    } catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.post("/api/world/template-library/:id/publish", (req, res) => {
+    const { revision } = req.body ?? {};
+    if (!Number.isInteger(revision)) { res.status(400).json({ error: "模板发布参数无效" }); return; }
+    try {
+      sessions.assertIdle();
+      const result = sessions.worldTemplateLibrary.publish(String(req.params.id), revision);
+      sessions.libraryChanged();
+      res.json(result);
+    } catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.get("/api/world/template-library/:id/versions", (req, res) => {
+    try { res.json(sessions.worldTemplateLibrary.versions(String(req.params.id))); }
+    catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.get("/api/world/template-library/:id/export", (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const payload = sessions.worldTemplateLibrary.exportTemplate(id);
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(payload.name + ".world-template.json")}`);
+      res.send(JSON.stringify(payload, null, 2));
+    } catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.post("/api/world/template-library/import", (req, res) => {
+    try {
+      sessions.assertIdle();
+      const result = sessions.worldTemplateLibrary.importTemplate(req.body);
+      sessions.libraryChanged();
+      res.json(result);
+    } catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.delete("/api/world/template-library/:id", (req, res) => {
+    try {
+      sessions.assertIdle();
+      sessions.worldTemplateLibrary.delete(String(req.params.id));
+      sessions.libraryChanged();
+      res.json({ ok: true });
+    } catch (error) { worldTemplateError(res, error); }
+  });
+
+  app.post("/api/chat/world/initialize", (req, res) => {
+    const { chatId, templateId, contentHash, revision, allowExisting } = req.body ?? {};
+    if (typeof chatId !== "string" || typeof revision !== "string" || (templateId !== undefined && typeof templateId !== "string")
+      || (contentHash !== undefined && typeof contentHash !== "string") || (allowExisting !== undefined && typeof allowExisting !== "boolean")) {
+      res.status(400).json({ error: "世界初始化参数无效" });
+      return;
+    }
+    if (!templateId && !contentHash) { res.status(400).json({ error: "世界初始化缺少模板" }); return; }
+    if (templateId && contentHash) { res.status(400).json({ error: "模板 ID 与版本哈希只能选一个" }); return; }
+    try {
+      if (contentHash) sessions.initializeChatWorldByHash(chatId, contentHash, revision, allowExisting ?? true);
+      else sessions.initializeChatWorld(chatId, templateId, revision, allowExisting ?? true);
       res.json({ ok: true });
     } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
@@ -838,6 +939,11 @@ export function createHttpApp(deps: HttpDeps): express.Express {
     if (sessions.writeBlocked) { res.status(503).json({ error: sessions.writeBlocked }); return; }
     const { character, greeting } = req.body as { character?: string; greeting?: string };
     const worldTemplateId = typeof req.body?.worldTemplateId === "string" ? req.body.worldTemplateId : undefined;
+    const worldTemplateHash = typeof req.body?.worldTemplateHash === "string" ? req.body.worldTemplateHash : undefined;
+    if (worldTemplateId && worldTemplateHash) {
+      res.status(400).json({ error: "模板 ID 与版本哈希只能选一个" });
+      return;
+    }
     const card = character ? characters.getCharacter(character) : undefined;
     if (!card) {
       res.status(404).json({ error: `角色不存在: ${character}` });
@@ -849,9 +955,10 @@ export function createHttpApp(deps: HttpDeps): express.Express {
       firstMes ? { name: card.name, is_user: false, is_system: false, mes: firstMes } : null,
       config.persona.name,
     );
-    if (worldTemplateId) {
+    if (worldTemplateId || worldTemplateHash) {
       try {
-        sessions.initializeChatWorld(meta.id, worldTemplateId, chats.revisionId(meta.id), false);
+        if (worldTemplateHash) sessions.initializeChatWorldByHash(meta.id, worldTemplateHash, chats.revisionId(meta.id), false);
+        else sessions.initializeChatWorld(meta.id, worldTemplateId!, chats.revisionId(meta.id), false);
       } catch (error) {
         try { chats.deleteChat(meta.id); } catch { /* 初始化失败时尽力清理孤立聊天。 */ }
         res.status(400).json({ error: error instanceof Error ? error.message : String(error) });

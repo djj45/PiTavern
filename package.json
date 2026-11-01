@@ -39,7 +39,8 @@
     "verify:branches": "npm run verify:branches -w apps/server",
     "release:pack": "node scripts/release.mjs",
     "verify:release": "node scripts/release-verify.mjs",
-    "verify:chat-import": "npm run verify:chat-import -w apps/server"
+    "verify:chat-import": "npm run verify:chat-import -w apps/server",
+    "verify:world-templates": "npm run verify:world-templates -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

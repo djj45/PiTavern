@@ -76,6 +76,7 @@ export function worldTemplateSummaries(): WorldTemplateSummaryDto[] {
     locations: record.template.locations.length,
     actors: record.template.actors.length,
     items: record.template.items.length,
+    source: "builtin",
   }));
 }
 

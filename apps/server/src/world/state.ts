@@ -6,9 +6,17 @@ import { parseWorldSnapshot, parseWorldTemplate, presentActorIds, validateWorldR
 
 export const WORLD_RULES_VERSION = 1;
 
-export function createWorldTemplateRecord(input: unknown): WorldTemplateRecord {
+export function createWorldTemplateRecord(
+  input: unknown,
+  meta: { name?: string; description?: string } = {},
+): WorldTemplateRecord {
   const template = parseWorldTemplate(input);
-  return { contentHash: worldContentHash(template), template };
+  const name = meta.name?.trim().slice(0, 100);
+  const description = meta.description?.trim().slice(0, 500);
+  return {
+    contentHash: worldContentHash(template), template,
+    ...(name ? { name } : {}), ...(description ? { description } : {}),
+  };
 }
 
 export function createInitialWorldSnapshot(input: WorldTemplateRecord): WorldSnapshot {

@@ -208,14 +208,15 @@ export class ChatStore {
    * 初始化世界。allowExisting 用于 M4 旧聊天中途绑定：会把同一份初始快照回填到旧回合检查点和
    * 分支候选状态，保证之后重生成/切分支时世界仍存在；历史正文不会重算。
    */
-  initializeWorld(chatId: string, templateInput: unknown, expectedRevision?: string, options: { allowExisting?: boolean } = {}): WorldState {
+  initializeWorld(chatId: string, templateInput: unknown, expectedRevision?: string,
+    options: { allowExisting?: boolean; name?: string; description?: string } = {}): WorldState {
     if (expectedRevision && this.revisionId(chatId) !== expectedRevision) throw new Error("聊天已变化，请刷新后初始化世界");
     const rev = this.revision(chatId);
     const hasUserMessage = rev.records.some(({ line }) => line.is_user && !line.is_system);
     if (hasUserMessage && !options.allowExisting) throw new Error("世界只能在尚未开始对话的新聊天中初始化");
     const metadata = { ...(rev.header.chat_metadata as Record<string, unknown> ?? {}) };
     if (metadata[WORLD_STATE_KEY]) throw new Error("该聊天已初始化世界");
-    const record = createWorldTemplateRecord(templateInput);
+    const record = createWorldTemplateRecord(templateInput, { name: options.name, description: options.description });
     const snapshot = createInitialWorldSnapshot(record);
     if (hasUserMessage) this.backfillWorldState(rev, snapshot, metadata);
     const existing = metadata[WORLD_TEMPLATES_KEY] && typeof metadata[WORLD_TEMPLATES_KEY] === "object" && !Array.isArray(metadata[WORLD_TEMPLATES_KEY])

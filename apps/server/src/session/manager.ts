@@ -6,10 +6,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AuthorNoteDto, AuthorNoteSnapshotDto, BranchIndexDto, BranchMetaPatchDto, BranchPathStepDto, ChatDisplayDto, ChatSnapshotDto, GenerationRecordDto, ReasoningLevel, ServerEvent } from "@pitavern/shared";
-import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatStateDto, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
+import { WORLD_STATE_KEY, WORLD_TEMPLATES_KEY, type WorldChatStateDto, type WorldTemplateRecord, type WorldTemplateSummaryDto } from "@pitavern/shared/world";
 import { WorldState, WorldTransaction } from "../world/index.ts";
 import { worldDigest } from "../world/digest.ts";
 import { getWorldTemplate, worldTemplateName, worldTemplateSummaries } from "../world/catalog.ts";
+import { WorldTemplateLibrary } from "../world/template-library.ts";
 import { createTavernAgent, buildSystemPrompt, historyToAgentMessages, type TavernAgentOptions } from "../agent/engine.ts";
 import { createTavernTools, type RecallEnforcement, type ToolContext } from "../agent/tools/index.ts";
 import {
@@ -67,6 +68,8 @@ export class SessionManager {
   private readonly sessions = new Map<string, ChatSession>();
   private readonly listeners = new Set<(event: ServerEvent) => void>();
   private readonly activity: ActivityStore;
+  /** 0.5.0 模板库：编辑器、新聊天版本选择与自定义名称都从这里读。 */
+  readonly worldTemplateLibrary: WorldTemplateLibrary;
   private maintenanceMessage: string | null = null;
   private restartRequired = false;
 
@@ -76,7 +79,10 @@ export class SessionManager {
     private readonly characters: CharacterStore,
     private readonly chats: ChatStore,
     private readonly stDataDir: string,
-  ) { this.activity = new ActivityStore(stDataDir); }
+  ) {
+    this.activity = new ActivityStore(stDataDir);
+    this.worldTemplateLibrary = new WorldTemplateLibrary(stDataDir);
+  }
 
   activityPage(chatId: string, before?: string) { return this.activity.page(chatId, before); }
 
@@ -171,19 +177,36 @@ export class SessionManager {
     return true;
   }
 
-  /** M4：模板选择器使用；模板正文仍从聊天 JSONL 的模板表读取。 */
+  /** 模板选择器：内置模板 + 模板库每个模板的最新已发布版本。 */
   worldTemplates(): WorldTemplateSummaryDto[] {
-    return worldTemplateSummaries();
+    return [...worldTemplateSummaries(), ...this.worldTemplateLibrary.latestSummaries()];
   }
 
-  /** 世界初始化；allowExisting 允许旧聊天中途绑定，由 ChatStore 回填旧检查点。 */
-  initializeChatWorld(chatId: string, templateId: string, revision: string, allowExisting = true): void {
+  private initializeChatWorldRecord(chatId: string, record: WorldTemplateRecord, revision: string, allowExisting: boolean): void {
     if (this.writeBlocked) throw new Error(this.writeBlocked);
     if (this.isStreaming(chatId)) throw new Error("请先停止生成，再初始化世界");
-    const template = getWorldTemplate(templateId);
-    if (!template) throw new Error("世界模板不存在: " + templateId);
-    this.chats.initializeWorld(chatId, template, revision, { allowExisting });
+    this.chats.initializeWorld(chatId, record.template, revision, {
+      allowExisting, name: record.name, description: record.description,
+    });
     this.changed(chatId);
+  }
+
+  /** 世界初始化；templateId 可以是内置模板或模板库 ID（默认最新已发布版本）。 */
+  initializeChatWorld(chatId: string, templateId: string, revision: string, allowExisting = true): void {
+    const builtin = getWorldTemplate(templateId);
+    if (builtin) {
+      if (this.writeBlocked) throw new Error(this.writeBlocked);
+      if (this.isStreaming(chatId)) throw new Error("请先停止生成，再初始化世界");
+      this.chats.initializeWorld(chatId, builtin, revision, { allowExisting, name: worldTemplateName(templateId) });
+      this.changed(chatId);
+      return;
+    }
+    this.initializeChatWorldRecord(chatId, this.worldTemplateLibrary.resolvePublished(templateId), revision, allowExisting);
+  }
+
+  /** 0.5.0 版本选择：按不可变 contentHash 精确初始化聊天。 */
+  initializeChatWorldByHash(chatId: string, contentHash: string, revision: string, allowExisting = true): void {
+    this.initializeChatWorldRecord(chatId, this.worldTemplateLibrary.resolveHash(contentHash), revision, allowExisting);
   }
 
   /** M4：手工修正当前世界快照；只允许同一模板/规则版本，并同步活动分支候选。 */
@@ -199,7 +222,13 @@ export class SessionManager {
     if (!metadata[WORLD_STATE_KEY]) return undefined;
     try {
       const state = new WorldState(metadata[WORLD_STATE_KEY], metadata[WORLD_TEMPLATES_KEY]);
+      const snapshot = state.snapshot;
       const template = state.template;
+      const templateTable = metadata[WORLD_TEMPLATES_KEY];
+      const stored = templateTable && typeof templateTable === "object" && !Array.isArray(templateTable)
+        ? (templateTable as Record<string, unknown>)[snapshot.templateHash] as { name?: unknown } | undefined
+        : undefined;
+      const storedName = stored && typeof stored.name === "string" && stored.name.trim() ? stored.name.trim() : undefined;
       let capability = state.capability;
       if (capability.mode === "enabled") {
         try {
@@ -211,9 +240,9 @@ export class SessionManager {
         }
       }
       return {
-        snapshot: state.snapshot,
+        snapshot,
         ...(template ? { template } : {}),
-        templateName: template ? worldTemplateName(template.templateId) : "未知模板",
+        templateName: storedName ?? (template ? worldTemplateName(template.templateId) : "未知模板"),
         capability,
       };
     } catch (error) {
