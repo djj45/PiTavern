@@ -48,7 +48,7 @@ npm run verify:world-migration # 0.6.0 单快照模板迁移规划（差异/阻�
 npm run verify:chat-migration # 0.6.0 整聊天迁移（全分支规划/原子应用/API）
 npm run verify:character-cards # 角色卡管理（列表/编辑/复制/删除/导出）
 npm run verify:context # 长局基线/纯构建/分支缓存/三种模式/合成游戏（28 组检查）
-npm run verify:knowledge # 知识校验/视图/事务/出口/迁移/完整请求游戏（51 组）
+npm run verify:knowledge # 知识校验/视图/事务/出口/迁移/完整请求游戏（53 组）
 npm run verify:ci     # 25 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
 npm run build && npm run verify:browser # 63 项真实界面验收，独立合成库与本地 mock

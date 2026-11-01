@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { WebSocket } from "ws";
 import type { WorldTemplate } from "@pitavern/shared/world";
 import type { ServerEvent } from "@pitavern/shared";
+import { ActivityStore } from "../src/stdata/activity.ts";
 import { ChatStore } from "../src/stdata/chats.ts";
 import { CharacterStore } from "../src/stdata/characters.ts";
 import { ChatImportService } from "../src/stdata/chat-import.ts";
@@ -142,6 +143,60 @@ try{
       await visible(rollback.id,false);assert.equal(sessions.activityPage(rollback.id).records[0].status,failure);excludes(events.filter(e=>e.type==="chat.error"&&e.chatId===rollback.id),privateNotes.concat(fact.text));
       check(mode+"：暂存揭示后"+(failure==="failed"?"供应商失败":"停止生成")+"整轮撤销，最终接口/诊断保持未获知");
     }
+  }
+  config.contextMode="simple";config.outputProtocol="game_tool";
+  // v1 upgrades intentionally do not receive NPC initial knowledge. This target
+  // uses an authored discovery rule, so the upgraded world can reveal by action.
+  const discovery=structuredClone(raw);discovery.interactions![0].conditions=discovery.interactions![0].conditions.filter(c=>c.type!=="knows_fact");
+  discovery.interactions![0].effects=[{type:"learn",actorId:"player",factId:fact.id}];
+  const discoveryDraft=library.saveDraft(blank.id,target.draftRevision,{name:"恢复回归·发现规则",template:discovery}),discoveryTarget=library.publish(blank.id,discoveryDraft.draftRevision);
+  const publicReply:Call={name:"game_content",args:{content:"旧酒馆正在维修，旅人记录了公开见闻。<summary>公开见闻。</summary>"}};
+  for(const restoreKind of ["v1","no-world"] as const){
+    const chat=chats.createChat("知识向导",null);
+    if(restoreKind==="v1"){
+      const legacy=structuredClone(raw);legacy.schemaVersion=1;delete legacy.facts;delete legacy.interactions;delete legacy.initial.knowledge;
+      chats.initializeWorld(chat.id,legacy);
+    }
+    await send(chat.id,restoreKind+" public-legacy",[{known:false,calls:[publicReply]}]);
+    const legacyRecord=sessions.activityPage(chat.id).records[0],before=fs.readFileSync(chat.file,"utf8");let backupId:string;
+    if(restoreKind==="v1"){
+      const preview=sessions.previewChatWorldMigration(chat.id,discoveryTarget.publishedHash!);assert.equal(preview.applyable,true);
+      backupId=sessions.applyChatWorldMigration(chat.id,discoveryTarget.publishedHash!,preview.revision,preview.previewHash).backupId!;
+    }else{
+      const previous=new Set(chats.backups(chat.id).backups.map(b=>b.id));
+      sessions.initializeChatWorldByHash(chat.id,discoveryTarget.publishedHash!,chats.revisionId(chat.id),true);
+      backupId=chats.backups(chat.id).backups.find(b=>!previous.has(b.id))!.id;
+    }
+    await send(chat.id,restoreKind+" reveal-game-content",[{known:false,calls:[interact]},{known:true,calls:[{name:"game_content",args:{content:fact.text+"<summary>获知密道。</summary>"}}]}]);
+    assert.ok(owns(chat.id));assert.ok(chats.readChat(chat.id)!.at(-1)!.mes.includes(fact.text));
+    const revealedRecord=sessions.activityPage(chat.id).records[0];assert.ok(JSON.stringify(revealedRecord.tools).includes(fact.text));assert.ok(revealedRecord.context?.workingSet?.knowledgeKey);
+    // Put the actual secret-bearing generation on the second HTTP page.
+    for(let i=0;i<21;i++)await send(chat.id,restoreKind+" later-public-"+i,[{known:true,calls:[publicReply]}]);
+    const beforeActivity=sessions.snapshot(chat.id)!.activity!;
+    const broadcast=new Promise<unknown>((resolve,reject)=>{
+      const timer=setTimeout(()=>{ws.off("message",listener);reject(new Error("restore broadcast timeout"));},5000);
+      const listener=(data:unknown)=>{const event=JSON.parse(String(data));if(event.type==="chat.snapshot"&&event.chatId===chat.id&&(restoreKind==="v1"?event.snapshot.world?.snapshot?.schemaVersion===1:!event.snapshot.world)){clearTimeout(timer);ws.off("message",listener);resolve(event);}};ws.on("message",listener);
+    });
+    const restored=await fetch(base+"/api/chat/backup/restore",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chatId:chat.id,backupId,revision:chats.revisionId(chat.id)})});assert.equal(restored.status,200);
+    const restoredBroadcast=await broadcast;excludes(restoredBroadcast,privateNotes.concat(fact.id,fact.text));
+    fs.writeFileSync(path.join(run,restoreKind+"-restore-ws.json"),JSON.stringify(restoredBroadcast,null,2));
+    assert.equal(fs.readFileSync(chat.file,"utf8"),before);assert.equal(chats.readWorld(chat.id)?.snapshot.schemaVersion,restoreKind==="v1"?1:undefined);
+    await visible(chat.id,false);
+    const response=await fetch(base+"/api/chats/"+chat.id);assert.equal(response.status,200);const snapshot=await response.json();excludes(snapshot,privateNotes.concat(fact.id,fact.text));
+    assert.equal(snapshot.activity.totalGenerations,beforeActivity.totalGenerations);assert.deepEqual(snapshot.activity.usage,beforeActivity.usage);assert.deepEqual(snapshot.activity.toolCounts,beforeActivity.toolCounts);
+    fs.writeFileSync(path.join(run,restoreKind+"-restored-http.json"),JSON.stringify(snapshot,null,2));
+    let cursor:string|null=null;const records:import("@pitavern/shared").GenerationRecordDto[]=[];let pages=0;
+    do{
+      const url=new URL(base+"/api/chat/activity");url.searchParams.set("chatId",chat.id);if(cursor)url.searchParams.set("before",cursor);
+      const response=await fetch(url);assert.equal(response.status,200);const page=await response.json();excludes(page,privateNotes.concat(fact.id,fact.text));records.push(...page.records);cursor=page.before;pages++;
+      fs.writeFileSync(path.join(run,restoreKind+"-activity-page-"+pages+".json"),JSON.stringify(page,null,2));
+    }while(cursor);
+    assert.equal(pages,2);assert.equal(records.length,23);
+    const hidden=records.find(r=>r.id===revealedRecord.id)!;assert.equal(hidden.contentHidden,true);assert.equal(hidden.context,undefined);assert.deepEqual(hidden.tools.map(t=>t.args),hidden.tools.map(()=>({})));assert.deepEqual(hidden.usage,revealedRecord.usage);assert.equal(hidden.status,revealedRecord.status);
+    assert.deepEqual(records.find(r=>r.id===legacyRecord.id),legacyRecord,"旧 v1 / 无知识视角记录保持兼容");
+    const rawRecords=new ActivityStore(data).page(chat.id,undefined,100).records;assert.deepEqual(rawRecords.find(r=>r.id===revealedRecord.id),revealedRecord,"只过滤接口，不清洗或改写本地活动文件");
+    const restarted=new SessionManager(config,()=>buildModels(config),cards,new ChatStore(data),data);excludes(restarted.snapshot(chat.id),privateNotes.concat(fact.id,fact.text));excludes(restarted.activityPage(chat.id,records[19].id),privateNotes.concat(fact.id,fact.text));
+    check(restoreKind+"：实际交互/game_content 后字节一致恢复，HTTP/WS/跨页活动隐藏旧知识，保留旧记录与用量，重启一致");
   }
 }finally{
   ws.terminate();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));

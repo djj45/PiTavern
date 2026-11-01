@@ -103,11 +103,14 @@ export class SessionManager {
 
   private activityForPlayer<T extends {records:GenerationRecordDto[]}>(chatId:string,page:T):T {
     const state=this.chats.readWorld(chatId);
-    if(state?.snapshot.schemaVersion !== 2) return page;
-    const session=this.sessions.get(chatId), staged=session?.running && session.worldTransaction?.status==="open" ? session.worldTransaction.snapshot : state.snapshot;
-    const key=buildPlayerWorldView(staged,state.template).knowledgeKey;
+    const session=this.sessions.get(chatId), staged=session?.running && session.worldTransaction?.status==="open" ? session.worldTransaction.snapshot : state?.snapshot;
+    const key=staged ? buildPlayerWorldView(staged,state?.template).knowledgeKey : undefined;
     return {...page,knowledgeKey:key,records:page.records.map(record=>{
-      if(record.context?.workingSet?.knowledgeKey===key) return record;
+      const recordKey=record.context?.workingSet?.knowledgeKey;
+      // Activity survives chat backup restoration. A v2 record still needs its
+      // original knowledge authorization after restoring v1 or no world.
+      // Pre-knowledge records retain legacy behavior outside a v2 world.
+      if(recordKey===key || (recordKey===undefined && staged?.schemaVersion!==2)) return record;
       const {context:_,...rest}=record;
       return {...rest,contentHidden:true,error:record.error?"该次生成未正常完成。":undefined,tools:record.tools.map(tool=>({...tool,args:{},summary:"知识视角已变化，历史工具内容已隐藏"}))};
     })};
