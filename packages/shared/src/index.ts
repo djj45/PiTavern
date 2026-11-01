@@ -135,6 +135,28 @@ export interface ContextAssemblyDto {
   worldInfoTotal: number;
 }
 
+export interface ContextFactDto {
+  kind: "clue" | "promise" | "event" | "summary" | "narrative" | "intent" | "tool_receipt";
+  text: string;
+  source: { message: number; turn: number; role: string; hash: string; start: number; end: number; part: string };
+  tool?: { name: string; id: string; status: "error" | "completed" };
+}
+export interface ContextRangeDto { fromMessage: number; toMessage: number; fromTurn: number; toTurn: number }
+export interface ContextWorkingSetDto {
+  algorithm: string;
+  sourceHash: string;
+  originalChars: number;
+  workingChars: number;
+  retained: ContextRangeDto | null;
+  compressed: ContextRangeDto[];
+  selectedFacts: ContextFactDto[];
+  availableFacts: number;
+  omittedFacts: number;
+  allocations: { fixed: number; protected: number; memory: number; unused: number };
+  overBudgetReasons: string[];
+  cache?: "hit" | "rebuilt";
+}
+
 export interface ContextDiagnosticsDto {
   request: number;
   tokenizer: string;
@@ -151,6 +173,7 @@ export interface ContextDiagnosticsDto {
   keptMessages: number;
   overBudget: boolean;
   assembly: ContextAssemblyDto;
+  workingSet?: ContextWorkingSetDto;
 }
 
 export interface GenerationRecordDto {

@@ -26,6 +26,7 @@ export interface TakeoverInput {
 
 export interface TakeoverResult {
   messages: Message[];
+  archived: Message[];
   stats: {
     systemSections: string[];
     constantEntries: number;
@@ -84,7 +85,7 @@ export function assembleTakeoverContext(input: TakeoverInput): TakeoverResult {
   const guidance = [
     `你扮演 ${card.name}，与用户（${persona.name}）进行角色扮演。以第三人称叙述 + 角色对白的混合文体回复，不要替用户行动或说话。输出使用中文。`,
     "### 上下文规则（接管模式）",
-    `- 你只能看到最近 ${options.recentTurns} 轮的正文；更早的剧情细节用 tavern_recall_history 检索（每轮限 6 次，读完整原文后冷却 10 轮）。`,
+    `- 最近 ${options.recentTurns} 轮保留正文；启用压缩时更早剧情可附带有来源的线索摘录，完整细节用 tavern_recall_history 检索（每轮限 6 次，读完整原文后冷却 10 轮）。`,
     "- 未自动注入的人物/地点/门派设定用 worldbook_search 按需查询，零命中不代表不存在；不要凭常识编造。",
     "- 好感度/属性等存档数值用 tavern_read_variables 确认。",
     options.stateProjection
@@ -99,7 +100,7 @@ export function assembleTakeoverContext(input: TakeoverInput): TakeoverResult {
     role: "system",
     content: guidance,
     sections: Object.fromEntries(Object.entries(sections).map(([name, content]) => [name, substitute(content)])),
-    timestamp: Date.now(),
+    timestamp: 0,
   };
 
   // 历史截断：保留最近 recentTurns 轮（含本轮用户消息）
@@ -112,9 +113,11 @@ export function assembleTakeoverContext(input: TakeoverInput): TakeoverResult {
   const keepFromTurn = lastTurn <= options.recentTurns ? 0 : lastTurn - options.recentTurns + 1;
   const kept = usableIndexes.filter((u) => u.turn >= keepFromTurn)
     .map(({ line }) => ({ ...line, mes: substitute(line.mes) }));
+  const archiveEnv = { ...macroEnv, variables: structuredClone(macroEnv.variables ?? {}) };
 
   return {
     messages: [system, ...historyToAgentMessages(kept)],
+    archived: historyToAgentMessages(usableIndexes.filter((u) => u.turn < keepFromTurn).map(({ line }) => ({ ...line, mes: substituteMacros(line.mes, archiveEnv) }))),
     stats: {
       systemSections: Object.keys(sections),
       constantEntries: constants.length,

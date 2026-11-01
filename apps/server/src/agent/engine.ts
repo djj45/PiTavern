@@ -3,8 +3,10 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model, Models, SystemMessage, Usage } from "@earendil-works/pi-ai";
 import type { BridgeSampling } from "../context/bridge.ts";
 import type { CompressionConfig } from "../context/compression.ts";
-import { compressHistory } from "../context/compression.ts";
 import type { ContextFactCache } from "../context/memory-cache.ts";
+import { buildCachedWorkingContext } from "../context/memory-cache.ts";
+import { buildWorkingContext, prepareWorkingSources, type WorkingSetDiagnostics } from "../context/working-set.ts";
+import type { WorldSnapshot } from "@pitavern/shared/world";
 import { createTokenCounter, inputBudget, measureContext, type TokenCounter } from "../context/tokens.ts";
 import { INSTRUCT_TEMPLATES, type ContextAssemblyDto, type ContextDiagnosticsDto, type InstructTemplate, type ReasoningLevel } from "@pitavern/shared";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
@@ -90,6 +92,8 @@ export interface TavernAgentOptions {
   compression?: CompressionConfig;
   contextFactCache?: ContextFactCache;
   contextSourceRevision?: string;
+  archivedHistory?: Message[];
+  worldSnapshot?: () => WorldSnapshot | undefined;
   tokenCounter?: TokenCounter;
   instruct?: InstructTemplate;
   contextAssembly?: ContextAssemblyDto;
@@ -116,6 +120,7 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
   let compressedMessages = 0;
   let compressedTurns = 0;
   let request = 0;
+  let workingSet: WorkingSetDiagnostics | undefined;
   const strictToolChoice =
     options.outputProtocol === "game_tool" && options.protocolStrict !== false
       ? ({ tool_choice: "required" } as Record<string, unknown>)
@@ -145,9 +150,10 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
       beforeTokens, afterTokens: measured.total, breakdown: measured.breakdown,
       compressedMessages, compressedTurns, keptMessages: messages.filter((message) => message.role !== "system").length,
       overBudget, assembly: options.contextAssembly ?? { mode: "simple", historyMessages: 0, omittedHistoryMessages: 0, worldInfo: [], worldInfoTotal: 0 },
+      workingSet,
     });
     if (overBudget) {
-      throw new Error("上下文超过预留输出后的预算，请在活动面板查看诊断，减少保留轮数、精简角色/世界书，或检查模型上下文长度设置");
+      throw new Error("上下文超过预留输出后的预算：" + (workingSet?.overBudgetReasons.join("；") || "规范化后的输入与封装超过预算") + "。请在活动面板查看诊断，减少保留轮数、精简角色/世界书，或检查模型上下文长度设置");
     }
     return options.models.streamSimple(model, context, merged);
   };
@@ -183,9 +189,11 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
     initialState,
     streamFn,
     transformContext: async (messages) => {
-      beforeTokens = measure(messages).total;
-      const result = compressHistory(messages, compression ?? { enabled: false, keepFullTurns: 6 }, budget.inputBudget,
-        (items) => measure(items).total);
+      const input = { messages, archived: options.archivedHistory, config: compression ?? { enabled: false, keepFullTurns: 6 }, budget: budget.inputBudget,
+        measure: (items: AgentMessage[]) => measure(items).total, world: options.worldSnapshot?.(), sourceRevision: options.contextSourceRevision };
+      beforeTokens = measure(prepareWorkingSources(input).sources).total;
+      const result = options.contextFactCache ? buildCachedWorkingContext(input, options.contextFactCache, options.chatId) : buildWorkingContext(input);
+      workingSet = result.diagnostics;
       compressedMessages = result.stats.squashedMessages;
       compressedTurns = result.stats.squashedTurns;
       return result.messages;

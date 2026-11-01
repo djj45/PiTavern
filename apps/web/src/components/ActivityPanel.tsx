@@ -75,7 +75,7 @@ export const ActivityPanel = memo(function ActivityPanel({ items, usage, project
       {activity && chatId && <section className="mb-5 space-y-2">
         {latest && <p className="text-xs text-tavern-dim">最近生成：{GENERATION_STATUS[latest.status]} · {latest.tools.length} 次工具调用</p>}
         {latest?.context && <div className="rounded border border-tavern-border p-2 text-xs leading-5">
-          <p>输入：{fmt(latest.context.afterTokens)} / {fmt(latest.context.inputBudget)} tokens</p>
+          <p>输入：{fmt(latest.context.afterTokens)} / {fmt(latest.context.inputBudget)} {latest.context.counting === "estimate" ? "估算 tokens" : "tokens"}</p>
           <p className="break-words text-tavern-dim">{latest.context.tokenizer} · {latest.context.compressedMessages ? `压缩 ${latest.context.compressedMessages} 条` : "未压缩"}</p>
           {latest.context.overBudget && <p className="text-amber-300">超过预算，请查看诊断</p>}
         </div>}

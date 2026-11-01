@@ -105,9 +105,9 @@ import type { Message } from "@earendil-works/pi-ai";
   const squashText = typeof squashMsg.content === "string" ? squashMsg.content : JSON.stringify(squashMsg.content);
   const oldOriginalChars = history.slice(0, 12).reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length), 0);
   assert.ok(squashText.length < oldOriginalChars * 0.5, `压缩块（${squashText.length}）应小于被压缩原文（${oldOriginalChars}）的一半`);
-  assert.ok(squashText.includes("|用户|") && squashText.includes("|游戏剧情|"), "轮次标记");
+  assert.ok(squashText.includes(" user ") && squashText.includes(" assistant "), "用户意图与助手叙事来源分开");
   assert.ok(squashText.includes("第1轮：发生了事1"), "旧轮摘要保留");
-  assert.ok(squashText.includes("<|sep|>"), "分隔符");
+  assert.match(squashText, /\[轮\d+ 消息\d+ (?:user|assistant) [a-f\d]{12}:\d+-\d+\]/, "每条摘录带轮次、哈希和原文区间");
   // 尾部全文保留
   const tailTexts = squashed.messages.slice(-2).map((m) => {
     const c = (m as Message).content;

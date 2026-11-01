@@ -68,7 +68,8 @@ export function contextSourceHash(messages: AgentMessage[], revision = ""): stri
     return rest;
   })]));
 }
-const conversation = (m: AgentMessage) => m.role === "user" || m.role === "assistant" || m.role === "toolResult";
+export const isContextHistory = (m: AgentMessage) => (m as AgentMessage & { pitavernContext?: string }).pitavernContext !== "instruction"
+  && (m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 export function completeToolGroups(messages: AgentMessage[]): boolean {
   const pending = new Set<string>();
   for (const m of messages) {
@@ -81,7 +82,7 @@ export function completeToolGroups(messages: AgentMessage[]): boolean {
 }
 
 export function textParts(message: AgentMessage): Array<{ part: string; text: string }> {
-  if (!conversation(message)) return [];
+  if (!isContextHistory(message)) return [];
   if (typeof message.content === "string") return [{ part: "content", text: message.content }];
   return message.content.flatMap((block, index) => {
     if (block.type === "text") return [{ part: `content[${index}].text`, text: block.text }];
@@ -107,7 +108,7 @@ export function extractContextFacts(messages: AgentMessage[]): ContextFact[] {
   const facts: ContextFact[] = [];
   let turn = 0;
   messages.forEach((message, index) => {
-    if (message.role === "user") turn++;
+    if (message.role === "user" && isContextHistory(message)) turn++;
     for (const { part, text } of textParts(message)) {
       if (!text.trim()) continue;
       const spans: Array<{ start: number; end: number; summary?: boolean }> = [];
@@ -149,7 +150,7 @@ const factLine = (fact: ContextFact): string => {
     + ` ${JSON.stringify(fact.text)}`;
 };
 function capsule(facts: ContextFact[]): Message {
-  return { role: "assistant", content: [{ type: "text", text: "【历史线索摘录：仅所属路径的历史证据；用户内容是意图，工具回执不重放，旧数字不代表当前状态。硬状态以当前世界快照为准。】\n" + facts.map(factLine).join("\n") }],
+  return { role: "assistant", content: [{ type: "text", text: "【历史已压缩 · 线索摘录：仅所属路径的历史证据；用户内容是意图，工具回执不重放，旧数字不代表当前状态。硬状态以当前世界快照为准。】\n" + facts.map(factLine).join("\n") }],
     api: "openai-completions", provider: "pitavern", model: "context-memory", timestamp: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" };
 }
@@ -169,22 +170,24 @@ function withAuthority(messages: AgentMessage[], world?: WorldSnapshot): AgentMe
 export function prepareWorkingSources(input: WorkingSetInput) {
   const messages = withAuthority(input.messages, input.world);
   const archived = input.config.enabled ? input.archived ?? [] : [];
-  const sources = [...archived, ...messages];
-  const offset = archived.length;
-  const users = messages.flatMap((m, i) => m.role === "user" ? [i] : []);
+  const firstConversation = messages.findIndex(isContextHistory);
+  const prefix = firstConversation < 0 ? messages.length : firstConversation;
+  const sources = [...messages.slice(0, prefix), ...archived, ...messages.slice(prefix)];
+  const users = messages.flatMap((m, i) => m.role === "user" && isContextHistory(m) ? [i] : []);
   const keep = Number.isFinite(input.config.keepFullTurns) ? Math.max(1, Math.floor(input.config.keepFullTurns)) : 6;
   const tailStart = users.length > keep ? users[users.length - keep] : 0;
-  return { messages, archived, sources, offset, users, tailStart };
+  const compressionEnd = archived.length ? archived.length + Math.max(prefix, tailStart) : tailStart;
+  return { messages, archived, sources, users, tailStart, compressionEnd };
 }
 
 export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: ContextFact[]): WorkingSetResult {
   const measure = input.measure ?? contextChars;
-  const { messages, archived, sources, offset, users, tailStart } = prepareWorkingSources(input);
+  const { messages, archived, sources, users, compressionEnd } = prepareWorkingSources(input);
   const sourceHash = contextSourceHash(sources, input.sourceRevision);
   const originalChars = contextChars(sources);
   const shouldCompress = input.config.enabled && (archived.length > 0 || measure(messages) > input.budget);
   const turns: number[] = []; let turn = 0;
-  for (const message of sources) { if (message.role === "user") turn++; turns.push(turn); }
+  for (const message of sources) { if (message.role === "user" && isContextHistory(message)) turn++; turns.push(turn); }
   const range = (from: number, to: number): ContextRange => ({ fromMessage: from, toMessage: to, fromTurn: turns[from] ?? 0, toTurn: turns[to] ?? turn });
   const groups: Array<{ indices: number[]; facts: ContextFact[] }> = [];
   const owner = new Map<number, number>();
@@ -196,9 +199,9 @@ export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: Cont
   };
   if (shouldCompress) {
     // Keep system injections in their original positions; never split a tool group across one.
-    for (let i = 0; i < offset + tailStart;) {
-      if (!conversation(sources[i])) { i++; continue; }
-      const start = i; while (i < offset + tailStart && conversation(sources[i])) i++;
+    for (let i = 0; i < compressionEnd;) {
+      if (!isContextHistory(sources[i])) { i++; continue; }
+      const start = i; while (i < compressionEnd && isContextHistory(sources[i])) i++;
       addGroup(start, i);
     }
   }
@@ -212,7 +215,7 @@ export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: Cont
     return output;
   };
   const pinned = render();
-  const fixed = measure(pinned.filter((m) => m.role === "system"));
+  const fixed = measure(pinned.filter((m) => !isContextHistory(m)));
   const protectedCost = Math.max(0, measure(pinned) - fixed);
   const available = shouldCompress ? (preparedFacts ?? extractContextFacts(sources)).filter((f) => owner.has(f.source.message)) : [];
   const query = textParts(messages[users.at(-1) ?? -1] ?? { role: "user", content: "", timestamp: 0 }).map((p) => p.text).join(" ");
@@ -248,7 +251,7 @@ export function buildWorkingContext(input: WorkingSetInput, preparedFacts?: Cont
   const reasons = !overBudget ? [] : [fixed > input.budget ? "固定设定/工具声明/当前世界快照已超过输入预算" : "最近保留轮次、当前工具链或未闭合工具组与固定设定合计超过输入预算；不可拆分"];
   const workingChars = contextChars(output);
   return { messages: output, facts: selected, diagnostics: { algorithm: CONTEXT_ALGORITHM, sourceHash, originalChars, workingChars,
-    retained: sources.length > offset + tailStart ? range(offset + tailStart, sources.length - 1) : null,
+    retained: sources.length ? range(shouldCompress ? compressionEnd : 0, sources.length - 1) : null,
     compressed, selectedFacts: selected, availableFacts: available.length, omittedFacts: available.length - selected.length,
     allocations: { fixed, protected: protectedCost, memory: Math.max(0, after - measure(pinned)), unused: Math.max(0, input.budget - after) }, overBudgetReasons: reasons },
     stats: { triggered: squashedMessages > 0, originalChars, compressedChars: workingChars, squashedMessages, squashedTurns, overBudget } };

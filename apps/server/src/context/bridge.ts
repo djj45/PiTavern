@@ -77,6 +77,7 @@ export interface AssembledContext {
 interface Piece {
   role: "system" | "user" | "assistant";
   text: string;
+  history?: boolean;
 }
 
 /** 把 ST 行映射成提示词侧消息（宏替换 + 角色正则与深度门控；ST 同样对历史消息做宏替换） */
@@ -86,7 +87,7 @@ function historyPieces(lines: StChatLine[], scripts: RegexScript[], env: MacroEn
     const depth = usable.length - 1 - index; // 0=最新
     const placement = line.is_user ? RegexPlacement.USER_INPUT : RegexPlacement.AI_OUTPUT;
     const text = applyRegex(substituteMacros(line.mes, env), scripts, { placement, depth, env });
-    return { role: (line.is_user ? "user" : "assistant") as Piece["role"], text };
+    return { role: (line.is_user ? "user" : "assistant") as Piece["role"], text, history: true };
   });
 }
 
@@ -104,15 +105,17 @@ function injectAtDepth(history: Piece[], injections: { depth: number; role: "sys
 }
 
 function toMessages(pieces: Piece[]): Message[] {
-  const now = Date.now();
+  const now = 0;
   return pieces.map<Message>((p, i) => {
+    const origin = p.history ? {} : { pitavernContext: "instruction" };
     if (p.role === "user") {
-      return { role: "user", content: p.text, timestamp: now + i };
+      return { ...origin, role: "user", content: p.text, timestamp: now + i };
     }
     if (p.role === "system") {
       return { role: "system", content: p.text, timestamp: now + i };
     }
     return {
+      ...origin,
       role: "assistant",
       content: [{ type: "text", text: p.text }],
       api: "openai-completions",

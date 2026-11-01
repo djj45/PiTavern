@@ -530,3 +530,46 @@ test('同哈希名称/描述发布可从 UI 迁移，世界数值不变，再次
   await expect(world.getByText('目标已是当前版本，无需迁移。', { exact: true })).toBeVisible();
   await expect(world.getByRole('button', { name: '应用迁移并备份' })).toHaveCount(0);
 });
+
+test('长局诊断显示保留/压缩范围、来源、字符量与估算预算，刷新后记录可读', async ({ page, app, request }) => {
+  await page.goto(app.baseURL);
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await createWorldChat(page, 'tavern-sword');
+  const chats = await (await request.get(app.baseURL + '/api/chats')).json() as Array<{ id: string; character: string }>;
+  const chat = chats.find((entry) => entry.character === '浏览器向导')!;
+  const file = path.join(app.runDir, 'st', chat.id);
+  const header = JSON.parse(fs.readFileSync(file, 'utf8').split('\n')[0]);
+  const lines: unknown[] = [header];
+  for (let turn = 1; turn <= 100; turn++) {
+    lines.push({ name: '旅人', is_user: true, is_system: false, mes: `第${turn}轮观察。`, send_date: '' });
+    lines.push({ name: '浏览器向导', is_user: false, is_system: false, send_date: '',
+      mes: '微风吹过石墙，远方灯火摇曳。'.repeat(50) + (turn === 1 ? '发现线索：旧井铜匣里是蓝色地图。' : '') });
+  }
+  fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+  await page.reload(); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.locator('aside li').filter({ hasText: '浏览器向导' }).first().getByRole('button').first().click();
+  await page.getByLabel('消息输入').fill('旧井铜匣里发现了什么地图？');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByText('模型原文', { exact: true })).toBeVisible();
+  const diagnosticsButton = page.getByRole('button', { name: '生成记录与上下文诊断', exact: true });
+  await expect(diagnosticsButton).toBeVisible();
+  await diagnosticsButton.click();
+  const dialog = page.getByRole('dialog', { name: '生成记录与上下文诊断', exact: true });
+  const memory = dialog.getByRole('region', { name: '长局记忆诊断' });
+  await expect(memory).toContainText('最近全文保留');
+  await expect(memory).toContainText('压缩范围');
+  await expect(memory).toContainText('字符量');
+  await expect(memory).toContainText('估算 token');
+  await memory.getByText('查看已发送线索及来源', { exact: true }).click();
+  await expect(memory.getByLabel('线索来源列表')).toContainText('旧井铜匣里是蓝色地图');
+  await expect(memory.getByLabel('线索来源列表')).toContainText('SHA-256');
+  const requests = fs.readFileSync(path.join(app.runDir, 'requests.ndjson'), 'utf8');
+  expect(requests).toContain('旧井铜匣里是蓝色地图');
+  expect(requests).toContain('当前权威世界快照');
+  await dialog.getByRole('button', { name: '关闭生成记录' }).click();
+  await page.reload(); await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.locator('aside li').filter({ hasText: '浏览器向导' }).first().getByRole('button').first().click();
+  await expect(diagnosticsButton).toBeVisible();
+  await diagnosticsButton.click();
+  await expect(dialog.getByRole('region', { name: '长局记忆诊断' })).toContainText('extractive-v1');
+});

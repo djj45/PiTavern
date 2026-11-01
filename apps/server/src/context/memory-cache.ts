@@ -1,14 +1,14 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { buildWorkingContext, CONTEXT_ALGORITHM, contentHash, contextSourceHash, extractContextFacts, prepareWorkingSources, textParts, type ContextFact, type WorkingSetInput } from "./working-set.ts";
+import { buildWorkingContext, CONTEXT_ALGORITHM, contentHash, contextSourceHash, extractContextFacts, isContextHistory, prepareWorkingSources, textParts, type ContextFact, type WorkingSetInput } from "./working-set.ts";
 interface CachedFacts { algorithm: string; key: string; digest: string; facts: ContextFact[] }
 
 /** Disposable, bounded source index. No files, chat metadata, or final budget-dependent prompts are cached. */
 export class ContextFactCache {
   constructor(private readonly entries: Map<string, unknown> = new Map(), private readonly capacity = 16) {}
   get(input: WorkingSetInput, scope: string): { facts: ContextFact[]; status: "hit" | "rebuilt" } {
-    const { sources, offset, tailStart } = prepareWorkingSources(input);
+    const { sources, compressionEnd } = prepareWorkingSources(input);
     // The current agent loop grows without changing the completed-history index.
-    const completed = sources.slice(0, offset + tailStart);
+    const completed = sources.slice(0, compressionEnd);
     const key = contextSourceHash(completed, JSON.stringify([scope, input.sourceRevision ?? ""]));
     const raw = this.entries.get(key) as Partial<CachedFacts> | undefined;
     if (raw?.algorithm === CONTEXT_ALGORITHM && raw.key === key && Array.isArray(raw.facts)
@@ -27,7 +27,7 @@ function validSources(messages: AgentMessage[], facts: ContextFact[]): boolean {
   const sources = new Map<string, { text: string; hash: string; turn: number; role: string }>();
   let turn = 0;
   messages.forEach((m, i) => {
-    if (m.role === "user") turn++;
+    if (m.role === "user" && isContextHistory(m)) turn++;
     for (const p of textParts(m)) sources.set(`${i}:${p.part}`, { text: p.text, hash: contentHash(p.text), turn, role: m.role });
   });
   const kinds = new Set(["clue", "promise", "event", "summary", "narrative", "intent", "tool_receipt"]);
