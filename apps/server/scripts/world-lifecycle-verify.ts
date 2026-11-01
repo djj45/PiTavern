@@ -189,7 +189,10 @@ test("重启、备份和单文件 JSONL 都保留旧聊天世界与模板", () =
   });
   store.appendMessage(chat.id, { name: "世界向导", is_user: false, is_system: false, mes: "旧回答" });
   const snapshot = store.readWorld(chat.id)!.snapshot;
+  const backupsBeforeCorrection = new Set(store.backups(chat.id).backups.map((entry) => entry.id));
   store.correctWorld(chat.id, { ...snapshot, money: { ...snapshot.money, player: 77 } }, store.revisionId(chat.id));
+  const correctionBackup = store.backups(chat.id).backups.find((entry) => !backupsBeforeCorrection.has(entry.id));
+  assert.ok(correctionBackup, "手工修正应生成新的备份");
 
   const restarted = new ChatStore(st);
   const restartedState = restarted.readWorld(chat.id)!;
@@ -208,9 +211,7 @@ test("重启、备份和单文件 JSONL 都保留旧聊天世界与模板", () =
   assert.equal(result.status, "staged");
   assert.equal(transaction.snapshot.money.player, 67);
 
-  const backup = store.backups(chat.id).backups[0];
-  assert.ok(backup);
-  store.restoreBackup(chat.id, backup.id, store.revisionId(chat.id));
+  store.restoreBackup(chat.id, correctionBackup.id, store.revisionId(chat.id));
   const restored = store.readWorld(chat.id)!;
   assert.ok(restored.template);
   assert.equal(restored.snapshot.templateHash, snapshot.templateHash);

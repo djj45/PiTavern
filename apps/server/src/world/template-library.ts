@@ -157,9 +157,20 @@ export class WorldTemplateLibrary {
     };
   }
 
+  /** 版本内容不可变，但显示名/描述属于发布元数据；名称变更发布不产生新内容哈希。 */
+  private applyVersionMetadata(entry: IndexEntry, contentHash: string, record: WorldTemplateRecord): WorldTemplateRecord {
+    const version = entry.versions.find((item) => item.contentHash === contentHash);
+    const next = { ...record };
+    if (version?.name) next.name = version.name;
+    if (version?.description) next.description = version.description; else delete next.description;
+    return next;
+  }
+
   private editor(entry: IndexEntry): WorldTemplateEditorDto {
     const summary = this.entrySummary(entry);
-    const published = entry.publishedHash ? this.readVersion(entry.publishedHash) : undefined;
+    const published = entry.publishedHash
+      ? this.applyVersionMetadata(entry, entry.publishedHash, this.readVersion(entry.publishedHash))
+      : undefined;
     const initial = createInitialWorldSnapshot(createWorldTemplateRecord(entry.draft, { name: entry.name, description: entry.description }));
     return {
       ...summary, draft: clone(entry.draft), ...(published ? { published } : {}),
@@ -186,8 +197,10 @@ export class WorldTemplateLibrary {
     const name = cleanName(nameInput) || "未命名模板";
     const description = cleanDescription(descriptionInput);
     const existing = new Set(Object.keys(index.templates));
+    // 内置模板 ID 与模板库共用选择器；导入时冲突必须改名，否则新聊天会优先命中内置规则。
     const keepId = options.preserveId && typeof template.templateId === "string"
-      && template.templateId.trim().length > 0 && !existing.has(template.templateId);
+      && template.templateId.trim().length > 0 && !existing.has(template.templateId)
+      && !getWorldTemplate(template.templateId);
     const id = keepId ? template.templateId : this.uniqueId(existing);
     const next = clone(template);
     next.templateId = id;
@@ -279,7 +292,17 @@ export class WorldTemplateLibrary {
     if (!entry) throw new WorldTemplateNotFoundError();
     if (!Number.isInteger(expectedRevision) || entry.draftRevision !== expectedRevision) throw new WorldTemplateConflictError();
     const draftRecord = createWorldTemplateRecord(entry.draft, { name: entry.name, ...(entry.description ? { description: entry.description } : {}) });
-    if (entry.publishedHash === draftRecord.contentHash) return this.editor(entry);
+    if (entry.publishedHash === draftRecord.contentHash) {
+      // 模板正文未变，但显示名/描述可能已改；更新当前发布版本的元数据，不新建内容版本。
+      const version = entry.versions.find((item) => item.contentHash === entry.publishedHash);
+      if (version) {
+        version.name = entry.name;
+        if (entry.description) version.description = entry.description; else delete version.description;
+      }
+      entry.updatedAt = now();
+      this.writeIndex(index);
+      return this.editor(entry);
+    }
     const nextVersion = entry.versions.reduce((max, version) => Math.max(max, version.templateVersion), 0) + 1;
     const template = clone(entry.draft);
     template.templateVersion = nextVersion;
@@ -320,16 +343,15 @@ export class WorldTemplateLibrary {
     if (!hash) throw new WorldTemplateNotFoundError("模板尚未发布");
     const record = this.readVersion(hash);
     if (record.template.templateId !== id) throw new Error("模板版本与模板 ID 不匹配");
-    return record;
+    return this.applyVersionMetadata(entry, hash, record);
   }
 
   /** 按不可变版本哈希读取，供新聊天选择精确版本；只允许当前模板库仍列出的版本。 */
   resolveHash(contentHash: string): WorldTemplateRecord {
-    const entries = Object.values(this.readIndex().templates);
-    if (!entries.some((entry) => entry.versions.some((version) => version.contentHash === contentHash))) {
-      throw new WorldTemplateNotFoundError("模板版本不存在或已删除");
-    }
-    return this.readVersion(contentHash);
+    const entry = Object.values(this.readIndex().templates)
+      .find((candidate) => candidate.versions.some((version) => version.contentHash === contentHash));
+    if (!entry) throw new WorldTemplateNotFoundError("模板版本不存在或已删除");
+    return this.applyVersionMetadata(entry, contentHash, this.readVersion(contentHash));
   }
 
   latestSummaries(): WorldTemplateSummaryDto[] {
@@ -340,7 +362,8 @@ export class WorldTemplateLibrary {
       const record = this.readVersion(entry.publishedHash);
       const version = entry.versions.find((item) => item.contentHash === entry.publishedHash);
       summaries.push({
-        id: entry.id, name: entry.name, ...(entry.description ? { description: entry.description } : {}),
+        id: entry.id, name: version?.name ?? entry.name,
+        ...((version?.description ?? entry.description) ? { description: version?.description ?? entry.description } : {}),
         templateVersion: version?.templateVersion ?? record.template.templateVersion,
         rulesVersion: record.template.rulesVersion, contentHash: record.contentHash,
         locations: record.template.locations.length, actors: record.template.actors.length, items: record.template.items.length,

@@ -151,6 +151,9 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
     onClose();
   };
 
+  const confirmDiscard = (action: string): boolean =>
+    !dirty || window.confirm(`当前模板有未保存的修改，确定放弃并${action}？`);
+
   const updateTemplate = (mutate: (draft: WorldTemplate) => void) => {
     setTemplate((current) => {
       if (!current) return current;
@@ -177,7 +180,7 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
   };
 
   const createBlank = async () => {
-    if (busy) return;
+    if (busy || !confirmDiscard("新建空白模板")) return;
     setBusy(true); setError(""); setStatus("");
     try {
       const value = await api.createWorldTemplateBlank(newName.trim() || undefined);
@@ -194,7 +197,7 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
   };
 
   const copyBuiltin = async () => {
-    if (busy || !builtinId) return;
+    if (busy || !builtinId || !confirmDiscard("复制内置模板")) return;
     const sourceName = builtins.find((entry) => entry.id === builtinId)?.name ?? builtinId;
     setBusy(true); setError(""); setStatus("");
     try {
@@ -264,6 +267,9 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
     if (dirty) { setError("请先保存草稿，再发布。"); return; }
     const id = editor.id;
     const previousVersions = editor.versions.length;
+    const metadataChanged = !!editor.published && (
+      name !== (editor.published.name ?? "") || (description || "") !== (editor.published.description ?? "")
+    );
     setBusy(true); setError(""); setStatus("");
     try {
       const value = await api.publishWorldTemplate(id, editor.draftRevision);
@@ -271,7 +277,9 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
       applyEditor(value);
       setStatus(created
         ? `已发布版本 v${value.publishedVersion ?? value.versions[0]?.templateVersion}`
-        : "草稿与当前发布版本一致，没有生成新版本");
+        : metadataChanged
+          ? "已更新发布名称/描述（模板内容未变，未生成新版本）"
+          : "草稿与当前发布版本一致，没有生成新版本");
       await refreshList();
       onChanged();
     } catch (cause) {
@@ -331,7 +339,7 @@ export default function WorldTemplatesDialog({ onClose, onChanged }: WorldTempla
   };
 
   const importFile = async (file: File | undefined) => {
-    if (!file || busy) return;
+    if (!file || busy || !confirmDiscard("导入模板")) return;
     setBusy(true); setError(""); setStatus("");
     try {
       let payload: unknown;

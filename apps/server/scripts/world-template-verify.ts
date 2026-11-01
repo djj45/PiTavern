@@ -115,11 +115,26 @@ assert.equal(chats.readWorld(chatV2.id)!.template!.items[0].price, 40);
 check("新聊天按 contentHash 选择精确模板版本，并保存自定义名称");
 
 const v3 = library.saveDraft(blank.id, v2.draftRevision, { name: "验收世界", template: withPrice(v2.draft, 50) });
-library.publish(blank.id, v3.draftRevision);
+const v3Published = library.publish(blank.id, v3.draftRevision);
 assert.equal(chats.readWorld(chatV1.id)!.snapshot.templateVersion, 1);
 assert.equal(chats.readWorld(chatV1.id)!.template!.items[0].price, 30);
 assert.equal(chats.readWorld(chatV2.id)!.snapshot.templateVersion, 2);
 check("模板后续发布不改变已有聊天的内嵌版本");
+
+const renamed = library.saveDraft(blank.id, v3Published.draftRevision, {
+  name: "验收世界·改名", description: "只发布元数据", template: v3Published.draft,
+});
+const renamedPublished = library.publish(blank.id, renamed.draftRevision);
+assert.equal(renamedPublished.versions.length, 3, "仅改名不应新增内容版本");
+assert.equal(renamedPublished.publishedVersion, 3);
+assert.equal(renamedPublished.published?.name, "验收世界·改名");
+assert.equal(library.resolvePublished(blank.id).name, "验收世界·改名");
+assert.ok(library.latestSummaries().some((summary) => summary.id === blank.id && summary.name === "验收世界·改名"));
+const renamedChat = chats.createChat("验收角色", null);
+sessions.initializeChatWorldByHash(renamedChat.id, v3Published.publishedHash!, chats.revisionId(renamedChat.id), false);
+assert.equal(sessions.snapshot(renamedChat.id)!.world?.templateName, "验收世界·改名");
+assert.equal(sessions.snapshot(chatV1.id)!.world?.templateName, "验收世界");
+check("仅修改名称/描述并发布：更新发布元数据，不新增内容版本；旧聊天名称不变");
 
 // C. 冲突和删除 ---------------------------------------------------------------
 const a = new WorldTemplateLibrary(st), b = new WorldTemplateLibrary(st);
@@ -138,6 +153,27 @@ const imported = library.importTemplate(exported);
 assert.notEqual(imported.id, copied.id);
 assert.deepEqual(imported.draft.locations, copied.draft.locations);
 check("复制内置模板、导出/导入模板 JSON");
+
+const collisionTemplate: WorldTemplate = {
+  schemaVersion: 1, templateId: "tavern-sword", templateVersion: 1, rulesVersion: 1,
+  locations: [{ id: "tavern", name: "酒馆" }],
+  actors: [{ id: "player", name: "旅人" }, { id: "merchant", name: "掌柜" }],
+  items: [{ id: "sword", name: "长剑", price: 7 }],
+  initial: { actorId: "player", locationId: "tavern", money: 10, inventory: [] },
+};
+const collided = library.importTemplate({
+  format: "pitavern-world-template", version: 1, name: "冲突剑价", template: collisionTemplate,
+});
+assert.notEqual(collided.id, "tavern-sword", "导入模板 ID 与内置模板冲突时必须重命名");
+const collidedPublished = library.publish(collided.id, collided.draftRevision);
+assert.equal(collidedPublished.publishedVersion, 1);
+assert.equal(library.resolvePublished(collided.id).template.items[0].price, 7);
+assert.ok(library.latestSummaries().some((summary) => summary.id === collided.id && summary.name === "冲突剑价"));
+const collisionChat = chats.createChat("验收角色", null);
+sessions.initializeChatWorld(collisionChat.id, collided.id, chats.revisionId(collisionChat.id), false);
+assert.equal(chats.readWorld(collisionChat.id)!.template!.items[0].price, 7);
+assert.equal(sessions.snapshot(collisionChat.id)!.world?.templateName, "冲突剑价");
+check("导入模板与内置 ID 冲突：分配新 ID，新聊天使用自定义规则而非内置模板");
 
 const removedId = blank.id;
 library.delete(removedId);

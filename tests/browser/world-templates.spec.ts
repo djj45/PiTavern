@@ -15,7 +15,8 @@ interface LibrarySummary {
 interface EditorDto {
   id: string; name: string; description?: string; draftRevision: number;
   publishedHash?: string; publishedVersion?: number; versionCount: number; draftDirty: boolean;
-  draft: WorldTemplate; versions: Array<{ contentHash: string; templateVersion: number; rulesVersion: number; createdAt: string }>;
+  draft: WorldTemplate; published?: { contentHash: string; name?: string; description?: string };
+  versions: Array<{ contentHash: string; templateVersion: number; rulesVersion: number; createdAt: string }>;
   initialSnapshot?: WorldSnapshot;
 }
 interface ChatWorldSnapshot {
@@ -325,6 +326,60 @@ test('复制内置模板、导出草稿 JSON 并导入为新草稿', async ({ pa
   expect(importedEditor.draft.templateId).toBe(imported.id);
   expect(importedEditor.draft.locations).toHaveLength(2);
   expect((await getEditor(request, app.baseURL, copy.id)).draft.locations).toHaveLength(2);
+});
+
+test('新建空白前保护未保存修改：取消后保留当前金额', async ({ page, app }) => {
+  const dialog = await openTemplates(page, app.baseURL);
+  await dialog.getByLabel('新模板名').fill('未保存模板');
+  await dialog.getByRole('button', { name: '新建空白' }).click();
+  await expect(dialog.getByLabel('模板名称')).toHaveValue('未保存模板');
+  await dialog.getByLabel('初始金额').fill('123');
+  let prompt = '';
+  page.once('dialog', (confirm) => { prompt = confirm.message(); void confirm.dismiss(); });
+  await dialog.getByRole('button', { name: '新建空白' }).click();
+  expect(prompt).toContain('未保存');
+  await expect(dialog.getByLabel('模板名称')).toHaveValue('未保存模板');
+  await expect(dialog.getByLabel('初始金额')).toHaveValue('123');
+
+  page.once('dialog', (confirm) => void confirm.accept());
+  await dialog.getByLabel('新模板名').fill('第二个模板');
+  await dialog.getByRole('button', { name: '新建空白' }).click();
+  await expect(dialog.getByLabel('模板名称')).toHaveValue('第二个模板');
+});
+
+test('仅修改名称后发布：新聊天使用新名称且不增加内容版本', async ({ page, app, request }) => {
+  const dialog = await openTemplates(page, app.baseURL);
+  await dialog.getByLabel('新模板名').fill('旧名称');
+  await dialog.getByRole('button', { name: '新建空白' }).click();
+  await dialog.getByRole('button', { name: '发布模板' }).click();
+  await expect(dialog.getByRole('status')).toContainText('已发布版本 v1');
+  await expect(dialog.getByRole('list', { name: '模板版本列表' }).locator('li')).toHaveCount(1);
+
+  let library = await getLibrary(request, app.baseURL);
+  const original = library.find((entry) => entry.name === '旧名称')!;
+  await dialog.getByLabel('模板名称').fill('新名称');
+  await dialog.getByRole('button', { name: '保存草稿' }).click();
+  await expect(dialog.getByRole('status')).toContainText('草稿已保存');
+  await dialog.getByRole('button', { name: '发布模板' }).click();
+  await expect(dialog.getByRole('status')).toContainText('已更新发布名称/描述');
+  await expect(dialog.getByRole('list', { name: '模板版本列表' }).locator('li')).toHaveCount(1);
+
+  library = await getLibrary(request, app.baseURL);
+  const renamed = library.find((entry) => entry.id === original.id)!;
+  expect(renamed.name).toBe('新名称');
+  expect(renamed.publishedVersion).toBe(1);
+  const editor = await getEditor(request, app.baseURL, original.id);
+  expect(editor.published?.name).toBe('新名称');
+  expect(editor.versions).toHaveLength(1);
+  await dialog.getByRole('button', { name: '关闭世界模板' }).click();
+  await expect(dialog).not.toBeVisible();
+
+  await page.getByLabel('新聊天世界模板').selectOption(original.id);
+  await page.getByRole('button', { name: '＋ 开始新对话', exact: true }).click();
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  const world = page.getByRole('dialog', { name: '世界状态' });
+  await expect(world).toContainText('新名称');
+  await world.getByRole('button', { name: '关闭世界状态' }).click();
 });
 
 test('世界模板编辑器在 390px 手机宽度可完整操作且无水平溢出', async ({ page, app }) => {
