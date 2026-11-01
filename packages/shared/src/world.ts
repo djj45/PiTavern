@@ -47,10 +47,11 @@ export interface WorldInitialState {
   locationId: string;
   money: number;
   inventory: WorldInventoryEntry[];
+  knowledge?: WorldInitialKnowledge[];
 }
 
 export interface WorldTemplate {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   templateId: string;
   templateVersion: number;
   rulesVersion: number;
@@ -58,6 +59,8 @@ export interface WorldTemplate {
   actors: WorldActorDefinition[];
   items: WorldItemDefinition[];
   initial: WorldInitialState;
+  facts?: WorldFactDefinition[];
+  interactions?: WorldInteractionDefinition[];
 }
 
 /** 模板内容哈希是模板身份；模板更新产生新记录，不覆盖旧记录。 */
@@ -85,7 +88,9 @@ export interface WorldEvent {
   id: string;
   commandId: string;
   turn: number;
-  type: "move" | "purchase" | "transfer" | "advance_time";
+  type: "move" | "purchase" | "transfer" | "advance_time" | "knowledge_learn" | "knowledge_publish";
+  factId?: string;
+  interactionId?: string;
   actorId?: string;
   targetId?: string;
   itemId?: string;
@@ -100,7 +105,7 @@ export interface WorldEvent {
  * recentEvents 只做审计，不用于重放恢复。
  */
 export interface WorldSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   revision: number;
   templateHash: string;
   templateVersion: number;
@@ -111,6 +116,8 @@ export interface WorldSnapshot {
   money: Record<string, number>;
   inventory: WorldInventoryEntry[];
   recentEvents: WorldEvent[];
+  knowledge?: WorldKnowledgeEntry[];
+  publishedFactIds?: string[];
 }
 
 /** 聊天级模板表；旧模板记录必须保留，快照才能持续执行旧规则。 */
@@ -235,7 +242,7 @@ export interface WorldTemplateExportDto {
 }
 
 
-export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules";
+export type WorldTemplateChangeEntity = "template" | "location" | "actor" | "item" | "initial" | "rules" | "fact" | "interaction";
 export type WorldTemplateChangeAction = "added" | "removed" | "modified";
 
 /** 0.6.0 模板迁移差异；blocking 变更禁止应用。 */
@@ -352,3 +359,27 @@ export interface WorldChatStateDto {
   capability: WorldEngineCapability;
   error?: string;
 }
+
+/** 0.8.0: v2 only; v1 remains strictly readable without these fields. */
+export interface WorldFactDefinition { id: string; text: string; visibility: "public" | "restricted"; description?: string }
+export interface WorldInitialKnowledge { actorId: string; factId: string }
+export interface WorldKnowledgeSource { type: "initial" | "interaction"; turn: number; interactionId?: string; fromActorId?: string }
+export interface WorldKnowledgeEntry extends WorldInitialKnowledge { source: WorldKnowledgeSource }
+export type WorldInteractionCondition =
+  | { type: "at_location"; locationId: string }
+  | { type: "npc_present"; actorId: string }
+  | { type: "has_item"; itemId: string; quantity: number }
+  | { type: "knows_fact"; actorId: string; factId: string };
+export type WorldInteractionEffect =
+  | { type: "learn"; actorId: string; factId: string; fromActorId?: string }
+  | { type: "publish"; factId: string };
+export interface WorldInteractionDefinition { id: string; name: string; description?: string; conditions: WorldInteractionCondition[]; effects: WorldInteractionEffect[] }
+export interface WorldKnownFact { id: string; text: string; source: WorldKnowledgeSource | {type: "public"; turn: number} }
+/** Model DTO: never add complete knowledge relations or template rules here. */
+export interface WorldModelSnapshot extends Omit<WorldSnapshot, "knowledge" | "publishedFactIds"> {
+  viewpointId: string;
+  knowledgeKey: string;
+  knownFacts: WorldKnownFact[];
+  publicInteractions: Array<{id: string; name: string}>;
+}
+export interface WorldInteractionResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; knownFacts?: WorldKnownFact[] }

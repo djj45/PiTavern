@@ -25,7 +25,7 @@ const event = Type.Object({
   worldTimeMinutes: clock, summary: Type.String(),
 }, strict);
 
-export const WorldTemplateSchema = Type.Object({
+const templateV1 = Type.Object({
   schemaVersion: Type.Literal(WORLD_SCHEMA_VERSION), templateId: id,
   templateVersion: integer(Number.MAX_SAFE_INTEGER, 1), rulesVersion: integer(Number.MAX_SAFE_INTEGER, 1),
   locations: Type.Array(Type.Object(definition, strict), { minItems: 1 }),
@@ -34,7 +34,7 @@ export const WorldTemplateSchema = Type.Object({
   initial: Type.Object({ actorId: id, locationId: id, money, inventory: Type.Array(inventoryEntry) }, strict),
 }, strict);
 
-export const WorldSnapshotSchema = Type.Object({
+const snapshotV1 = Type.Object({
   schemaVersion: Type.Literal(WORLD_SCHEMA_VERSION), revision: integer(), templateHash: hash,
   templateVersion: integer(Number.MAX_SAFE_INTEGER, 1), rulesVersion: integer(Number.MAX_SAFE_INTEGER, 1),
   clockMinutes: clock,
@@ -42,6 +42,33 @@ export const WorldSnapshotSchema = Type.Object({
   actors: Type.Record(id, actor, strict), money: Type.Record(id, money, strict),
   inventory: Type.Array(inventoryEntry), recentEvents: Type.Array(event, { maxItems: WORLD_MAX_RECENT_EVENTS }),
 }, strict);
+
+const fact = Type.Object({id, text: Type.String({minLength:1,maxLength:2000}), visibility: Type.Union([Type.Literal("public"),Type.Literal("restricted")]), description: Type.Optional(Type.String({maxLength:2000}))}, strict);
+const relation = {actorId:id, factId:id};
+const source = Type.Union([
+  Type.Object({type:Type.Literal("initial"),turn:Type.Literal(0)},strict),
+  Type.Object({type:Type.Literal("interaction"),turn:integer(),interactionId:id,fromActorId:Type.Optional(id)},strict),
+]);
+const condition = Type.Union([
+  Type.Object({type:Type.Literal("at_location"),locationId:id},strict),
+  Type.Object({type:Type.Literal("npc_present"),actorId:id},strict),
+  Type.Object({type:Type.Literal("has_item"),itemId:id,quantity},strict),
+  Type.Object({type:Type.Literal("knows_fact"),...relation},strict),
+]);
+const effect = Type.Union([
+  Type.Object({type:Type.Literal("learn"),...relation,fromActorId:Type.Optional(id)},strict),
+  Type.Object({type:Type.Literal("publish"),factId:id},strict),
+]);
+const interaction = Type.Object({id,name:Type.String({minLength:1,maxLength:100}),description:Type.Optional(Type.String({maxLength:2000})),conditions:Type.Array(condition,{maxItems:16}),effects:Type.Array(effect,{minItems:1,maxItems:16})},strict);
+const eventV2 = Type.Object({...event.properties, type:Type.Union([...event.properties.type.anyOf,Type.Literal("knowledge_learn"),Type.Literal("knowledge_publish")]),factId:Type.Optional(id),interactionId:Type.Optional(id)},strict);
+export const WorldTemplateSchema = Type.Union([templateV1,Type.Object({...templateV1.properties,
+  schemaVersion:Type.Literal(2), facts:Type.Array(fact,{maxItems:256}), interactions:Type.Array(interaction,{maxItems:128}),
+  initial:Type.Object({...templateV1.properties.initial.properties,knowledge:Type.Array(Type.Object(relation,strict),{maxItems:2048})},strict),
+},strict)]);
+export const WorldSnapshotSchema = Type.Union([snapshotV1,Type.Object({...snapshotV1.properties,
+  schemaVersion:Type.Literal(2),knowledge:Type.Array(Type.Object({...relation,source},strict),{maxItems:2048}),
+  publishedFactIds:Type.Array(id,{maxItems:256,uniqueItems:true}),recentEvents:Type.Array(eventV2,{maxItems:WORLD_MAX_RECENT_EVENTS}),
+},strict)]);
 
 const commandSchemas = {
   move_to: Type.Object({ commandId: id, type: Type.Literal("move_to"), actorId: id, locationId: id }, strict),
@@ -100,6 +127,24 @@ export function parseWorldTemplate(input: unknown): WorldTemplate {
   if (!actors.has(template.initial.actorId)) invalid("初始玩家角色未声明");
   if (!template.locations.some((entry) => entry.id === template.initial.locationId)) invalid("初始地点未声明");
   checkInventory(template.initial.inventory, actors, new Set(template.items.map((entry) => entry.id)));
+  if (template.schemaVersion === 2) {
+    const facts = new Set(template.facts!.map(f => f.id));
+    const interactions = template.interactions!;
+    unique(template.facts!.map(f=>f.id), "事实 ID"); unique(interactions.map(i=>i.id), "交互 ID");
+    checkKnowledge(template.initial.knowledge!, actors, facts);
+    for (const i of interactions) {
+      for (const c of i.conditions) {
+        if ("actorId" in c && !actors.has(c.actorId)) invalid("交互角色引用无效");
+        if ("factId" in c && !facts.has(c.factId)) invalid("交互事实引用无效");
+        if ("itemId" in c && !template.items.some(x=>x.id===c.itemId)) invalid("交互物品引用无效");
+        if ("locationId" in c && !template.locations.some(x=>x.id===c.locationId)) invalid("交互地点引用无效");
+        if (c.type === "npc_present" && c.actorId === template.initial.actorId) invalid("在场 NPC 不能是玩家");
+      }
+      for (const e of i.effects) {
+        if (!facts.has(e.factId) || ("actorId" in e && !actors.has(e.actorId)) || ("fromActorId" in e && e.fromActorId !== undefined && !actors.has(e.fromActorId))) invalid("交互效果引用无效");
+      }
+    }
+  }
   return template;
 }
 
@@ -125,11 +170,19 @@ export function parseWorldSnapshot(input: unknown): WorldSnapshot {
       if (key !== undefined && !Object.hasOwn(snapshot.actors, key)) invalid("事件引用了未声明角色");
     }
   }
+  if (snapshot.schemaVersion === 2) {
+    checkKnowledge(snapshot.knowledge!,new Set(actorIds));
+    for (const entry of snapshot.knowledge!) if (entry.source.turn < 0 || (entry.source.fromActorId && !snapshot.actors[entry.source.fromActorId])) invalid("获知来源无效");
+    for (const e of snapshot.recentEvents) {
+      if (e.type.startsWith("knowledge_") && (!e.factId || !e.interactionId || (e.type === "knowledge_learn" && !e.actorId))) invalid("知识事件缺少来源");
+    }
+  }
   return snapshot;
 }
 
 /** 模板可用时再检查跨文档引用；模板缺失时仍允许读取结构合法的快照。 */
 export function validateWorldReferences(snapshot: WorldSnapshot, template: WorldTemplate): void {
+  if (snapshot.schemaVersion !== template.schemaVersion) invalid("快照与模板 schema 版本不一致");
   const actors = new Set(template.actors.map((entry) => entry.id));
   const locations = new Set(template.locations.map((entry) => entry.id));
   const items = new Set(template.items.map((entry) => entry.id));
@@ -141,6 +194,13 @@ export function validateWorldReferences(snapshot: WorldSnapshot, template: World
   }
   if (snapshot.scene.locationId !== snapshot.actors[template.initial.actorId].locationId) invalid("当前场景必须跟随玩家位置");
   checkInventory(snapshot.inventory, actors, items);
+  if (snapshot.schemaVersion === 2) {
+    const facts = new Set(template.facts!.map(f=>f.id)), interactions = new Set(template.interactions!.map(i=>i.id));
+    checkKnowledge(snapshot.knowledge!,actors,facts);
+    if (snapshot.publishedFactIds!.some(id=>!facts.has(id))) invalid("公开事实引用无效");
+    for (const k of snapshot.knowledge!) if (k.source.interactionId && !interactions.has(k.source.interactionId)) invalid("获知交互来源不存在");
+    for (const e of snapshot.recentEvents) if ((e.factId && !facts.has(e.factId)) || (e.interactionId && !interactions.has(e.interactionId))) invalid("知识事件引用无效");
+  }
   if (snapshot.recentEvents.some((entry) => entry.itemId !== undefined && !items.has(entry.itemId))) invalid("事件物品与模板不一致");
 }
 
@@ -148,4 +208,9 @@ export function parseWorldCommand(input: unknown): WorldCommand {
   const type = input && typeof input === "object" ? (input as { type?: unknown }).type : undefined;
   if (typeof type !== "string" || !Object.hasOwn(commandSchemas, type)) return invalid("未知世界命令");
   return parse<WorldCommand>(commandSchemas[type as keyof typeof commandSchemas], input, "世界命令");
+}
+
+function checkKnowledge(entries: Array<{actorId:string;factId:string}>, actors:Set<string>, facts?:Set<string>):void {
+  unique(entries.map(e=>JSON.stringify([e.actorId,e.factId])),"知情关系");
+  if(entries.some(e=>!actors.has(e.actorId) || (facts && !facts.has(e.factId)))) invalid("知情关系引用无效");
 }

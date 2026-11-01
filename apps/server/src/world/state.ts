@@ -28,12 +28,13 @@ export function createInitialWorldSnapshot(input: WorldTemplateRecord): WorldSna
     id: entry.id, locationId: template.initial.locationId, status: "alive" as const,
   }]));
   return {
-    schemaVersion: WORLD_SCHEMA_VERSION, revision: 0,
+    schemaVersion: template.schemaVersion, revision: 0,
     templateHash: record.contentHash, templateVersion: template.templateVersion, rulesVersion: template.rulesVersion,
     clockMinutes: 0,
     scene: { locationId: template.initial.locationId, presentActorIds: presentActorIds(actors, template.initial.locationId) },
     actors, money: Object.fromEntries(template.actors.map((entry) => [entry.id, entry.id === template.initial.actorId ? template.initial.money : 0])),
     inventory: structuredClone(template.initial.inventory), recentEvents: [],
+    ...(template.schemaVersion === 2 ? {knowledge: (template.initial.knowledge ?? []).map(k=>({...k,source:{type:"initial" as const,turn:0}})),publishedFactIds:[]} : {}),
   };
 }
 
