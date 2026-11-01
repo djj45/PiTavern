@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2, "templateId": "knowledge-tavern", "templateVersion": 1, "rulesVersion": 1,
+  "locations": [{"id":"tavern","name":"旧酒馆"},{"id":"square","name":"广场"}],
+  "actors": [{"id":"player","name":"旅人"},{"id":"innkeeper","name":"掌柜"},{"id":"bystander","name":"旁观者"}],
+  "items": [{"id":"letter","name":"介绍信","price":0},{"id":"sword","name":"长剑","price":17}],
+  "initial": {"actorId":"player","locationId":"tavern","money":100,"inventory":[{"ownerId":"player","itemId":"letter","quantity":1},{"ownerId":"innkeeper","itemId":"sword","quantity":10}],"knowledge":[{"actorId":"innkeeper","factId":"hidden_fireplace_passage"}]},
+  "facts": [{"id":"renovation","text":"旧酒馆正在维修。","visibility":"public"},{"id":"hidden_fireplace_passage","text":"壁炉后有密道，铜铃下的暗扣通向地窖。","visibility":"restricted","description":"作者私记：暗扣密码灰蓝七星，禁止作为公共说明发送。"}],
+  "interactions": [{"id":"ask_innkeeper_about_cellar","name":"向掌柜出示介绍信并询问","description":"内部条件：介绍信认证后才向旅人透露壁炉密道。","conditions":[{"type":"at_location","locationId":"tavern"},{"type":"npc_present","actorId":"innkeeper"},{"type":"has_item","itemId":"letter","quantity":1},{"type":"knows_fact","actorId":"innkeeper","factId":"hidden_fireplace_passage"}],"effects":[{"type":"learn","actorId":"player","factId":"hidden_fireplace_passage","fromActorId":"innkeeper"}]}]
+}
