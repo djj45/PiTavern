@@ -148,6 +148,19 @@ export function diffWorldTemplateRecords(from: WorldTemplateRecord, to: WorldTem
   }
   for(const quest of to.template.quests??[])if(!(from.template.quests??[]).some(q=>q.id===quest.id))changes.push(addedChange("quest",quest.id,quest.name,"只增加定义，不接取、推进或奖励"));
   if(JSON.stringify(from.template.quests??[])!==JSON.stringify(to.template.quests??[]))warnings.push("任务只增加定义，各恢复点保持原有进度；新增任务未接取，不自动奖励。");
+  const nextSchedules = new Map((to.template.schedules??[]).map(s=>[s.id,s]));
+  for (const schedule of from.template.schedules??[]) {
+    const next = nextSchedules.get(schedule.id);
+    if (!next || JSON.stringify(next)!==JSON.stringify(schedule)) {
+      const change:WorldTemplateChangeDto={entity:"schedule",action:next?"modified":"removed",id:schedule.id,label:"已有日程定义",
+        detail:"首版不支持修改、删除或改ID；日程不重算历史",blocking:true};
+      changes.push(change);blocking.push(change);
+    }
+  }
+  for (const schedule of to.template.schedules??[]) if (!(from.template.schedules??[]).some(s=>s.id===schedule.id)) {
+    changes.push(addedChange("schedule",schedule.id,"新增NPC日程","从各恢复点自己的当前时间启用，不补跑或移动角色"));
+    warnings.push("新增日程只处理各恢复点当前时刻之后的触发点；时钟、位置和既有进度保持。");
+  }
   compareInitial(from.template, to.template, changes, blocking, warnings);
   return { changes, blocking, warnings };
 }
@@ -186,7 +199,10 @@ export function planWorldSnapshotMigration(snapshotInput: unknown, from: WorldTe
             const next = structuredClone(source);
             next.schemaVersion = to.template.schemaVersion;
             if (source.schemaVersion === 1 && to.template.schemaVersion >= 2) {next.knowledge=[];next.publishedFactIds=[];}
-            if(source.schemaVersion<3 && to.template.schemaVersion===3)next.questStates=[];
+            if(source.schemaVersion<3 && to.template.schemaVersion>=3)next.questStates=[];
+            if(to.template.schemaVersion===4) next.scheduleStates=to.template.schedules!.map(schedule=>
+              source.scheduleStates?.find(s=>s.scheduleId===schedule.id) ??
+              {scheduleId:schedule.id,activatedAt:source.clockMinutes,processedThrough:source.clockMinutes});
             next.templateHash = to.contentHash;
             next.templateVersion = to.template.templateVersion;
             next.rulesVersion = to.template.rulesVersion;
