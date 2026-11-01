@@ -83,7 +83,7 @@ npm run build && npm run verify:browser # 46 项真实界面验收，独立合�
 - **M6 打磨** ✅ 世界书计时效果（sticky 保活→到期自动进 cooldown 压制；delay 前置压制；状态持久化 `chat_metadata.timedWorldInfo`，单位消息数，对照 ST WorldInfoTimedEffects）；导入导出（侧栏上传角色卡 PNG/JSON、设置导入世界书、聊天导出 MD/JSONL）；主题（夜琥珀/林间绿/羊皮纸，顶栏「主题」打开面板可自由调整界面颜色）；移动端适配（抽屉导航 + 浮层面板）（`npm run verify:m6`）
 - **M7 剧情分支** ✅ 重新生成保留候选并支持多分支树：可回到任意历史回合切换候选，未选中的后续剧情/状态原样保存并可恢复；设置中可开启每次成功回复后自动追加 0–4 个候选，分支面板支持「换条路线」的本次生成指令（`npm run verify:branches`）
 - **World Engine v0.1** ✅ 世界模板/快照接入聊天 JSONL，回合事务、候选分支、重生成、编辑和备份恢复保持一致；`world_query` / `world_command` Agent 工具、World Digest、内置模板选择、世界状态/只读面板、旧聊天绑定和手工修正入口完成 M0–M5 闭环（`npm run verify:world-engine`，62 项）。0.4.0 已提供单文件聊天 JSONL 导入 UI；自定义模板编辑器和模板热更新仍属后续 0.5/0.6。
-- **0.5.0（开发中，待验收/发布）** 世界模板库：草稿/冲突、不可变发布版本、从内置复制、导入/导出、整库备份恢复、新聊天精确版本选择，以及地点/角色/物品/初始状态编辑器与初始世界预览（`npm run verify:world-templates`，15 项）。旧聊天更新模板仍属 0.6.0。契约见 [世界模板契约](docs/WORLD_TEMPLATES.md)。
+- **0.5.0（开发中，待验收/发布）** 世界模板库：草稿/冲突、不可变发布版本、从内置复制、导入/导出、整库备份恢复、新聊天精确版本选择，以及地点/角色/物品/初始状态编辑器与初始世界预览（`npm run verify:world-templates`，16 项）。旧聊天更新模板仍属 0.6.0。契约见 [世界模板契约](docs/WORLD_TEMPLATES.md)。
 - **新增兼容** JSON/PNG 卡内世界书编辑、CharX/BYAF 导入、2–12 人群聊、STscript 核心解释器。完整扩展生态与原版群组文件迁移仍未覆盖，详见 [兼容说明](docs/COMPATIBILITY.md)。
 
 ## 聊天操作与显示

@@ -124,7 +124,9 @@ check("模板后续发布不改变已有聊天的内嵌版本");
 const renamed = library.saveDraft(blank.id, v3Published.draftRevision, {
   name: "验收世界·改名", description: "只发布元数据", template: v3Published.draft,
 });
+assert.equal(library.list().find((entry) => entry.id === blank.id)!.draftDirty, true, "仅改名称/描述后必须显示草稿 dirty");
 const renamedPublished = library.publish(blank.id, renamed.draftRevision);
+assert.equal(library.list().find((entry) => entry.id === blank.id)!.draftDirty, false, "发布元数据后 dirty 必须清除");
 assert.equal(renamedPublished.versions.length, 3, "仅改名不应新增内容版本");
 assert.equal(renamedPublished.publishedVersion, 3);
 assert.equal(renamedPublished.published?.name, "验收世界·改名");
@@ -135,6 +137,21 @@ sessions.initializeChatWorldByHash(renamedChat.id, v3Published.publishedHash!, c
 assert.equal(sessions.snapshot(renamedChat.id)!.world?.templateName, "验收世界·改名");
 assert.equal(sessions.snapshot(chatV1.id)!.world?.templateName, "验收世界");
 check("仅修改名称/描述并发布：更新发布元数据，不新增内容版本；旧聊天名称不变");
+
+const descriptionOnly = library.createBlank("描述模板", undefined);
+const descriptionPublished = library.publish(descriptionOnly.id, descriptionOnly.draftRevision);
+assert.equal(descriptionPublished.published?.description, undefined);
+const descriptionSaved = library.saveDraft(descriptionOnly.id, descriptionPublished.draftRevision, {
+  name: "描述模板", description: "尚未发布描述", template: descriptionPublished.draft,
+});
+assert.equal(library.get(descriptionOnly.id).description, "尚未发布描述");
+assert.equal(library.get(descriptionOnly.id).draftDirty, true);
+assert.equal(library.latestSummaries().find((summary) => summary.id === descriptionOnly.id)?.description, undefined, "摘要不能提前返回未发布描述");
+const descriptionRenamed = library.publish(descriptionOnly.id, descriptionSaved.draftRevision);
+assert.equal(descriptionRenamed.published?.description, "尚未发布描述");
+assert.equal(library.latestSummaries().find((summary) => summary.id === descriptionOnly.id)?.description, "尚未发布描述");
+assert.equal(library.resolvePublished(descriptionOnly.id).description, "尚未发布描述");
+check("已发布版本无描述时摘要不回退草稿；描述发布后更新版本元数据");
 
 // C. 冲突和删除 ---------------------------------------------------------------
 const a = new WorldTemplateLibrary(st), b = new WorldTemplateLibrary(st);

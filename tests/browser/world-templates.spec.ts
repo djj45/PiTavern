@@ -360,8 +360,12 @@ test('仅修改名称后发布：新聊天使用新名称且不增加内容版�
   await dialog.getByLabel('模板名称').fill('新名称');
   await dialog.getByRole('button', { name: '保存草稿' }).click();
   await expect(dialog.getByRole('status')).toContainText('草稿已保存');
+  library = await getLibrary(request, app.baseURL);
+  expect(library.find((entry) => entry.id === original.id)!.draftDirty).toBe(true);
+  await expect(dialog.getByText('草稿有修改', { exact: false })).toBeVisible();
   await dialog.getByRole('button', { name: '发布模板' }).click();
   await expect(dialog.getByRole('status')).toContainText('已更新发布名称/描述');
+  await expect(dialog.getByText('草稿与发布一致', { exact: false }).first()).toBeVisible();
   await expect(dialog.getByRole('list', { name: '模板版本列表' }).locator('li')).toHaveCount(1);
 
   library = await getLibrary(request, app.baseURL);

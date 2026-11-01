@@ -146,8 +146,13 @@ export class WorldTemplateLibrary {
   private entrySummary(entry: IndexEntry): WorldTemplateLibrarySummaryDto {
     const publishedVersion = entry.publishedHash ? entry.versions.find((version) => version.contentHash === entry.publishedHash) : undefined;
     let draftDirty = true;
-    try { draftDirty = entry.publishedHash !== createWorldTemplateRecord(entry.draft).contentHash; }
-    catch { draftDirty = true; }
+    if (entry.publishedHash && publishedVersion) {
+      try {
+        draftDirty = entry.publishedHash !== createWorldTemplateRecord(entry.draft).contentHash
+          || publishedVersion.name !== entry.name
+          || (publishedVersion.description ?? "") !== (entry.description ?? "");
+      } catch { draftDirty = true; }
+    }
     return {
       id: entry.id, name: entry.name, ...(entry.description ? { description: entry.description } : {}),
       createdAt: entry.createdAt, updatedAt: entry.updatedAt, draftRevision: entry.draftRevision,
@@ -361,9 +366,11 @@ export class WorldTemplateLibrary {
       if (!entry.publishedHash) continue;
       const record = this.readVersion(entry.publishedHash);
       const version = entry.versions.find((item) => item.contentHash === entry.publishedHash);
+      const publishedName = version ? version.name : entry.name;
+      const publishedDescription = version ? version.description : entry.description;
       summaries.push({
-        id: entry.id, name: version?.name ?? entry.name,
-        ...((version?.description ?? entry.description) ? { description: version?.description ?? entry.description } : {}),
+        id: entry.id, name: publishedName,
+        ...(publishedDescription ? { description: publishedDescription } : {}),
         templateVersion: version?.templateVersion ?? record.template.templateVersion,
         rulesVersion: record.template.rulesVersion, contentHash: record.contentHash,
         locations: record.template.locations.length, actors: record.template.actors.length, items: record.template.items.length,
