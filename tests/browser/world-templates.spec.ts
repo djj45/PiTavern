@@ -417,3 +417,68 @@ test('世界模板编辑器在 390px 手机宽度可完整操作且无水平溢�
   await dialog.getByRole('button', { name: '关闭世界模板' }).click();
   await expect(dialog).not.toBeVisible();
 });
+
+test('世界状态更新模板：全分支迁移、备份恢复与 390px 可操作', async ({ page, app, request }) => {
+  const blank = await (await request.post(app.baseURL + '/api/world/template-library', { data: { action: 'blank', name: '迁移世界' } })).json() as EditorDto;
+  const template = structuredClone(blank.draft);
+  template.locations = [{ id: 'tavern', name: '酒馆' }];
+  template.actors = [{ id: 'player', name: '旅人' }, { id: 'merchant', name: '掌柜' }];
+  template.items = [{ id: 'sword', name: '长剑', price: 17 }];
+  template.initial = { actorId: 'player', locationId: 'tavern', money: 100, inventory: [{ ownerId: 'merchant', itemId: 'sword', quantity: 1 }] };
+  const saved = await (await request.put(`${app.baseURL}/api/world/template-library/${encodeURIComponent(blank.id)}`, {
+    data: { revision: blank.draftRevision, name: '迁移世界', description: '旧描述', template },
+  })).json() as EditorDto;
+  const published = await (await request.post(`${app.baseURL}/api/world/template-library/${encodeURIComponent(blank.id)}/publish`, {
+    data: { revision: saved.draftRevision },
+  })).json() as EditorDto;
+  expect(published.publishedHash).toMatch(/^[a-f0-9]{64}$/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(app.baseURL);
+  await expect(page.getByText('在线', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '菜单', exact: true }).click();
+  await createWorldChat(page, blank.id);
+  let world = page.getByRole('dialog', { name: '世界状态' });
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  await expect(world).toContainText('迁移世界');
+  await world.getByRole('button', { name: '关闭世界状态' }).click();
+
+  const editor = await (await request.get(`${app.baseURL}/api/world/template-library/${encodeURIComponent(blank.id)}`)).json() as EditorDto;
+  const nextTemplate = structuredClone(editor.draft);
+  nextTemplate.items = [{ id: 'sword', name: '长剑', price: 23 }];
+  const saved2 = await (await request.put(`${app.baseURL}/api/world/template-library/${encodeURIComponent(blank.id)}`, {
+    data: { revision: editor.draftRevision, name: '迁移世界·新版', description: '新描述', template: nextTemplate },
+  })).json() as EditorDto;
+  const published2 = await (await request.post(`${app.baseURL}/api/world/template-library/${encodeURIComponent(blank.id)}/publish`, {
+    data: { revision: saved2.draftRevision },
+  })).json() as EditorDto;
+  const targetHash = published2.publishedHash!;
+
+  await page.getByRole('button', { name: '打开世界状态', exact: true }).click();
+  world = page.getByRole('dialog', { name: '世界状态' });
+  await expect(world.getByLabel('目标模板版本')).toBeVisible();
+  await world.getByLabel('目标模板版本').selectOption(targetHash);
+  await world.getByRole('button', { name: '预览迁移差异' }).click();
+  await expect(world.getByText(/世界恢复点/)).toBeVisible();
+  await expect(world.getByLabel('迁移差异')).toContainText('17 → 23');
+  page.once('dialog', (confirm) => void confirm.accept());
+  await world.getByRole('button', { name: '应用迁移并备份' }).click();
+  await expect(world.getByRole('status')).toContainText('模板已更新');
+
+  const chats = await (await request.get(app.baseURL + '/api/chats')).json() as Array<{ id: string; character: string }>;
+  const chat = chats.find((entry) => entry.character === '浏览器向导')!;
+  const chatRoute = chat.id.split('/').map(encodeURIComponent).join('/');
+  const appliedWorld = await (await request.get(`${app.baseURL}/api/chats/${chatRoute}`)).json() as ChatWorldSnapshot;
+  expect(appliedWorld.world?.templateName).toBe('迁移世界·新版');
+  expect(appliedWorld.world?.snapshot.templateVersion).toBe(2);
+  expect(appliedWorld.world?.snapshot.templateHash).toBe(targetHash);
+
+  await world.getByRole('button', { name: '打开备份与恢复' }).click();
+  const backups = page.getByRole('dialog', { name: /聊天备份/ });
+  await expect(backups).toBeVisible();
+  await backups.getByRole('button', { name: '恢复此备份' }).click();
+  await expect(backups).not.toBeVisible();
+  const restoredWorld = await (await request.get(`${app.baseURL}/api/chats/${chatRoute}`)).json() as ChatWorldSnapshot;
+  expect(restoredWorld.world?.snapshot.templateHash).toBe(published.publishedHash);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

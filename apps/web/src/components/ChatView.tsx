@@ -562,7 +562,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
       </div>
       {backupsFor === chat.id && <BackupDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setBackupsFor(null)} onRestored={onRestored} />}
       {noteFor === chat.id && <AuthorNoteDialog key={chat.id} chatId={chat.id} busy={locked} onClose={() => setNoteFor(null)} />}
-      {worldOpen && chat.page?.revision && <WorldDialog key={chat.id} chatId={chat.id} revision={chat.page.revision} world={chat.world} messageCount={chat.page.total} busy={locked} onClose={() => setWorldOpen(false)} onChanged={onWorldChanged} />}
+      {worldOpen && chat.page?.revision && <WorldDialog key={chat.id} chatId={chat.id} revision={chat.page.revision} world={chat.world} messageCount={chat.page.total} busy={locked} onClose={() => setWorldOpen(false)} onChanged={onWorldChanged} onOpenBackups={() => { setWorldOpen(false); setBackupsFor(chat.id); }} />}
       {branchOpen && <BranchDialog chatId={chat.id} revision={chat.page?.revision ?? ""} busy={locked} canRegenerate={canRegenerate && !disabled && !isStreaming}
         onSwitchPath={onSwitchBranchPath} onRegenerate={(instruction) => onRegenerate(instruction.trim() || undefined)} onClose={() => setBranchOpen(false)} />}
     </main>

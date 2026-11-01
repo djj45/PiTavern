@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { WorldChatStateDto, WorldEvent, WorldSnapshot, WorldTemplate, WorldTemplateSummaryDto } from "@pitavern/shared/world";
-import { api } from "../api.ts";
+import type { WorldChatMigrationPreviewDto, WorldChatStateDto, WorldEvent, WorldSnapshot, WorldTemplate, WorldTemplateSummaryDto, WorldTemplateVersionDto } from "@pitavern/shared/world";
+import { api, ApiError } from "../api.ts";
 
 interface WorldDialogProps {
   chatId: string;
@@ -10,6 +10,7 @@ interface WorldDialogProps {
   busy: boolean;
   onClose: () => void;
   onChanged: (message: string) => void;
+  onOpenBackups: () => void;
 }
 
 const fieldClass = "w-full rounded border border-tavern-border bg-tavern-bg p-2 text-sm text-tavern-text outline-none focus:border-tavern-accent-dim disabled:opacity-50";
@@ -80,9 +81,16 @@ function statusView(world: WorldChatStateDto) {
   );
 }
 
-export function WorldDialog({ chatId, revision, world, messageCount, busy, onClose, onChanged }: WorldDialogProps) {
+export function WorldDialog({ chatId, revision, world, messageCount, busy, onClose, onChanged, onOpenBackups }: WorldDialogProps) {
   const [templates, setTemplates] = useState<WorldTemplateSummaryDto[]>([]);
   const [templateId, setTemplateId] = useState("");
+  const [versions, setVersions] = useState<WorldTemplateVersionDto[]>([]);
+  const [targetHash, setTargetHash] = useState("");
+  const [migration, setMigration] = useState<WorldChatMigrationPreviewDto | null>(null);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+  const [migrationError, setMigrationError] = useState("");
+  const [migrationBusy, setMigrationBusy] = useState(false);
+  const [appliedBackup, setAppliedBackup] = useState("");
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -109,10 +117,34 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
     if (world?.snapshot) setDraft(JSON.stringify(world.snapshot, null, 2));
   }, [world?.snapshot]);
 
+  useEffect(() => {
+    setVersions([]); setTargetHash(""); setMigration(null); setMigrationError("");
+    const templateId = world?.template?.templateId;
+    if (!templateId) return;
+    let cancelled = false;
+    setLoadingVersions(true);
+    void api.worldTemplateVersions(templateId).then((list) => {
+      if (cancelled) return;
+      const candidates = list.filter((version) => version.contentHash !== world?.snapshot?.templateHash);
+      setVersions(candidates);
+      setTargetHash(candidates[0]?.contentHash ?? "");
+    }).catch(() => {
+      // 内置模板没有模板库版本列表，不提供更新入口。
+    }).finally(() => {
+      if (!cancelled) setLoadingVersions(false);
+    });
+    return () => { cancelled = true; };
+  }, [world?.template?.templateId, world?.snapshot?.templateHash]);
+
   const locked = busy || saving;
   const template = world?.template;
   const snapshot = world?.snapshot;
   const readOnly = world?.capability.mode !== "enabled";
+  const migrationChanges = migration
+    ? [...new Map(migration.locations.flatMap((location) => location.changes).filter((change) => !change.blocking)
+      .map((change) => [`${change.entity}|${change.id ?? ""}|${change.action}|${change.detail ?? ""}`, change])).values()].slice(0, 40)
+    : [];
+  const migrationBlocked = migration?.blocking ?? [];
 
   const initialize = async () => {
     if (!templateId || locked) return;
@@ -160,6 +192,38 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
       setError((cause as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const previewMigration = async () => {
+    if (locked || !targetHash) return;
+    setMigrationBusy(true); setMigrationError(""); setMigration(null);
+    try {
+      setMigration(await api.previewWorldMigration(chatId, targetHash));
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 422) {
+        const body = cause.body as { preview?: WorldChatMigrationPreviewDto } | null;
+        if (body?.preview) setMigration(body.preview);
+      }
+      setMigrationError((cause as Error).message);
+    } finally {
+      setMigrationBusy(false);
+    }
+  };
+
+  const applyMigration = async () => {
+    if (!migration?.applyable || locked) return;
+    if (!window.confirm("确定把整份聊天的所有活动世界、候选、检查点和隐藏后续更新到该模板版本？历史正文不会改写；迁移前会自动备份。")) return;
+    setMigrationBusy(true); setMigrationError("");
+    try {
+      const result = await api.applyWorldMigration(chatId, targetHash, migration.revision, migration.previewHash);
+      setAppliedBackup(result.backupId ?? "");
+      setMigration(null);
+      onChanged(result.noop ? "目标模板已是当前版本，无需迁移" : "世界模板已更新；所有分支和检查点已使用新版本");
+    } catch (cause) {
+      setMigrationError((cause as Error).message);
+    } finally {
+      setMigrationBusy(false);
     }
   };
 
@@ -222,6 +286,85 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
                 </p>
               )}
               {statusView(world)}
+              <section aria-label="更新世界模板" className="rounded-lg border border-tavern-border bg-tavern-bg/50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-medium text-tavern-text">更新模板</h3>
+                  <span className="text-xs text-tavern-dim">覆盖全部候选、检查点与隐藏后续；历史正文不变</span>
+                </div>
+                {loadingVersions && <p className="mt-2 text-xs text-tavern-dim">正在读取已发布版本…</p>}
+                {!loadingVersions && versions.length === 0 && (
+                  <p className="mt-2 text-xs leading-5 text-tavern-dim">没有其他已发布版本。内置模板不能在这里更新；自定义模板需先在「世界模板」中发布新版本。</p>
+                )}
+                {versions.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    <label className="block text-xs text-tavern-dim">目标版本
+                      <select aria-label="目标模板版本" className={fieldClass + " mt-1"} value={targetHash}
+                        disabled={locked || migrationBusy || !!appliedBackup}
+                        onChange={(event) => { setTargetHash(event.target.value); setMigration(null); setMigrationError(""); setAppliedBackup(""); }}>
+                        {versions.map((version) => <option key={version.contentHash} value={version.contentHash}>
+                          {version.name} · v{version.templateVersion}{version.description ? " · " + version.description.slice(0, 60) : ""}
+                        </option>)}
+                      </select>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={() => void previewMigration()} disabled={locked || migrationBusy || !targetHash || !!appliedBackup}
+                        className="rounded-lg border border-tavern-border px-3 py-1.5 text-sm text-tavern-text hover:border-tavern-accent-dim disabled:opacity-40">
+                        {migrationBusy ? "读取预览中…" : "预览迁移差异"}
+                      </button>
+                      {migrationError && <span role="alert" className="text-xs text-red-300">{migrationError}</span>}
+                    </div>
+                    {migration && (
+                      <div className="space-y-2 rounded-lg border border-tavern-border bg-tavern-bg p-2.5">
+                        <p className="break-words text-sm text-tavern-text">
+                          目标：{migration.target.name ?? migration.target.templateId} · v{migration.target.templateVersion}
+                          {migration.target.description ? <span className="block text-xs text-tavern-dim">{migration.target.description}</span> : null}
+                        </p>
+                        <p className="text-xs text-tavern-dim">
+                          世界恢复点 {migration.counts.worlds} · 更新 {migration.counts.migrated} · 无变化 {migration.counts.unchanged}
+                          {migration.counts.noWorld > 0 ? " · 原本无世界 " + migration.counts.noWorld : ""}
+                          {migration.counts.blocked > 0 ? " · 阻断 " + migration.counts.blocked : ""}
+                        </p>
+                        {migration.noop && <p className="rounded border border-emerald-400/30 bg-emerald-400/10 p-2 text-xs text-emerald-300">目标已是当前版本，无需迁移。</p>}
+                        {!migration.applyable && !migration.noop && (
+                          <div role="alert" className="rounded border border-red-400/40 bg-red-400/10 p-2 text-xs text-red-300">
+                            <p className="font-medium">无法应用；先修复以下世界快照：</p>
+                            <ul className="mt-1 list-disc space-y-1 pl-4">
+                              {migrationBlocked.map((location) => <li key={location.path} className="break-all">
+                                {location.label}：{location.blocking.map((change) => change.detail ?? change.label).join("；")}
+                              </li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {migrationChanges.length > 0 && (
+                          <ul aria-label="迁移差异" className="max-h-44 space-y-1 overflow-y-auto text-xs text-tavern-text">
+                            {migrationChanges.map((change) => <li key={change.entity + "|" + (change.id ?? "") + "|" + change.action + "|" + (change.detail ?? "")} className="break-words">
+                              {change.entity} · {change.label}{change.detail ? " — " + change.detail : ""}
+                            </li>)}
+                          </ul>
+                        )}
+                        {migration.warnings.length > 0 && (
+                          <ul className="space-y-1 text-xs text-amber-300">
+                            {migration.warnings.map((warning) => <li key={warning} className="break-words">· {warning}</li>)}
+                          </ul>
+                        )}
+                        {migration.applyable && (
+                          <button type="button" onClick={() => void applyMigration()} disabled={locked || migrationBusy}
+                            className="rounded-lg bg-tavern-accent px-3 py-1.5 text-sm font-medium text-tavern-bg disabled:opacity-40">
+                            {migrationBusy ? "应用中…" : "应用迁移并备份"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {appliedBackup && (
+                      <p role="status" className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-2 text-xs leading-5 text-emerald-300">
+                        模板已更新，迁移前备份已创建。
+                        <button type="button" onClick={onOpenBackups} className="ml-2 underline">打开备份与恢复</button>
+                      </p>
+                    )}
+                    <p className="text-[11px] leading-4 text-tavern-dim">迁移只改模板引用和需要补充的新角色；金额、库存、时间、正文、变量和候选顺序不变。初始值变化默认只影响新聊天。</p>
+                  </div>
+                )}
+              </section>
               {editing ? (
                 <div className="space-y-2">
                   <label className="block text-sm text-tavern-dim">
