@@ -254,6 +254,7 @@ export interface WorldTemplateMigrationTargetDto {
   templateVersion: number;
   rulesVersion: number;
   name?: string;
+  description?: string;
 }
 
 /** 迁移预览；snapshot 仅在无阻断时给出。 */
@@ -274,6 +275,59 @@ export interface WorldTemplateMigrationResultDto {
   revision: string;
   backupId: string;
   changes: WorldTemplateChangeDto[];
+}
+
+
+export type WorldChatMigrationLocationKind = "active" | "checkpoint" | "candidate" | "native" | "continuation";
+export type WorldChatMigrationLocationStatus = "migrated" | "unchanged" | "blocked";
+
+/** 整份聊天中的一个世界恢复点：活动世界、回合检查点、候选、原生 swipe 或隐藏 continuation。 */
+export interface WorldChatMigrationLocationDto {
+  path: string;
+  kind: WorldChatMigrationLocationKind;
+  label: string;
+  sourceHash: string;
+  sourceName?: string;
+  sourceDescription?: string;
+  sourceTemplateVersion: number;
+  sourceRulesVersion: number;
+  target: WorldTemplateMigrationTargetDto;
+  status: WorldChatMigrationLocationStatus;
+  changes: WorldTemplateChangeDto[];
+  blocking: WorldTemplateChangeDto[];
+  warnings: string[];
+}
+
+export interface WorldChatMigrationCountsDto {
+  worlds: number;
+  migrated: number;
+  unchanged: number;
+  blocked: number;
+  noWorld: number;
+}
+
+/** 全聊天迁移预览；previewHash 绑定 sourceHash、目标元数据和每个位置的计划。 */
+export interface WorldChatMigrationPreviewDto {
+  chatId: string;
+  revision: string;
+  sourceHash: string;
+  target: WorldTemplateMigrationTargetDto;
+  locations: WorldChatMigrationLocationDto[];
+  counts: WorldChatMigrationCountsDto;
+  blocking: WorldChatMigrationLocationDto[];
+  warnings: string[];
+  applyable: boolean;
+  noop: boolean;
+  previewHash: string;
+}
+
+export interface WorldChatMigrationResultDto {
+  revision: string;
+  backupId?: string;
+  target: WorldTemplateMigrationTargetDto;
+  counts: WorldChatMigrationCountsDto;
+  previewHash: string;
+  noop?: boolean;
 }
 
 export interface WorldTemplateSummaryDto {

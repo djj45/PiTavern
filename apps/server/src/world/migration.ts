@@ -20,11 +20,12 @@ export interface MigrationPlanInternal {
   previewHash: string;
 }
 
-function target(record: WorldTemplateRecord): WorldTemplateMigrationTargetDto {
+export function migrationTarget(record: WorldTemplateRecord): WorldTemplateMigrationTargetDto {
   return {
     contentHash: record.contentHash, templateId: record.template.templateId,
     templateVersion: record.template.templateVersion, rulesVersion: record.template.rulesVersion,
     ...(record.name ? { name: record.name } : {}),
+    ...(record.description ? { description: record.description } : {}),
   };
 }
 
@@ -192,7 +193,7 @@ export function buildMigrationPreview(
 ): WorldTemplateMigrationPreviewDto {
   const plan = planWorldSnapshotMigration(snapshot, from, to);
   return {
-    chatId, from: target(from), to: target(to), changes: plan.changes, blocking: plan.blocking,
+    chatId, from: migrationTarget(from), to: migrationTarget(to), changes: plan.changes, blocking: plan.blocking,
     warnings: plan.warnings, applyable: plan.applyable, snapshotCount: 1, previewHash: plan.previewHash,
     ...(plan.snapshot ? { snapshot: plan.snapshot } : {}),
   };
