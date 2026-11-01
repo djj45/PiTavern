@@ -37,6 +37,7 @@ import { attachLibraryBackupJobs, backupControlPath } from "./library-backup-job
 import { atomicWrite } from "../stdata/files.ts";
 import { ChatImportError, ChatImportService } from "../stdata/chat-import.ts";
 import { WorldValidationError } from "../world/index.ts";
+import { WorldChatMigrationLimitError } from "../world/chat-migration.ts";
 import { WorldTemplateConflictError, WorldTemplateNotFoundError } from "../world/template-library.ts";
 
 export interface HttpDeps {
@@ -109,6 +110,7 @@ function worldMigrationError(res: Response, error: unknown): void {
   if (error instanceof WorldChatMigrationTargetNotFoundError) { res.status(404).json({ error: error.message }); return; }
   if (error instanceof WorldChatMigrationConflictError) { res.status(409).json({ error: error.message }); return; }
   if (error instanceof WorldChatMigrationBlockedError) { res.status(422).json({ error: error.message, preview: error.preview }); return; }
+  if (error instanceof WorldChatMigrationLimitError) { res.status(422).json({ error: error.message }); return; }
   const message = error instanceof Error ? error.message : String(error);
   if (/聊天不存在/.test(message)) { res.status(404).json({ error: message }); return; }
   if (/请先停止|请先停止所有聊天|维护|已变化|重新预览|重新同步/.test(message)) { res.status(409).json({ error: message }); return; }

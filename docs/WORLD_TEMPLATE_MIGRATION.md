@@ -1,6 +1,6 @@
 # World Template Migration 0.6.0 契约（M0/M1）
 
-状态：0.6.0 开发中。0.5.0 已发布模板库/编辑器与版本选择；本文锁定“把指定聊天更新到模板新版本”的语义、迁移预览和首版支持边界。尚未打 0.6.0 标签。
+状态：0.6.0 验收候选。单快照规划、全聊天规划/原子应用、预览/应用 API 与 Web 入口已实现；最终发布需验收后打 0.6.0 标签。
 
 ## 1. 范围
 
@@ -69,10 +69,10 @@
 - 历史检查点全部迁移，避免“切回旧分支又变回旧价格”的混合状态。
 - 旧模板记录仍在模板表中，但不作为默认恢复来源；需要硬回退时使用聊天备份。
 
-## 6. 数据结构与 API（计划）
+## 6. 数据结构与 API（0.6.0 已实现）
 
-- 预览：`POST /api/chat/world/migrate/preview`，`{ chatId, targetHash }`；返回 from/to 摘要、changes、blocking、warnings、迁移后快照摘要、需要更新快照数量。
-- 应用：`POST /api/chat/world/migrate/apply`，`{ chatId, targetHash, expectedRevision, previewHash }`；重新计算计划，previewHash 不一致拒绝；成功返回新 revision、备份 ID 和变更摘要。
+- 预览：`POST /api/chat/world/migrate/preview`，`{ chatId, targetHash }`；返回聊天 revision、目标摘要、每个恢复点的 changes/blocking/warnings、计数和完整 previewHash；不可迁移返回 422 + preview，无变化返回 200 + noop。
+- 应用：`POST /api/chat/world/migrate/apply`，`{ chatId, targetHash, expectedRevision, previewHash }`；重新计算计划，revision/previewHash 不一致返回 409；成功一次原子替换并返回新 revision、backupId、目标摘要和计数。
 - 版本差异分为 location/actor/item/template/initial/rules；每条包含 id、名称、变更类型、旧/新值摘要和是否阻断。预览哈希覆盖 from/to 的名称、描述、模板/规则版本和变更，描述单独变化也会改变 previewHash。
 - 首版不提供“迁移所有聊天”入口。
 
@@ -88,7 +88,7 @@
 - 迁移→重启→备份恢复→再迁移；旧模板记录保留。
 - 真实供应商/大库保持 `not_requested`/未验边界。
 
-## 8. 与 0.5.0 的关系
+## 8. 与 0.5.0 的关系（0.6.0 实现）
 
 - 0.5.0 的模板库/版本选择保持不变；0.6 只新增“更新已有聊天”能力。
 - 聊天仍以 JSONL 内嵌模板表为恢复权威；模板库删除/修改不自动影响旧聊天。

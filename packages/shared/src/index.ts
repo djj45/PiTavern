@@ -5,7 +5,7 @@
  * 两端 TS 会同时报错，避免契约漂移。
  */
 
-export const PITAVERN_VERSION = "0.5.0";
+export const PITAVERN_VERSION = "0.6.0";
 
 /** SillyTavern instruct 预设的单人对话字段。 */
 export interface InstructTemplate {

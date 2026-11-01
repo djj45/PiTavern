@@ -1,7 +1,7 @@
 {
   "name": "@pitavern/server",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -31,7 +31,8 @@
     "verify:chat-import": "tsx scripts/chat-import-verify.ts",
     "verify:world-templates": "tsx scripts/world-template-verify.ts",
     "verify:world-migration": "tsx scripts/world-migration-verify.ts",
-    "verify:character-cards": "tsx scripts/character-cards-verify.ts"
+    "verify:character-cards": "tsx scripts/character-cards-verify.ts",
+    "verify:chat-migration": "tsx scripts/chat-migration-verify.ts && tsx scripts/chat-migration-apply-verify.ts && tsx scripts/chat-migration-api-verify.ts && tsx scripts/chat-migration-game-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",
