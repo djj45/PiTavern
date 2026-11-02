@@ -251,6 +251,7 @@ export function WorldDialog({ chatId, revision, world, messageCount, busy, onClo
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {snapshot?.actionTime && <p className="mb-3 rounded-lg border border-tavern-border p-2 text-xs leading-5 text-tavern-dim" data-testid="action-time-rules">行动耗时：移动 {snapshot.actionTime.moveMinutes} 分钟，首次有效调查 {snapshot.actionTime.interactionMinutes} 分钟，交易 {snapshot.actionTime.tradeMinutes} 分钟，任务推进／交付 {snapshot.actionTime.questAdvanceMinutes} 分钟。接取、查询、失败及重复调查不耗时；日程在行动完成后执行。</p>}
           {error && <p role="alert" className="mb-3 rounded-lg border border-red-400/40 bg-red-400/10 p-2 text-sm text-red-300">{error}</p>}
           {!world ? (
             <div className="space-y-3">

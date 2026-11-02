@@ -63,7 +63,7 @@ export function createWorldCommandTool(ctx: ToolContext): AgentTool<ReturnType<t
     name: "world_command",
     label: "世界命令",
     description:
-      "提交世界硬状态命令：move_to / transfer_item / purchase_item / advance_time。先查询再提交；价格由模板决定，不接受定价参数。advance_time推进世界分钟并执行作者安排的NPC移动，之后重新查询人物位置；不自动接取/推进任务或传播知识，等待过长被拒时缩短等待。返回 staged 只表示本轮暂存，整轮成功后才提交，失败或停止会撤销。涉及金钱、物品、位置或时间变化时，必须先调用本工具再叙述结果。",
+      "提交世界硬状态命令：move_to / transfer_item / purchase_item / advance_time。先查询再提交；价格由模板决定，不接受定价参数。若世界启用服务端行动耗时，移动/交易已自动计时并执行日程，不得额外advance_time补时；以回执最终时间与在场人物为准。advance_time只用于明确等待，推进世界分钟并执行作者安排的NPC移动，之后重新查询人物位置；不自动接取/推进任务或传播知识，等待过长被拒时缩短等待。返回 staged 只表示本轮暂存，整轮成功后才提交，失败或停止会撤销。涉及金钱、物品、位置或时间变化时，必须先调用本工具再叙述结果。",
     parameters,
     execute: async (_id, params) => {
       if (!ctx.world) return { content: text("当前聊天没有启用世界状态。"), details: { summary: "世界未启用" }, isError: true };
@@ -96,7 +96,7 @@ export function createWorldCommandTool(ctx: ToolContext): AgentTool<ReturnType<t
       }
       return {
         content: text(`世界命令已暂存，本轮成功结束后才提交；失败/停止会撤销。\n${result.summary}\n当前暂存 revision：${result.revision}`),
-        details: { summary: result.summary, commandId: result.commandId, event: result.event, revision: result.revision },
+        details: { summary: result.summary, commandId: result.commandId, event: result.event, revision: result.revision, ...(result.time?{time:result.time}:{}) },
       };
     },
   };

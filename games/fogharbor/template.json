@@ -6,7 +6,7 @@
   "template": {
     "schemaVersion": 4,
     "templateId": "fogharbor-last-light",
-    "templateVersion": 2,
+    "templateVersion": 3,
     "rulesVersion": 1,
     "locations": [
       {
@@ -605,6 +605,12 @@
           }
         ]
       }
-    ]
+    ],
+    "actionTime": {
+      "moveMinutes": 10,
+      "interactionMinutes": 10,
+      "tradeMinutes": 5,
+      "questAdvanceMinutes": 5
+    }
   }
 }

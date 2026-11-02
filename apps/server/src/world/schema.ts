@@ -89,8 +89,9 @@ const scheduleEvent = Type.Union([
   Type.Object({...event.properties,...scheduleFields,type:Type.Literal("schedule_move")},strict),
   Type.Object({...event.properties,...scheduleFields,type:Type.Literal("schedule_skip"),skipReason:Type.Union([Type.Literal("dead"),Type.Literal("inactive"),Type.Literal("already_there")])},strict),
 ]);
+const actionTime = Type.Object({moveMinutes:integer(1440),interactionMinutes:integer(1440),tradeMinutes:integer(1440),questAdvanceMinutes:integer(1440)},strict);
 export const WorldTemplateSchema = Type.Union([templateV1,templateV2,templateV3,
-  Type.Object({...templateV3.properties,schemaVersion:Type.Literal(4),schedules:Type.Array(schedule,{maxItems:64})},strict)]);
+  Type.Object({...templateV3.properties,schemaVersion:Type.Literal(4),schedules:Type.Array(schedule,{maxItems:64}),actionTime:Type.Optional(actionTime)},strict)]);
 export const WorldSnapshotSchema = Type.Union([snapshotV1,snapshotV2,snapshotV3,
   Type.Object({...snapshotV3.properties,schemaVersion:Type.Literal(4),scheduleStates:Type.Array(scheduleState,{maxItems:64}),
     recentEvents:Type.Array(Type.Union([eventV3,scheduleEvent]),{maxItems:WORLD_MAX_RECENT_EVENTS})},strict)]);

@@ -57,6 +57,7 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
     schemaVersion:snapshot.schemaVersion,revision:snapshot.revision,templateHash:snapshot.templateHash,
     templateVersion:snapshot.templateVersion,rulesVersion:snapshot.rulesVersion,clockMinutes:snapshot.clockMinutes,
     scene:structuredClone(snapshot.scene),actors:structuredClone(snapshot.actors),money:structuredClone(snapshot.money),inventory:structuredClone(snapshot.inventory),
+    ...(usable?.actionTime?{actionTime:structuredClone(usable.actionTime)}:{}),
     ...(snapshot.schemaVersion>=3?{quests,questKey:worldContentHash({actorId,quests})}:{}),
     recentEvents,viewpointId:actorId,knownFacts,publicInteractions,
     // Readiness changes with hard state, not knowledge authorization. Keep the
@@ -75,6 +76,7 @@ export function buildAuthorWorldView(snapshot: WorldSnapshot, template?: WorldTe
 export function publicWorldTemplate(template?: WorldTemplate): WorldTemplate | undefined {
   if (!template) return undefined;
   return {schemaVersion:template.schemaVersion,templateId:template.templateId,templateVersion:template.templateVersion,rulesVersion:template.rulesVersion,
+    ...(template.actionTime?{actionTime:structuredClone(template.actionTime)}:{}),
     locations:structuredClone(template.locations),actors:structuredClone(template.actors),items:structuredClone(template.items),
     initial:{actorId:template.initial.actorId,locationId:template.initial.locationId,money:template.initial.money,inventory:structuredClone(template.initial.inventory)}};
 }

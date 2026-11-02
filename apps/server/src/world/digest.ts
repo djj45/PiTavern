@@ -64,6 +64,10 @@ export function worldDigest(
     `时间：${worldClockLabel(snapshot.clockMinutes)}；地点：${locationLabel(scene.locationId, template)}`,
     `在场：${present}`,
   ];
+  if(view.actionTime) {
+    const p=view.actionTime;
+    lines.push(`服务端行动耗时：实际移动${p.moveMinutes}分钟；产生新知识的交互${p.interactionMinutes}分钟；购买/转交${p.tradeMinutes}分钟；成功推进/任务交付${p.questAdvanceMinutes}分钟（含全部奖励，不重复计费）；接取、查询、拒绝、重复已完成交互不耗时。先按开始状态检查行动，再结算并推进日程；按回执最终时钟与NPC位置继续。不得额外advance_time补行动耗时；只有明确等待才用advance_time。`);
+  }
   if (playerId && typeof snapshot.money[playerId] === "number") lines.push(`金钱：${snapshot.money[playerId]}`);
   if (playerId) {
     const inventory = snapshot.inventory.filter((entry) => entry.ownerId === playerId)

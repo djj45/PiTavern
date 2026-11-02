@@ -124,8 +124,8 @@ try {
     await turn("接案、询问燕迟", [quest("repair", "accept"), quest("investigate", "accept"), interact("ask_yan"), quest("investigate")]);
     assert.ok(known("testimony")); assert.ok(!known("ledger"));
     await turn("前往北灯检查", [move("lighthouse"), interact("inspect_lamp"), quest("repair")]);
-    assert.ok(known("survey")); assert.equal(state().clockMinutes, 0);
-    await turn("等5分钟去工坊购买与交付", [wait(5), move("workshop"), buy(), quest("repair")]);
+    assert.ok(known("survey")); assert.equal(state().clockMinutes, 40);
+    await turn("去工坊购买与交付", [move("workshop"), buy(), quest("repair")]);
     assert.equal(state().money.player, 24); assert.equal(state().money.qiao, 46);
     assert.equal(state().questStates!.find(q => q.questId === "repair")!.status, "completed");
     assert.ok(!state().inventory.some(i => i.ownerId === "player" && i.itemId === "lens"));
@@ -139,13 +139,13 @@ try {
     assert.ok(known("ledger"));
     await turn("有证词和记录仍不能提前公开", [interact("post_notice")], {text:"先完成救援核验，再回公所。"}, "later");
     const beforeFailed = stateFields(f.chats.readMetadata(chat.id));
-    await turn("等到01:30并验收，但正文失败", [wait(85), move("lighthouse"), interact("confirm_light")], { failure: true });
+    await turn("回灯塔验收，但正文失败", [move("lighthouse"), interact("confirm_light")], { failure: true });
     assert.deepEqual(stateFields(f.chats.readMetadata(chat.id)), beforeFailed);
-    await turn("等到01:30并验收", [wait(85), move("lighthouse"), interact("confirm_light")]);
-    assert.equal(state().clockMinutes, 90); assert.ok(known("lamp"));
+    await turn("回灯塔验收", [move("lighthouse"), interact("confirm_light")]);
+    assert.equal(state().clockMinutes, 115); assert.ok(known("lamp"));
     assert.match(buildPlayerWorldView(state(), f.chats.readWorld(chat.id)!.template).knownFacts.find(f => f.id === "lamp")!.text, /^灯塔已验证：/);
     assert.equal(state().actors.qiao.locationId, "lighthouse");
-    check(label + "：错过在场拒绝，失败正文撤销等待/移动/揭示，重试到01:30才亮灯");
+    check(label + "：错过在场拒绝，失败正文撤销自动耗时/移动/揭示，重试到01:55才完成验灯");
 
     await turn("到栈桥接船并核验到港", [move("pier"), quest("guide_ship", "accept"), quest("guide_ship"), interact("confirm_arrival")], {text:"救援已核验，下一步回公所确认林照在场。"}, "later");
     assert.ok(known("rescue")); assert.equal(state().money.player, 44); assert.equal(state().money.yan, 20);
@@ -154,18 +154,18 @@ try {
     assert.deepEqual(notice.availability!.reasons, ["需前往潮声公所", "需林照在场且可交互"]);
     check(label + "：灯火归航里程碑可先达成，未自动公开证据");
 
-    await turn("到02:00回公所确认公开条件", [wait(30), move("hall")], {text:"林照在场，当前可以请求公开核验材料。"}, "ready");
+    await turn("回公所确认公开条件", [move("hall")], {text:"林照在场，当前可以请求公开核验材料。"}, "ready");
     const beforeFinal = state();
     await turn("在公所报备并公开", [quest("investigate"), quest("public_record", "accept"), interact("post_notice"), quest("public_record")]);
     assert.equal(state().money.player, 52); assert.equal(state().money.lin, 42);
     assert.equal(Object.values(state().money).reduce((a, b) => a + b, 0), 160);
-    assert.equal(state().clockMinutes, 120);
+    assert.equal(state().clockMinutes, 170);
     assert.ok(state().questStates!.every(q => q.status === "completed")); assert.equal(state().questStates!.length, 4);
     assert.ok(state().publishedFactIds!.includes("disclosure"));
     check(label + "：岸上有证；四任务完成、52币，全体160币守恒，真相在核验后公开");
     const completed = stateFields(f.chats.readMetadata(chat.id));
     const restarted = new SessionManager(f.config, () => buildModels(f.config), f.cards, new ChatStore(f.data), f.data);
-    assert.equal(restarted.snapshot(chat.id)!.world!.snapshot!.clockMinutes, 120);
+    assert.equal(restarted.snapshot(chat.id)!.world!.snapshot!.clockMinutes, 170);
     assert.deepEqual(stateFields(new ChatStore(f.data).readMetadata(chat.id)), completed);
     if (dual) {
       const e = f.sessions.snapshot(chat.id)!.rewrite!; assert.equal(e.enabled, true);

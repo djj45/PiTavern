@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
-  WorldCommandErrorCode, WorldCommandReceipt, WorldCommandRejected, WorldCommandResult, WorldEngineCapability, WorldSnapshot, WorldTemplate, WorldInteractionResult, WorldEvent, WorldQuestResult,
+  WorldActionTimeReceipt, WorldCommandErrorCode, WorldCommandReceipt, WorldCommandRejected, WorldCommandResult, WorldEngineCapability, WorldSnapshot, WorldTemplate, WorldInteractionResult, WorldEvent, WorldQuestResult,
 } from "@pitavern/shared/world";
 import { worldContentHash } from "./hash.ts";
 import { applyWorldCommand, WorldRuleError } from "./rules.ts";
@@ -45,6 +45,24 @@ export class WorldTransaction {
       this.changedQuestView=JSON.stringify(visibleQuests(snapshot,this.template,this.template?.initial.actorId??""))!==this.initialQuestView;
   }
 
+  /** Finish a private action copy before publishing any state or authorization changes. */
+  private finishAction(candidate: WorldSnapshot, minutes: number, commandId: string, observedQuestChange = false): {time?:WorldActionTimeReceipt;summary:string} {
+    let changed = observedQuestChange || (this.initialQuestView !== undefined &&
+      JSON.stringify(visibleQuests(candidate,this.template,this.template!.initial.actorId)) !== this.initialQuestView);
+    let changes: string[] = [];
+    if (minutes > 0) {
+      // Internal time is not another model command and never recursively incurs a fee.
+      const advance = applyWorldCommand(candidate,this.template!,{commandId,type:"advance_time",minutes},this.turn,()=>{changed=true;});
+      changes = advance.summary.split("\n").slice(1);
+    }
+    this.replaceWorking(candidate);
+    this.changedQuestView ||= changed;
+    return this.template?.actionTime ? {
+      time:{elapsedMinutes:minutes,clockMinutes:candidate.clockMinutes,changes},
+      summary:[`本次行动耗时 ${minutes} 分钟；当前世界时间 ${candidate.clockMinutes} 分钟。`,...changes].join("\n"),
+    } : {summary:""};
+  }
+
   quest(input:unknown):WorldQuestResult {
     if(this.phase!=="open" || this.access.mode!=="enabled" || !this.template)return rejectedQuest(this.working);
     const action=questAction(input);if(!action)return rejectedQuest(this.working);
@@ -52,7 +70,16 @@ export class WorldTransaction {
     if(previous)return structuredClone(previous);
     const applied=applyQuestAction(this.working,this.template,action,this.turn);
     // Failed conditions can be met by a later legitimate tool action in this turn.
-    if(applied.result.status!=="rejected"){this.replaceWorking(applied.snapshot);this.questReceipts.set(key,structuredClone(applied.result));}
+    if(applied.result.status!=="rejected"){
+      try {
+        const duration = applied.result.status==="staged" && action.action==="advance" ? this.template.actionTime?.questAdvanceMinutes??0 : 0;
+        const elapsed=this.finishAction(applied.snapshot,duration,randomUUID());
+        applied.result.revision=this.working.revision;
+        applied.result.quests=visibleQuests(this.working,this.template,this.template.initial.actorId);
+        if(applied.result.status==="staged" && elapsed.time){applied.result.time=elapsed.time;applied.result.summary+="\n"+elapsed.summary;}
+        this.questReceipts.set(key,structuredClone(applied.result));
+      } catch(error) {if(error instanceof WorldRuleError)return rejectedQuest(this.working);throw error;}
+    }
     return applied.result;
   }
 
@@ -83,8 +110,15 @@ export class WorldTransaction {
     } else {
       const candidate = structuredClone(this.working);
       try {
-        result = applyWorldCommand(candidate, this.template, command, this.turn, ()=>{this.changedQuestView=true;});
-        this.replaceWorking(candidate);
+        let observed=false;
+        result = applyWorldCommand(candidate, this.template, command, this.turn, ()=>{observed=true;});
+        const policy=this.template.actionTime;
+        const duration = command.type==="advance_time" ? 0
+          : command.type==="move_to" ? (this.working.actors[command.actorId].locationId===command.locationId?0:policy?.moveMinutes??0)
+          : policy?.tradeMinutes??0;
+        const elapsed=this.finishAction(candidate,duration,command.commandId,observed);
+        result.revision=this.working.revision;
+        if(command.type!=="advance_time" && elapsed.time){result.time=elapsed.time;result.summary+="\n"+elapsed.summary;}
       } catch (error) {
         if (!(error instanceof WorldRuleError)) throw error;
         result = { status: "rejected", commandId, error: error.error };
@@ -119,8 +153,10 @@ export class WorldTransaction {
     if (events.length && (next.revision === Number.MAX_SAFE_INTEGER || next.knowledge!.length > 2048)) return reject();
     if (events.length) next.revision++;
     next.recentEvents = [...next.recentEvents,...events].slice(-100);
-    this.replaceWorking(next);
-    return {status:events.length?"staged":"unchanged",summary:events.length?"交互已暂存，整轮成功后提交；失败或停止会撤销。":"交互完成，没有新的知识变化。",revision:next.revision,knownFacts:buildPlayerWorldView(next,template).knownFacts};
+    try {
+      const elapsed=this.finishAction(next,events.length?template.actionTime?.interactionMinutes??0:0,randomUUID());
+      return {status:events.length?"staged":"unchanged",summary:events.length?"交互已暂存，整轮成功后提交；失败或停止会撤销。"+(elapsed.time?"\n"+elapsed.summary:""):"交互完成，没有新的知识变化。",revision:this.working.revision,knownFacts:buildPlayerWorldView(this.working,template).knownFacts,...(events.length && elapsed.time?{time:elapsed.time}:{})};
+    }catch(error){if(error instanceof WorldRuleError)return reject();throw error;}
   }
 
   commit(): WorldSnapshot {

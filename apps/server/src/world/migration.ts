@@ -162,6 +162,10 @@ export function diffWorldTemplateRecords(from: WorldTemplateRecord, to: WorldTem
     warnings.push("新增日程只处理各恢复点当前时刻之后的触发点；时钟、位置和既有进度保持。");
   }
   compareInitial(from.template, to.template, changes, blocking, warnings);
+  if(JSON.stringify(from.template.actionTime)!==JSON.stringify(to.template.actionTime)) {
+    changes.push(modifiedChange("rules","actionTime","行动耗时","未来操作使用目标耗时表；不补扣历史时间"));
+    warnings.push("行动耗时规则变化只影响未来操作；各恢复点当前时钟、位置、日程、金额、知识及任务进度保持不变。");
+  }
   return { changes, blocking, warnings };
 }
 

@@ -50,7 +50,8 @@
     "verify:quests": "npm run verify:quests -w apps/server",
     "verify:schedules": "npm run verify:schedules -w apps/server",
     "game:prepare": "node --import tsx apps/server/scripts/game-prepare.ts",
-    "verify:game": "npm run verify:game -w apps/server"
+    "verify:game": "npm run verify:game -w apps/server",
+    "verify:action-time": "npm run verify:action-time -w apps/server"
   },
   "engines": {
     "node": ">=22.19"

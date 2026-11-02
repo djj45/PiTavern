@@ -32,15 +32,33 @@ test.beforeEach(async ({ page }) => {
   page.on('pageerror', (error) => { throw error; });
 });
 
-async function seed(request:import('@playwright/test').APIRequestContext,baseURL:string,legacy=false){
+async function seed(request:import('@playwright/test').APIRequestContext,baseURL:string,legacy=false,timed=false){
  const blank=await(await request.post(baseURL+'/api/world/template-library',{data:{action:'blank',name:'日程酒馆'}})).json();
  const template=JSON.parse(fs.readFileSync(path.resolve('apps/server/scripts/fixtures/schedule-tavern.json'),'utf8'));template.templateId=blank.id;
  if(legacy){template.schemaVersion=3;delete template.schedules;}else template.quests[1].openConditions=[{type:'has_item',itemId:'sword',quantity:99}];
+ if(timed)template.actionTime={moveMinutes:10,interactionMinutes:10,tradeMinutes:5,questAdvanceMinutes:5};
  const route=baseURL+'/api/world/template-library/'+encodeURIComponent(blank.id),saved=await(await request.put(route,{data:{revision:blank.draftRevision,name:'日程酒馆',template}})).json(),published=await(await request.post(route+'/publish',{data:{revision:saved.draftRevision}})).json();
  await request.put(baseURL+'/api/connection',{data:{twoStage:true,contextMode:'simple',toolsEnabled:true,outputProtocol:'native'}});
  return {id:blank.id,published,route};
 }
 async function open(page:Page,url:string){await page.goto(url);await expect(page.getByText('在线',{exact:true})).toBeVisible();if((page.viewportSize()?.width??1280)<768&&await page.getByRole('button',{name:'菜单',exact:true}).isVisible())await page.getByRole('button',{name:'菜单',exact:true}).click();await page.locator('aside li').first().getByRole('button').first().click();}
+
+test('固定行动耗时在390px显示，调查后NPC离场、拒绝不耗时、返回交付与重写刷新恢复',async({page,request,app})=>{
+ await page.setViewportSize({width:390,height:844});const seeded=await seed(request,app.baseURL,false,true);
+ const id=(await(await request.post(app.baseURL+'/api/chats',{data:{character:'浏览器向导',worldTemplateHash:seeded.published.publishedHash,greeting:''}})).json()).id;
+ await open(page,app.baseURL);if(await page.getByRole('button',{name:'关闭侧栏',exact:true}).isVisible())await page.getByRole('button',{name:'关闭侧栏',exact:true}).click();
+ const snapshot=async()=>(await(await request.get(app.baseURL+'/api/chats/'+id)).json());
+ const world=async()=>{await page.getByRole('button',{name:'打开世界状态',exact:true}).click();return page.getByRole('dialog',{name:'世界状态',exact:true});};
+ const send=async(text:string)=>{const before=(await snapshot()).messages.length;await page.getByLabel('消息输入').fill(text);await page.getByLabel('消息输入').press('Enter');await expect.poll(async()=>(await snapshot()).messages.length).toBeGreaterThan(before);await expect(page.getByRole('button',{name:'只重写正文',exact:true})).toBeEnabled();};
+ let dialog=await world();await expect(dialog.getByTestId('action-time-rules')).toContainText('移动 10 分钟');await expect(dialog).toContainText('第1天 00:00');await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+ await send('任务调查');dialog=await world();await expect(dialog).toContainText('第1天 00:20');await expect(dialog.getByText('在场',{exact:true}).locator('..')).not.toContainText('掌柜');expect((await snapshot()).world.snapshot.money.player).toBe(83);await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+ const prior=(await snapshot()).world.snapshot;await send('任务交付');expect((await snapshot()).world.snapshot).toEqual(prior);
+ await send('耗时返回交付');const committed=(await snapshot()).world.snapshot;expect(committed.clockMinutes).toBe(35);expect(committed.money.player).toBe(113);
+ dialog=await world();await expect(dialog).toContainText('第1天 00:35');await expect(dialog.getByLabel('玩家任务日志')).toContainText('已完成');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:path.join(app.runDir,'action-time-390.png'),fullPage:true});await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+ for(let i=0;i<3;i++){await page.getByRole('button',{name:'只重写正文',exact:true}).click();const rewrite=page.getByRole('dialog',{name:'只重写正文',exact:true});await rewrite.getByLabel('本次写作要求').fill('简洁'+i);await rewrite.getByRole('button',{name:'新增文字候选'}).click();await expect(rewrite).toHaveCount(0);await expect(page.getByRole('button',{name:'只重写正文',exact:true})).toBeEnabled();expect((await snapshot()).world.snapshot).toEqual(committed);}
+ await page.reload();await expect(page.getByText('在线',{exact:true})).toBeVisible();await open(page,app.baseURL);expect((await snapshot()).world.snapshot).toEqual(committed);
+ const sent=fs.readFileSync(path.join(app.runDir,'requests.ndjson'),'utf8');expect(sent).toContain('服务端行动耗时');expect(sent).not.toContain('作者日程备注');expect(sent).not.toContain('"schedules"');
+});
 
 test('作者从v3启用v4，编辑每日点、验证重复与预算、只读模拟并发布；390px',async({page,request,app})=>{
  const seeded=await seed(request,app.baseURL,true);await open(page,app.baseURL);await page.getByRole('button',{name:'世界模板',exact:true}).click();
