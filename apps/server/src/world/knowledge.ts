@@ -5,6 +5,7 @@ import { validateWorldReferences } from "./schema.ts";
 import {actorKnows} from "./conditions.ts";
 export {actorKnows} from "./conditions.ts";
 import {visibleQuests} from "./quest-view.ts";
+import {interactionAvailability} from "./action-view.ts";
 
 /** Exact allowlist: no complete knowledge table, private notes, or interaction rules cross this boundary. */
 export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTemplate | undefined, actorId: string): WorldModelSnapshot {
@@ -50,14 +51,17 @@ export function buildRoleWorldView(snapshot: WorldSnapshot, template: WorldTempl
     const fact = knownFacts.find(f=>f.id===e.factId)!;
     return [{id:e.id,commandId:e.commandId,turn:e.turn,type:e.type,actorId:e.actorId,factId:fact.id,interactionId:e.interactionId,worldTimeMinutes:e.worldTimeMinutes,summary:fact.text}];
   });
-  const publicInteractions = usable?.interactions?.map(i=>({id:i.id,name:i.name})) ?? [];
+  const publicInteractions = usable?.interactions?.map(i=>({id:i.id,name:i.name,
+    ...(actorId === usable!.initial.actorId ? {availability:interactionAvailability(snapshot,usable!,i)} : {})})) ?? [];
   const view: WorldModelSnapshot = {
     schemaVersion:snapshot.schemaVersion,revision:snapshot.revision,templateHash:snapshot.templateHash,
     templateVersion:snapshot.templateVersion,rulesVersion:snapshot.rulesVersion,clockMinutes:snapshot.clockMinutes,
     scene:structuredClone(snapshot.scene),actors:structuredClone(snapshot.actors),money:structuredClone(snapshot.money),inventory:structuredClone(snapshot.inventory),
     ...(snapshot.schemaVersion>=3?{quests,questKey:worldContentHash({actorId,quests})}:{}),
     recentEvents,viewpointId:actorId,knownFacts,publicInteractions,
-    knowledgeKey:worldContentHash({actorId,knownFacts,publicInteractions}),
+    // Readiness changes with hard state, not knowledge authorization. Keep the
+    // authorization fingerprint stable across movements and inventory changes.
+    knowledgeKey:worldContentHash({actorId,knownFacts,publicInteractions:publicInteractions.map(({id,name})=>({id,name}))}),
   };
   return view;
 }

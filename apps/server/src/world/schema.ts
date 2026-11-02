@@ -60,7 +60,7 @@ const effect = Type.Union([
   Type.Object({type:Type.Literal("learn"),...relation,fromActorId:Type.Optional(id)},strict),
   Type.Object({type:Type.Literal("publish"),factId:id},strict),
 ]);
-const interaction = Type.Object({id,name:Type.String({minLength:1,maxLength:100}),description:Type.Optional(Type.String({maxLength:2000})),conditions:Type.Array(condition,{maxItems:16}),effects:Type.Array(effect,{minItems:1,maxItems:16})},strict);
+const interaction = Type.Object({id,name:Type.String({minLength:1,maxLength:100}),description:Type.Optional(Type.String({maxLength:2000})),conditions:Type.Array(condition,{maxItems:16}),publicConditionIndexes:Type.Optional(Type.Array(integer(15),{maxItems:16,uniqueItems:true})),effects:Type.Array(effect,{minItems:1,maxItems:16})},strict);
 const eventV2 = Type.Object({...event.properties, type:Type.Union([...event.properties.type.anyOf,Type.Literal("knowledge_learn"),Type.Literal("knowledge_publish")]),factId:Type.Optional(id),interactionId:Type.Optional(id)},strict);
 const templateV2 = Type.Object({...templateV1.properties,
   schemaVersion:Type.Literal(2), facts:Type.Array(fact,{maxItems:256}), interactions:Type.Array(interaction,{maxItems:128}),
@@ -158,6 +158,7 @@ export function parseWorldTemplate(input: unknown): WorldTemplate {
     unique(template.facts!.map(f=>f.id), "事实 ID"); unique(interactions.map(i=>i.id), "交互 ID");
     checkKnowledge(template.initial.knowledge!, actors, facts);
     for (const i of interactions) {
+      if (i.publicConditionIndexes?.some(index => index >= i.conditions.length)) invalid("公开条件索引超出交互条件范围");
       for (const c of i.conditions) {
         if ("actorId" in c && !actors.has(c.actorId)) invalid("交互角色引用无效");
         if ("factId" in c && !facts.has(c.factId)) invalid("交互事实引用无效");

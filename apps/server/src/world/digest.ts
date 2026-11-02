@@ -73,7 +73,10 @@ export function worldDigest(
   const events = snapshot.recentEvents.slice(-3);
   if (events.length) lines.push("最近变化：" + events.map((event) => eventText(event, template)).join("；"));
   if (view.knownFacts.length) lines.push("已知事实：" + view.knownFacts.map(f=>f.text).join("；"));
-  if (view.publicInteractions.length) lines.push("可选交互（由服务端判断条件）：" + JSON.stringify(view.publicInteractions));
+  if (view.publicInteractions.length) {
+    lines.push("交互可用性（服务端按当前状态计算）：" + JSON.stringify(view.publicInteractions));
+    lines.push("ready=当前条件满足，仍须调用工具并按成功回执叙述；later=后续目标，不能建议立即执行。先满足所列公开条件，再查询更新后的可用性；未列出的私密条件不表示不存在。只给当前可行的行动建议，后续目标须明确标注。材料交付、实际验收与案件结论分别以已知事实和任务记录为准。");
+  }
   if (view.quests) lines.push("玩家任务日志（只读；接取/推进需world_quest，不能用正文改变进度）："+JSON.stringify(view.quests));
   const restriction = restrictionLabel(capability);
   if (restriction) {

@@ -9,6 +9,7 @@ import { actorKnows, buildPlayerWorldView } from "./knowledge.ts";
 import type { WorldState } from "./state.ts";
 import {applyQuestAction,questAction,rejectedQuest} from "./quests.ts";
 import {visibleQuests} from "./quest-view.ts";
+import {interactionConditionsMet} from "./action-view.ts";
 
 /** 只在内存中结算；commit 返回独立快照，文件提交与并发校验由 M2 调用者负责。 */
 export class WorldTransaction {
@@ -100,17 +101,8 @@ export class WorldTransaction {
     if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input,"interactionId") || typeof (input as {interactionId?:unknown}).interactionId !== "string") return reject();
     const interaction = this.template.interactions?.find(i=>i.id===(input as {interactionId:string}).interactionId);
     if (!interaction) return reject();
-    const snapshot = this.working, template = this.template, player = template.initial.actorId;
-    const present = (id:string) => snapshot.actors[id]?.status === "alive" && snapshot.actors[id].locationId === snapshot.actors[player]?.locationId;
-    if (!present(player) || !interaction.conditions.every(c=>{
-      switch(c.type) {
-        case "at_location": return snapshot.actors[player].locationId === c.locationId;
-        case "npc_present": return c.actorId !== player && present(c.actorId);
-        case "has_item": return snapshot.inventory.some(i=>i.ownerId===player && i.itemId===c.itemId && i.quantity>=c.quantity);
-        case "knows_fact": return actorKnows(snapshot,template,c.actorId,c.factId);
-      }
-    })) return reject();
-    if (interaction.effects.some(e=>e.type === "learn" && e.fromActorId && (!present(e.fromActorId) || !actorKnows(snapshot,template,e.fromActorId,e.factId)))) return reject();
+    const snapshot = this.working, template = this.template;
+    if (!interactionConditionsMet(snapshot,template,interaction)) return reject();
     const next = structuredClone(snapshot), events:WorldEvent[] = [];
     for (const effect of interaction.effects) {
       if (effect.type === "learn") {

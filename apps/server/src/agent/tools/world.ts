@@ -25,7 +25,7 @@ export function createWorldQueryTool(ctx: ToolContext): AgentTool<ReturnType<typ
     name: "world_query",
     label: "世界状态",
     description:
-      "查询当前世界的权威状态：时间、地点、在场人物、金钱、库存、最近事件；summary/catalog/all 同时返回角色、地点、物品的显示名与命令 ID、物品固定价格，便于 world_command。只读，不修改世界。精确账本、命令 ID 或跨轮变化必须查询，不要仅凭叙事猜测硬状态。",
+      "查询当前世界的权威状态：时间、地点、在场人物、金钱、库存、最近事件；summary/catalog/all 同时返回角色、地点、物品目录和交互可用性：ready为当前条件满足，later只能标为后续目标，不能建议立即执行。地点、在场人物和物品要求按服务端计算，私密条件不披露。只读，不修改世界。跨轮或行动后重新查询，不能凭叙事猜测；成功仍需执行工具。",
     parameters,
     execute: async (_id, params) => {
       if (!ctx.world) return { content: text("当前聊天没有启用世界状态。"), details: { summary: "世界未启用" }, isError: true };

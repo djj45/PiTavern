@@ -386,18 +386,27 @@ export type WorldInteractionCondition =
 export type WorldInteractionEffect =
   | { type: "learn"; actorId: string; factId: string; fromActorId?: string }
   | { type: "publish"; factId: string };
-export interface WorldInteractionDefinition { id: string; name: string; description?: string; conditions: WorldInteractionCondition[]; effects: WorldInteractionEffect[] }
+export interface WorldInteractionDefinition {
+  id: string; name: string; description?: string;
+  conditions: WorldInteractionCondition[];
+  /** Author opt-in: which prerequisite relationships are public. Unknown facts remain filtered. */
+  publicConditionIndexes?: number[];
+  effects: WorldInteractionEffect[];
+}
 export interface WorldKnownFact { id: string; text: string; source: WorldKnowledgeSource | {type: "public"; turn: number} }
 /** Model DTO: never add complete knowledge relations or template rules here. */
 export interface WorldModelSnapshot extends Omit<WorldSnapshot, "knowledge" | "publishedFactIds" | "questStates" | "scheduleStates"> {
   viewpointId: string;
   knowledgeKey: string;
   knownFacts: WorldKnownFact[];
-  publicInteractions: Array<{id: string; name: string}>;
+  publicInteractions: Array<{id: string; name: string; availability?: WorldActionAvailability}>;
   questKey?: string;
   quests?: WorldQuestView[];
 }
 export interface WorldInteractionResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; knownFacts?: WorldKnownFact[] }
+
+/** Server-calculated conditions at this snapshot; execution still requires a successful tool receipt. */
+export interface WorldActionAvailability { status: "ready" | "later"; reasons: string[] }
 
 export interface WorldQuestStage { id: string; objective: string; conditions: WorldInteractionCondition[]; delivery?: {toActorId: string; itemId: string; quantity: number} }
 export interface WorldQuestDefinition { id: string; name: string; description?: string; openConditions: WorldInteractionCondition[]; stages: WorldQuestStage[]; reward: {fromActorId: string; money: number; items: Array<{itemId: string; quantity: number}>} }
