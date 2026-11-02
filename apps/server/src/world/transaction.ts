@@ -82,7 +82,7 @@ export class WorldTransaction {
     const key=JSON.stringify(action),previous=this.questReceipts.get(key);
     if(previous){
       const result=this.replayReceipt(previous);
-      if(this.template.actionTime)result.quests=visibleQuests(this.working,this.template,this.template.initial.actorId);
+      result.quests=visibleQuests(this.working,this.template,this.template.initial.actorId);
       return result;
     }
     const applied=applyQuestAction(this.working,this.template,action,this.turn);

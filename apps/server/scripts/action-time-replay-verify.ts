@@ -58,6 +58,26 @@ assert.equal(unchangedReplay.status,"unchanged");assert.equal(unchangedReplay.ti
 assert.equal(unchangedReplay.replay!.originalRevision,unchanged.revision);assert.ok(!unchangedReplay.quests!.some(q=>q.id==="temporary_visit"));
 check("缓存unchanged操作也报告当前时间与当前玩家任务投影，不重发旧任务目录");
 
+const hallOnly={id:"hall_only_commission",name:"仅公所可见的委托",openConditions:[{type:"at_location",locationId:"hall"}],stages:[{id:"visit",objective:"在公所问询",conditions:[]}],reward:{fromActorId:"lin",money:0,items:[]}};
+for(const variant of ["v3-manual","v4-manual","v4-timed"]){
+ const raw=structuredClone(template);raw.quests.push(hallOnly);
+ if(variant!=="v4-timed")delete raw.actionTime;
+ if(variant==="v3-manual"){raw.schemaVersion=3;delete raw.schedules;}
+ const record=createWorldTemplateRecord(raw),initial=createInitialWorldSnapshot(record),transaction=new WorldTransaction(new WorldState(initial,{[record.contentHash]:record}),1);
+ const original=transaction.quest(accept),savedOriginal=structuredClone(original);assert.ok(original.quests!.some(q=>q.id===hallOnly.id));
+ transaction.execute(move);const before=transaction.snapshot,receipts=transaction.receipts,scope=transaction.questViewsChanged;
+ for(let i=0;i<3;i++){
+  const replay=transaction.quest(accept);assert.ok(!replay.quests!.some(q=>q.id===hallOnly.id));assert.deepEqual(replay.quests,buildPlayerWorldView(before,record.template).quests);
+  assert.deepEqual(Object.keys(replay).sort(),Object.keys(original).sort().concat(variant==="v4-timed"?["replay"]:[]).sort());
+  if(variant!=="v4-timed"){
+   const {quests:originalQuests,...originalReceipt}=original,{quests:currentQuests,...currentReceipt}=replay;
+   assert.deepEqual(currentReceipt,originalReceipt);assert.equal(before.clockMinutes,0);assert.equal(replay.time,undefined);assert.equal(replay.replay,undefined);
+  }else{assert.equal(replay.time!.elapsedMinutes,0);assert.equal(replay.time!.clockMinutes,10);}
+  replay.quests!.length=0;assert.deepEqual(original,savedOriginal);assert.deepEqual(transaction.snapshot,before);assert.deepEqual(transaction.receipts,receipts);assert.equal(transaction.questViewsChanged,scope);
+ }
+ check(variant+"：接任务→离开公所→重放三次，仅刷新当前任务投影；旧格式/原回执/状态保持不变");
+}
+
 const f=await twoStageFixture(template);
 const call=(name:string,args:unknown)=>({name,args});
 const submit=call("submit_narrative_plan",{scene:"北灯塔",beats:["仅按当前服务端时间叙述"],dialogue:[],references:[{kind:"actor",id:"player"}]});
@@ -81,4 +101,25 @@ try{
  }
  assert.deepEqual(f.problems,[]);
 }finally{await f.close();}
-console.log(`${checks} 组行动回执重放检查通过：${f.run}`);
+const legacyTemplate=structuredClone(template);delete legacyTemplate.actionTime;legacyTemplate.quests.push(hallOnly);
+const legacy=await twoStageFixture(legacyTemplate);
+try{
+ for(const mode of ["simple","bridge","takeover"] as const)for(const dual of [false,true]){
+  legacy.config.contextMode=mode;legacy.config.twoStage=dual;const chat=legacy.chat(),label=mode+(dual?"双阶段":"单阶段");
+  const inspect=(body:any)=>{
+   const msg=body.messages.filter((m:any)=>m.role==="tool").at(-1),replay=JSON.parse(msg.content);
+   assert.ok(!replay.quests.some((q:any)=>q.id===hallOnly.id));assert.equal(replay.status,"staged");assert.equal(replay.revision,1);assert.equal(replay.summary,"任务操作已暂存，整轮成功后提交；失败或停止会撤销。");assert.equal(replay.time,undefined);assert.equal(replay.replay,undefined);
+  };
+  legacy.plan(label+" legacy quest projection",[
+   {calls:[call("world_quest",accept)]},
+   {calls:[call("world_command",move)],inspect:(body:any)=>{const msg=body.messages.filter((m:any)=>m.role==="tool").at(-1);assert.ok(JSON.parse(msg.content).quests.some((q:any)=>q.id===hallOnly.id));}},
+   {calls:[call("world_quest",accept)]},
+   ...(dual?[{calls:[submit],inspect},{text:"当前已离开公所。",inspect:(body:any)=>{assert.ok(!body.tools?.length);const packet=JSON.parse(body.messages.findLast((m:any)=>m.role==="user").content);assert.ok(!packet.authoritativeState.quests.some((q:any)=>q.id===hallOnly.id));assert.equal(packet.authoritativeState.clockMinutes,0);}}]:[{text:"当前已离开公所。",inspect}]),
+  ]);
+  await legacy.sessions.send(chat.id,"接任务后前往灯塔，再重试原接任务操作");
+  assert.equal(legacy.count(),dual?5:4);const state=legacy.chats.readWorld(chat.id)!.snapshot;assert.equal(state.clockMinutes,0);assert.equal(state.money.player,30);assert.equal(state.questStates!.length,1);assert.equal(state.recentEvents.length,2);assert.equal(legacy.sessions.activityPage(chat.id).records[0].status,"succeeded");assert.ok(!legacy.sessions.snapshot(chat.id)!.world!.snapshot!.quests!.some(q=>q.id===hallOnly.id));
+  check(label+"旧模板：实际后续模型请求的重放回执与玩家日志/正文包一致，隐藏公所委托、保留旧格式且不耗时");
+ }
+ assert.deepEqual(legacy.problems,[]);
+}finally{await legacy.close();}
+console.log(`${checks} 组行动回执重放检查通过：${f.run}；旧模板：${legacy.run}`);
