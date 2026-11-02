@@ -60,6 +60,7 @@ assert.match(parsedCard.postHistoryInstructions, /后续目标/);
 const initialView = buildPlayerWorldView(initial.snapshot, initial.template);
 assert.deepEqual(initialView.knownFacts!.map(f => f.id), ["commission"]);
 assert.deepEqual(initialView.quests!.map(q => q.id), ["repair", "investigate"]);
+assert.equal(initialView.quests![0].name, "备齐修灯材料");
 check("12条卡内/独立书归一化一致；开场仅公开委托与两个任务，无人物指控和受限正文");
 
 type Call = { name: string; args: Record<string, unknown> };
@@ -129,6 +130,7 @@ try {
     assert.equal(state().questStates!.find(q => q.questId === "repair")!.status, "completed");
     assert.ok(!state().inventory.some(i => i.ownerId === "player" && i.itemId === "lens"));
     assert.ok(state().inventory.some(i => i.ownerId === "player" && i.itemId === "repair_receipt"));
+    assert.equal(known("lamp"), false, "材料已交付不等于灯塔已验证");
     check(label + "：接案、两条受限线索、实际购买与交付；30→12→24，凭据来自NPC库存");
 
     await turn("提前去塔验收", [move("lighthouse"), interact("confirm_light")]);
@@ -141,6 +143,7 @@ try {
     assert.deepEqual(stateFields(f.chats.readMetadata(chat.id)), beforeFailed);
     await turn("等到01:30并验收", [wait(85), move("lighthouse"), interact("confirm_light")]);
     assert.equal(state().clockMinutes, 90); assert.ok(known("lamp"));
+    assert.match(buildPlayerWorldView(state(), f.chats.readWorld(chat.id)!.template).knownFacts.find(f => f.id === "lamp")!.text, /^灯塔已验证：/);
     assert.equal(state().actors.qiao.locationId, "lighthouse");
     check(label + "：错过在场拒绝，失败正文撤销等待/移动/揭示，重试到01:30才亮灯");
 
