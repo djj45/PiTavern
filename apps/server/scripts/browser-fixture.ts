@@ -43,6 +43,7 @@ if (!fs.existsSync(persistCardPath)) {
     character_book: fixtureBook(), extensions: { unknownCard: { keep: true } },
   } }));
 }
+let failedRetryOnce = false;
 const mock = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url?.endsWith('/models')) {
     fs.appendFileSync(path.join(runDir, 'model-requests.ndjson'), JSON.stringify({ method: req.method, url: req.url }) + '\n');
@@ -60,7 +61,8 @@ const mock = http.createServer(async (req, res) => {
   let raw = ''; for await (const part of req) raw += part;
   fs.appendFileSync(path.join(runDir, 'requests.ndjson'), raw + '\n');
   const body = JSON.parse(raw);
-  if (raw.includes('诊断空正文')) {
+  if (raw.includes('诊断空正文') || (raw.includes('失败后重试本轮') && raw.includes('pitavern-narrative-v1') && !failedRetryOnce)) {
+    if (raw.includes('失败后重试本轮')) failedRetryOnce = true;
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: '模型输出为空，请降低思考强度。私有故障标记-DO-NOT-EXPOSE' } }));
     return;

@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { WorldSnapshot, WorldTemplate } from '../../packages/shared/src/world.ts';
+import type { ConnectionDto } from '@pitavern/shared';
 
 interface FixtureServer { baseURL: string; child: ChildProcess }
 interface AppFixture { baseURL: string; runDir: string; restart: () => Promise<string> }
@@ -620,7 +621,9 @@ test('v1 草稿显式启用 v2，新增秘密与初始知情可保存发布',asy
 test.describe('雾港内容包', () => {
 test.use({ worldTools: true });
 for (const mobile of [false, true]) test(`雾港实际游戏资产导入、发布、新开局与玩家秘密边界${mobile ? ' 390px' : ' 桌面'}`, async ({ page, app, request }) => {
-  expect((await request.put(app.baseURL + '/api/connection', { data: { contextMode: 'takeover', outputProtocol: 'native' } })).ok()).toBeTruthy();
+  const connection = await (await request.get(app.baseURL + '/api/connection')).json() as ConnectionDto;
+  expect((await request.put(app.baseURL + '/api/connection', { data: { contextMode: 'takeover', outputProtocol: 'native',
+    providers: connection.providers.map(p => ({...p, models:p.models.map(m => ({...m,contextWindow:24000}))})) } })).ok()).toBeTruthy();
   if (mobile) await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(app.baseURL);
   await expect(page.getByText('在线', { exact: true })).toBeVisible();
@@ -654,7 +657,7 @@ for (const mobile of [false, true]) test(`雾港实际游戏资产导入、发�
   await expect(world).toContainText('第1天 00:00');
   await expect(world).toContainText('潮声公所');
   await expect(world).not.toContainText('世界当前只读');
-  await expect(world.getByLabel('玩家任务日志')).toContainText('让北灯重新亮起');
+  await expect(world.getByLabel('玩家任务日志')).toContainText('备齐修灯材料');
   await expect(world.getByLabel('玩家任务日志')).toContainText('雾中的两份证据');
   await expect(world).not.toContainText('卢晦');
   await expect(world).not.toContainText('岸上有证');

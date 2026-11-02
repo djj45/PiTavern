@@ -117,7 +117,7 @@ export function ActivityDialog({ chatId, activity, onClose }: { chatId: string; 
       className="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-xl border border-tavern-border bg-tavern-panel p-4 shadow-xl">
       <div className="mb-3 flex items-center justify-between"><h2 id="activity-title" className="font-medium">生成记录与上下文诊断</h2>
         <button autoFocus type="button" onClick={onClose} aria-label="关闭生成记录" className="rounded border border-tavern-border px-2 py-1 text-sm">关闭</button></div>
-      <p className="mb-3 text-xs text-tavern-dim">共 {activity.totalGenerations} 次生成。失败、停止与候选切换均保留已发生的记录；旧版和导入聊天的历史用量无法补算。</p>
+      <p className="mb-3 text-xs text-tavern-dim">共 {activity.totalGenerations} 次生成。累计包含其他候选、失败、停止和重试，并非当前路线成本；切换路线不回退已发生的消耗。旧版和导入聊天的历史用量无法补算。</p>
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto md:grid md:grid-cols-[13rem_1fr]">
         <nav aria-label="生成记录列表" className="max-h-44 shrink-0 space-y-2 overflow-y-auto md:max-h-none">
           {records.map((record) => <button key={record.id} type="button" onClick={() => setSelected(record.id)}

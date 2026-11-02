@@ -41,6 +41,37 @@ async function seed(request:import('@playwright/test').APIRequestContext,baseURL
 }
 async function open(page:Page,url:string){await page.goto(url);await expect(page.getByText('在线',{exact:true})).toBeVisible();if((page.viewportSize()?.width??1280)<768&&await page.getByRole('button',{name:'菜单',exact:true}).isVisible())await page.getByRole('button',{name:'菜单',exact:true}).click();await page.locator('aside li').first().getByRole('button').first().click();}
 
+test('390px失败尝试只在诊断中保留，重试沿用本轮而不新增用户回合或失败候选', async ({page,request,app}) => {
+  await page.setViewportSize({width:390,height:844});
+  const id=await seed(request,app.baseURL); await open(page,app.baseURL);
+  const snapshot=async()=> (await(await request.get(app.baseURL+'/api/chats/'+id)).json());
+  const initial=await snapshot();
+  await page.getByLabel('消息输入').fill('双阶段计时失败后重试本轮'); await page.getByLabel('消息输入').press('Enter');
+  const retry=page.getByRole('button',{name:'重试本轮',exact:true}); await expect(retry).toBeVisible();
+  const failed=await snapshot(); expect(failed.world.snapshot).toEqual(initial.world.snapshot);
+  expect(failed.messages.filter((m:{role:string})=>m.role==='user')).toHaveLength(1);
+  expect(failed.messages.filter((m:{role:string})=>m.role==='assistant')).toHaveLength(0);
+  expect(failed.branchChoices ?? []).toHaveLength(0);
+  await page.getByRole('button',{name:'查看生成诊断',exact:true}).click();
+  const diagnostic=page.getByRole('dialog',{name:'生成记录与上下文诊断',exact:true}); await expect(diagnostic).toBeVisible();
+  await expect(diagnostic).toContainText('失败'); await expect(diagnostic).toContainText('正文无效');
+  expect(failed.activity.records[0].contentHidden).toBe(true);
+  await expect(diagnostic).not.toContainText('私有故障标记');
+  await diagnostic.getByRole('button',{name:'关闭生成记录',exact:true}).click();
+  await retry.click(); await expect(page.getByRole('button',{name:'只重写正文',exact:true})).toBeEnabled();
+  await expect(retry).toHaveCount(0);
+  const succeeded=await snapshot();
+  expect(succeeded.messages.filter((m:{role:string})=>m.role==='user')).toHaveLength(1);
+  expect(succeeded.messages.filter((m:{role:string})=>m.role==='assistant')).toHaveLength(1);
+  expect(succeeded.world.snapshot.money.player).toBe(83); expect(succeeded.world.snapshot.clockMinutes).toBe(10);
+  expect(succeeded.replyChoices.count).toBe(1);
+  expect(succeeded.activity.records.map((r:{status:string})=>r.status)).toEqual(['succeeded','failed']);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  await page.screenshot({path:path.join(app.runDir,'retry-390.png'),fullPage:true});
+  await page.reload(); await expect(page.getByText('在线',{exact:true})).toBeVisible();
+  expect((await snapshot()).messages).toEqual(succeeded.messages);
+});
+
 test('双阶段结算/正文状态、三次重写和重新生成，实际请求隔离工具与秘密',async({page,request,app})=>{
  const id=await seed(request,app.baseURL);await open(page,app.baseURL);
  const rewrite=page.getByRole('button',{name:'只重写正文',exact:true});await expect(rewrite).toBeDisabled();

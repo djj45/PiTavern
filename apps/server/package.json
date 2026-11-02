@@ -27,7 +27,7 @@
     "verify:card-compat": "tsx scripts/card-compat-verify.ts",
     "verify:local": "tsx scripts/local-verify.ts",
     "verify:group-script": "tsx scripts/group-script-verify.ts",
-    "verify:branches": "tsx scripts/branch-tree-verify.ts",
+    "verify:branches": "node --import tsx scripts/branch-experience-verify.ts && tsx scripts/branch-tree-verify.ts",
     "verify:chat-import": "tsx scripts/chat-import-verify.ts",
     "verify:world-templates": "tsx scripts/world-template-verify.ts",
     "verify:world-migration": "tsx scripts/world-migration-verify.ts",

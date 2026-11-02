@@ -2,6 +2,8 @@
 
 当前开发候选：**0.12.0**（待独立复验，正式发布版为 **0.11.0**）。新安装、升级和回退见 [发布说明](docs/RELEASE.md)，兼容边界见 [兼容说明](docs/COMPATIBILITY.md)。
 
+本轮体验修正范围为 [雾港 M1–M3、M5](docs/FOGHARBOR_EXPERIENCE.md)：服务端行动可用性、证据表述、材料交付与点灯分离、分支定位和失败重试。行动自动耗时 M4 单独实现与验收，本修正版仍仅在明确等待时推进时间。
+
 基于 [pi](https://github.com/earendil-works/pi) agent 运行时的 agent 化酒馆。数据生态兼容 [SillyTavern](https://github.com/SillyTavern/SillyTavern)（角色卡 / 世界书 / 预设 / JSONL 聊天记录）。
 
 ## 一键启动
@@ -68,7 +70,7 @@ npm run verify:quests # v3任务校验/规则/三模式生成/分支迁移/边�
 npm run verify:game   # 雾港完整游戏、三模式单/双阶段、秘密与分支恢复
 npm run verify:ci     # 29 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
-npm run build && npm run verify:browser # 72 项真实界面验收，独立合成库与本地 mock
+npm run build && npm run verify:browser # 73 项真实界面验收，独立合成库与本地 mock
 ```
 
 聊天切换和断线重连通过 WebSocket 快照恢复历史与生成进度。设置变更从下一回合生效，当前生成仍可停止。聊天读取按文件修改时间缓存，兼容外部修改的 ST 记录。

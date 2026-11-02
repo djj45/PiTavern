@@ -4,6 +4,10 @@ import { api } from "../api.ts";
 
 type Filter = "all" | "favorite" | "recent" | "archived";
 
+function generatedTime(value?: string): string {
+  return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "时间未记录";
+}
+
 interface BranchDialogProps {
   chatId: string;
   revision: string;
@@ -111,8 +115,9 @@ function BranchRow({ node, depth, selectedId, expanded, forceOpen, focusId, matc
           {node.isActive && !node.isCurrent && <span className="shrink-0 rounded-full border border-tavern-accent/40 px-1.5 py-0.5 text-[10px] text-tavern-accent">路径中</span>}
           {node.favorite && <span className="shrink-0 text-amber-400" aria-label="已收藏">★</span>}
         </span>
+        <span className="block truncate text-[11px] text-tavern-dim">正文摘要：{node.assistantPreview || "（无正文）"}</span>
         <span className="flex min-w-0 flex-wrap items-center gap-2 text-[10px] text-tavern-dim">
-          <span>第 {node.turn} 轮</span>
+          <span>生成时间：{generatedTime(node.generatedAt)}</span>
           {node.linearTurns > 0 && <span>后续 {node.linearTurns} 轮</span>}
           {node.childCount > 0 && <span>{node.childCount} 个下级分支</span>}
           {node.descendantCount > 0 && <span>共 {node.descendantCount + 1} 个节点</span>}
@@ -590,6 +595,8 @@ export function BranchDialog({ chatId, revision, busy, canRegenerate, onSwitchPa
               <div className="min-w-0 flex-1">
                 <h3 className="break-words text-base font-medium">{selected.name || selected.title}</h3>
                 {selected.name && <p className="mt-0.5 text-xs text-tavern-dim">{selected.title}</p>}
+                <p className="mt-1 text-xs text-tavern-dim">生成时间：{generatedTime(selected.generatedAt)}</p>
+                <p className="mt-1 break-words text-xs text-tavern-dim">正文摘要：{selected.assistantPreview || "（无正文）"}</p>
               </div>
               <button type="button" onClick={() => void toggleFavorite()} disabled={metaSaving}
                 className={"rounded-md border px-2 py-1 text-xs " + (selected.favorite ? "border-amber-400/50 text-amber-300" : "border-tavern-border text-tavern-dim hover:text-tavern-text")}>

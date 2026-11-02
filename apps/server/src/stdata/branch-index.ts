@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BranchIndexDto, BranchPathStepDto, BranchTreeNodeDto } from "@pitavern/shared";
-import { branchMessageId, parseChatSource, turnReplies } from "./replies.ts";
+import { branchMessageId, parseChatSource, replyGeneratedAt, turnReplies } from "./replies.ts";
 import type { StChatLine } from "./types.ts";
 
 const MAX_NODES = 10000;
@@ -87,8 +87,7 @@ function buildChildren(lines: StChatLine[], ctx: WalkContext, state: WalkState):
     const path = [...ctx.path, step];
     const id = pathId(path);
     const assistantPreview = previewText(version.messages.find((message) => !message.is_user && !message.is_system)?.mes ?? "", 100);
-    const baseName = userPreview && userPreview !== "继续" ? userPreview : assistantPreview || "空回复";
-    const title = `第 ${turn} 轮 · ${previewText(baseName, 28)}${catalog.versions.length > 1 ? ` · 候选 ${index + 1}` : ""}`;
+    const title = `第 ${turn} 轮 · 候选 ${index + 1}/${catalog.versions.length}`;
     const meta = ctx.meta[id] ?? {};
     const labels = [...ctx.pathLabels, typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : title];
     // 局部选中版本同样以当前局部源的实际后续为准；非活动只影响 isActive/当前路线，
@@ -122,6 +121,7 @@ function buildChildren(lines: StChatLine[], ctx: WalkContext, state: WalkState):
       ...(typeof meta.note === "string" && meta.note.trim() ? { note: meta.note.trim() } : {}),
       userPreview,
       assistantPreview,
+      ...(replyGeneratedAt(version.messages) ? {generatedAt: replyGeneratedAt(version.messages)} : {}),
       preview: lastStoryText(routeLines) || assistantPreview || userPreview,
       pathText: labels.join(" › "),
       path,

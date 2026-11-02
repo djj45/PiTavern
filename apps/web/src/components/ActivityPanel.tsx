@@ -69,7 +69,7 @@ export const ActivityPanel = memo(function ActivityPanel({ items, usage, project
           <dt className="text-tavern-dim">合计</dt>
           <dd className="text-right font-medium">{fmt(usage.totalTokens)}</dd>
         </dl>
-        {activity && <p className="mt-2 text-xs leading-5 text-tavern-dim">累计已回传用量，含重试、失败和停止；未回传的消耗无法统计。旧版历史不补算。</p>}
+        {activity && <p className="mt-2 text-xs leading-5 text-tavern-dim">累计已回传用量，含其他候选、重试、失败和停止，并非当前路线成本；未回传的消耗无法统计。旧版历史不补算。</p>}
       </section>
 
       {activity && chatId && <section className="mb-5 space-y-2">

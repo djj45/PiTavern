@@ -28,7 +28,7 @@ export function selectedMessages(catalog: ReplyVersions): StChatLine[] {
     messages[0].swipes = catalog.versions.map((version) => version.messages[0].mes);
     messages[0].swipe_id = catalog.selected;
     messages[0].swipe_info = catalog.versions.map(({ messages: [message] }) => ({
-      ...(message.swipe_info?.[message.swipe_id ?? 0] ?? {}), extra: structuredClone(message.extra ?? {}),
+      ...(message.swipe_info?.[message.swipe_id ?? 0] ?? {}), send_date: message.send_date, extra: structuredClone(message.extra ?? {}),
     }));
   }
   return messages;
@@ -116,7 +116,9 @@ export function turnReplies(lines: StChatLine[], metadata: Record<string, unknow
     catalog = { selected, versions: line.swipes!.map((text, index) => {
       const extra = { ...line.extra };
       delete extra.summary; delete extra.thinking; delete extra.protocol;
-      return { messages: [{ ...structuredClone(line), mes: text, swipe_id: index, extra: { ...extra, ...line.swipe_info?.[index]?.extra } }] };
+      return { messages: [{ ...structuredClone(line), mes: text, swipe_id: index,
+        send_date: line.swipe_info?.[index]?.send_date ?? (index === selected ? line.send_date : ""),
+        extra: { ...extra, ...line.swipe_info?.[index]?.extra } }] };
     }) };
   } else if (current.length) catalog = { selected: 0, versions: [{ messages: structuredClone(current) }] };
   if (current.length && catalog.versions.length) {
@@ -239,6 +241,12 @@ export function selectReplySource(source: string, userMessageId: string, selecte
   ].join("\n").replace(/\n+$/, "") + "\n";
 }
 
+/** Never substitute the selected swipe's timestamp for a different legacy candidate. */
+export function replyGeneratedAt(messages: StChatLine[]): string | undefined {
+  const time = messages.find(m => !m.is_user && !m.is_system)?.send_date;
+  return time && Number.isFinite(Date.parse(time)) ? new Date(time).toISOString() : undefined;
+}
+
 function messageIdOf(line: StChatLine, index: number): string {
   return typeof line.extra?.messageId === "string" ? line.extra.messageId : "line-" + index;
 }
@@ -258,17 +266,20 @@ export function branchPoints(lines: StChatLine[]): BranchPointDto[] {
     const saved = savedCatalog(line);
     let previews: string[];
     let continuations: boolean[];
+    let generatedAt: Array<string | undefined>;
     let selected: number;
     if (saved) {
       selected = saved.selected;
       previews = saved.versions.map((version) => previewLine(version.messages));
+      generatedAt = saved.versions.map((version) => replyGeneratedAt(version.messages));
       continuations = saved.versions.map((version, versionIndex) =>
         versionIndex !== selected && Boolean(version.continuation?.some((raw) => raw.trim())));
-      if (current.length) previews[selected] = previewLine(current);
+      if (current.length) { previews[selected] = previewLine(current); generatedAt[selected] = replyGeneratedAt(current); }
     } else if (current.length === 1 && Array.isArray(current[0].swipes) && current[0].swipes.length > 1 && current[0].swipes.every((s) => typeof s === "string")) {
       const swipes = current[0].swipes;
       selected = Number.isInteger(current[0].swipe_id) && current[0].swipe_id! >= 0 && current[0].swipe_id! < swipes.length ? current[0].swipe_id! : 0;
       previews = swipes.map((text) => previewText(text));
+      generatedAt = swipes.map((_, i) => replyGeneratedAt([{...current[0], send_date: current[0].swipe_info?.[i]?.send_date ?? (i === selected ? current[0].send_date : "")} ]));
       continuations = swipes.map(() => false);
     } else {
       continue;
@@ -279,6 +290,7 @@ export function branchPoints(lines: StChatLine[]): BranchPointDto[] {
       count: previews.length,
       candidates: previews.map((preview, candidateIndex) => ({
         index: candidateIndex, preview, hasContinuation: continuations[candidateIndex] ?? false,
+        ...(generatedAt[candidateIndex] ? {generatedAt: generatedAt[candidateIndex]} : {}),
       })),
     });
   }

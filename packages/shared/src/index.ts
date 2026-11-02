@@ -420,6 +420,8 @@ export interface BranchCandidateDto {
   index: number;
   /** 第一条回复正文的开头，用于选择器。 */
   preview: string;
+  /** Original candidate reply time; absent for legacy candidates without reliable provenance. */
+  generatedAt?: string;
   /** 该候选之后是否还保存着后续剧情。 */
   hasContinuation: boolean;
 }
@@ -459,6 +461,7 @@ export interface BranchTreeNodeDto {
   note?: string;
   userPreview: string;
   assistantPreview: string;
+  generatedAt?: string;
   /** 该路线当前保存的最后一段剧情预览。 */
   preview: string;
   pathText: string;

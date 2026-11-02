@@ -13,6 +13,7 @@ import { BackupDialog } from "./BackupDialog.tsx";
 import { AuthorNoteDialog } from "./AuthorNoteDialog.tsx";
 import { BranchDialog } from "./BranchDialog.tsx";
 import { WorldDialog } from "./WorldDialog.tsx";
+import { ActivityDialog } from "./ActivityDialog.tsx";
 const MarkdownContent = lazy(() => import("./MessageContent.tsx").then(({ MessageContent }) => ({ default: MessageContent })));
 const MessageContent = memo(function MessageContent({ text, placement, depth, display, dialoguePairs }: {
   text: string; placement: number; depth: number; display?: ChatDisplayDto; dialoguePairs?: DialoguePairDto[];
@@ -258,6 +259,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
   const [scriptFor, setScriptFor] = useState<string | null>(null);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [branchOpen, setBranchOpen] = useState(false);
+  const [diagnosticsFor, setDiagnosticsFor] = useState<string | null>(null);
   const [worldOpen, setWorldOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [greetingOpen, setGreetingOpen] = useState(false);
@@ -340,7 +342,11 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
   const branchCount = chat.branchChoices?.length ?? 0;
   // 最新分叉点优先显示，即使之后已经在选中分支上继续写了新回合。
   const lastBranch = chat.branchChoices?.at(-1);
-  const branchLabel = lastBranch ? `分支 ${lastBranch.selected + 1}/${lastBranch.count}` : "分支";
+  const branchLabel = lastBranch ? `${lastBranch.turn < chat.usage.turns ? "历史 · " : ""}第 ${lastBranch.turn} 轮 · 候选 ${lastBranch.selected + 1}/${lastBranch.count}` : "分支";
+  const lastUser = chat.items.filter((item): item is ChatMessageDto => !isToolItem(item) && item.role === "user").at(-1);
+  const attempt = chat.activity?.records[0];
+  const failedAttempt = attempt && ["failed", "aborted", "interrupted"].includes(attempt.status);
+  const canRetryAttempt = failedAttempt && lastUser?.id === attempt.userMessageId && attempt.kind !== "script";
   const currentModelOption = models.find((model) => `${model.providerId}::${model.modelId}` === currentModel);
   const effectiveThinkingLevel = currentModelOption?.thinkingLevel ?? thinkingLevel;
   const submit = () => {
@@ -388,6 +394,17 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
       </div>
 
       <div className="shrink-0 border-t border-tavern-border bg-tavern-panel p-4">
+        {failedAttempt && !locked && <div role="status" className="mb-2 rounded-lg border border-amber-500/30 p-2 text-xs leading-5 text-tavern-dim">
+          <p>上次生成未正常结束，原因和消耗保留在生成诊断中。当前正文与路线以已保存存档为准。</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            <button type="button" onClick={() => setDiagnosticsFor(chat.id)} className="rounded border border-tavern-border px-2 py-1 text-tavern-accent">查看生成诊断</button>
+            {canRetryAttempt && <button type="button" disabled={disabled || (attempt.kind === "rewrite" && !chat.rewrite?.enabled)}
+              onClick={() => attempt.kind === "rewrite" ? setRewriteFor(chat.id) : onRegenerate()}
+              className="rounded border border-tavern-border px-2 py-1 text-tavern-accent disabled:opacity-40">
+              {attempt.kind === "rewrite" ? "重试正文重写" : latestMessage && !isToolItem(latestMessage) && latestMessage.role === "user" ? "重试本轮" : "重试重新生成"}
+            </button>}
+          </div>
+        </div>}
         {chat.group && <label className="mb-2 flex w-full items-center gap-2 text-xs text-tavern-dim">本轮发言
           <select aria-label="本轮发言角色" value={responder} disabled={locked} onChange={(e) => setResponder(e.target.value)} className="min-w-0 rounded border border-tavern-border bg-tavern-bg p-1.5">
             <option value="">全员依次：{chat.group.members.join(" → ")}</option>
@@ -573,6 +590,7 @@ export function ChatView({ chat, personaName, models, currentModel, onModelChang
       {worldOpen && chat.page?.revision && <WorldDialog key={chat.id} chatId={chat.id} revision={chat.page.revision} world={chat.world} messageCount={chat.page.total} busy={locked} onClose={() => setWorldOpen(false)} onChanged={onWorldChanged} onOpenBackups={() => { setWorldOpen(false); setBackupsFor(chat.id); }} />}
       {branchOpen && <BranchDialog chatId={chat.id} revision={chat.page?.revision ?? ""} busy={locked} canRegenerate={canRegenerate && !disabled && !isStreaming}
         onSwitchPath={onSwitchBranchPath} onRegenerate={(instruction) => onRegenerate(instruction.trim() || undefined)} onClose={() => setBranchOpen(false)} />}
+      {diagnosticsFor === chat.id && chat.activity && <ActivityDialog chatId={chat.id} activity={chat.activity} onClose={() => setDiagnosticsFor(null)} />}
     </main>
   );
 }
