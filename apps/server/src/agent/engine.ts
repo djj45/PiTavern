@@ -203,6 +203,9 @@ export function createTavernAgent(options: TavernAgentOptions): Agent {
     },
     finishTurn: async (turn) => {
       turnCount += 1;
+      // Preserve an upstream failure for the caller's safe error classifier.
+      // A failed model response cannot be required to submit a settlement plan.
+      if (turn.message.stopReason === "error") return { action: "end" };
       if (options.completion === "render") {
         if (turn.message.content.some(c => c.type === "toolCall")) throw new Error("正文阶段禁止工具调用");
         if (turn.message.stopReason === "length") throw new Error("正文输出被截断，本轮未提交");

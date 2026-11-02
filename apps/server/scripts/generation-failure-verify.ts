@@ -26,6 +26,16 @@ try {
   f.config.contextMode = "takeover";
   for (const dual of [false, true]) {
     f.config.twoStage = dual;
+    const early = f.chat(), earlyBefore = stateFields(f.chats.readMetadata(early.id));
+    f.plan("first model request error " + dual, [{failure:true,failureMessage:"模型输出为空，请降低思考强度。"+privateText}]);
+    await f.sessions.send(early.id,"直接请求即失败");
+    const earlyRecord = f.sessions.activityPage(early.id).records[0];
+    assert.equal(earlyRecord.status,"failed"); assert.equal(earlyRecord.failureCode,"output");
+    assert.ok(earlyRecord.error?.includes("模型未返回可用正文")); assert.ok(!earlyRecord.error?.includes(privateText));
+    assert.equal(f.count(),1); assert.equal(earlyRecord.usage.responses,1);
+    assert.deepEqual(stateFields(f.chats.readMetadata(early.id)),earlyBefore);
+    assert.equal(f.sessions.snapshot(early.id)!.messages.filter(m=>m.role==="assistant").length,0);
+    check((dual ? "双阶段" : "单阶段") + "：首个请求上游错误不被叙事计划校验覆盖；仅计一次模型响应，无状态或候选提交");
     const chat = f.chat(), before = stateFields(f.chats.readMetadata(chat.id));
     const events: unknown[] = [];
     const unsubscribe = f.sessions.onEvent(e => events.push(e));
