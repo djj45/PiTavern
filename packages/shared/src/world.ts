@@ -76,6 +76,8 @@ export interface WorldActionTimePolicy {
   questAdvanceMinutes: number;
 }
 export interface WorldActionTimeReceipt { elapsedMinutes: number; clockMinutes: number; changes: string[] }
+/** Historical execution metadata; the replay response's top-level time/revision describe now. */
+export interface WorldActionReplay { originalRevision: number; originalTime?: WorldActionTimeReceipt }
 
 /** 模板内容哈希是模板身份；模板更新产生新记录，不覆盖旧记录。 */
 export interface WorldTemplateRecord {
@@ -196,6 +198,7 @@ export interface WorldCommandStaged {
   event: WorldEvent;
   revision: number;
   time?: WorldActionTimeReceipt;
+  replay?: WorldActionReplay;
 }
 
 export type WorldCommandResult = WorldCommandStaged | WorldCommandRejected;
@@ -424,7 +427,7 @@ export interface WorldQuestStage { id: string; objective: string; conditions: Wo
 export interface WorldQuestDefinition { id: string; name: string; description?: string; openConditions: WorldInteractionCondition[]; stages: WorldQuestStage[]; reward: {fromActorId: string; money: number; items: Array<{itemId: string; quantity: number}>} }
 export interface WorldQuestState { questId: string; status: "active" | "completed"; acceptedTurn: number; completedStages: Array<{stageId: string; turn: number}>; completedTurn?: number }
 export interface WorldQuestView { id: string; name: string; status: "available" | "active" | "completed"; currentStage?: {id: string; objective: string}; completedStages: Array<{id: string; objective: string; turn: number}> }
-export interface WorldQuestResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; quests?: WorldQuestView[]; time?: WorldActionTimeReceipt }
+export interface WorldQuestResult { status: "staged" | "unchanged" | "rejected"; summary: string; revision: number; quests?: WorldQuestView[]; time?: WorldActionTimeReceipt; replay?: WorldActionReplay }
 
 export interface WorldScheduleDefinition {
   id: string;

@@ -39,7 +39,7 @@
     "verify:quests": "tsx scripts/quest-schema-verify.ts && tsx scripts/quest-rules-verify.ts && tsx scripts/quest-game-verify.ts && tsx scripts/quest-lifecycle-verify.ts && tsx scripts/quest-boundaries-verify.ts && tsx scripts/quest-activity-verify.ts",
     "verify:schedules": "node --import tsx scripts/schedule-schema-verify.ts && node --import tsx scripts/schedule-rules-verify.ts && node --import tsx scripts/schedule-transaction-verify.ts && node --import tsx scripts/schedule-game-verify.ts && node --import tsx scripts/schedule-boundaries-verify.ts && node --import tsx scripts/schedule-lifecycle-verify.ts && node --import tsx scripts/schedule-activity-verify.ts && node --import tsx scripts/schedule-preview-verify.ts",
     "verify:game": "node --import tsx scripts/game-actions-verify.ts && node --import tsx scripts/game-verify.ts",
-    "verify:action-time": "node --import tsx scripts/action-time-rules-verify.ts && node --import tsx scripts/action-time-game-verify.ts && node --import tsx scripts/action-time-lifecycle-verify.ts"
+    "verify:action-time": "node --import tsx scripts/action-time-rules-verify.ts && node --import tsx scripts/action-time-game-verify.ts && node --import tsx scripts/action-time-lifecycle-verify.ts && node --import tsx scripts/action-time-replay-verify.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

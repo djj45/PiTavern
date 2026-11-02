@@ -35,7 +35,8 @@ check("耗时表严格校验、仅v4显式启用；旧模板哈希/读取/手动
 const s=setup();let t=s.tx();assert.equal(t.quest(quest("accept")).status,"staged");assert.equal(t.snapshot.clockMinutes,0);
 const purchased=t.execute(buy);assert.equal(purchased.status,"staged");if(purchased.status!=="staged")throw Error("buy");
 assert.equal(purchased.time!.elapsedMinutes,5);assert.equal(t.snapshot.money.player,83);assert.equal(t.snapshot.clockMinutes,5);
-assert.deepEqual(t.execute(buy),purchased);assert.equal(t.snapshot.clockMinutes,5);
+const replayedPurchase=t.execute(buy);assert.equal(replayedPurchase.status,"staged");if(replayedPurchase.status!=="staged")throw Error("replay");
+assert.equal(replayedPurchase.time!.elapsedMinutes,0);assert.equal(replayedPurchase.replay!.originalTime!.elapsedMinutes,5);assert.equal(t.snapshot.clockMinutes,5);
 assert.equal(t.execute({...buy,quantity:2}).status,"rejected");assert.equal(t.snapshot.clockMinutes,5);
 check("购买每命令5分钟，幂等回执不重复计时，ID冲突不扣物/钱/时间");
 const learned=t.interact(interact);assert.equal(learned.status,"staged");assert.equal(learned.time!.elapsedMinutes,10);

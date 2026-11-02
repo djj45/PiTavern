@@ -95,8 +95,8 @@ export function createWorldCommandTool(ctx: ToolContext): AgentTool<ReturnType<t
         };
       }
       return {
-        content: text(`世界命令已暂存，本轮成功结束后才提交；失败/停止会撤销。\n${result.summary}\n当前暂存 revision：${result.revision}`),
-        details: { summary: result.summary, commandId: result.commandId, event: result.event, revision: result.revision, ...(result.time?{time:result.time}:{}) },
+        content: text(`世界命令已暂存，本轮成功结束后才提交；失败/停止会撤销。\n${result.summary}\n${result.replay?"原执行事件（历史回执，不代表当前时间）："+JSON.stringify(result.event)+"\n原执行耗时与版本（历史回执）："+JSON.stringify(result.replay)+"\n":""}当前暂存 revision：${result.revision}`),
+        details: { summary: result.summary, commandId: result.commandId, event: result.event, revision: result.revision, ...(result.time?{time:result.time}:{}), ...(result.replay?{replay:result.replay}:{}) },
       };
     },
   };

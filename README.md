@@ -68,7 +68,7 @@ npm run verify:knowledge # 知识校验/视图/事务/出口/迁移/完整请求
 npm run verify:two-stage # 双阶段/正文重写/幂等/分支秘密恢复/长局/对照/坏行兼容/失败诊断（92 组）
 npm run verify:quests # v3任务校验/规则/三模式生成/分支迁移/边界（77 组）
 npm run verify:game   # 雾港完整游戏、三模式单/双阶段、秘密与分支恢复
-npm run verify:action-time # 固定耗时/原子结算/生成失败/全分支恢复与活动过滤（54 组）
+npm run verify:action-time # 固定耗时/原子结算/生成失败/全分支恢复/活动过滤与回执重放（64 组）
 npm run verify:ci     # 30 组独立合成数据回归，不需要本机资料库或真实 API Key
 npx playwright install chromium # 首次运行浏览器验收时安装 Chromium
 npm run build && npm run verify:browser # 74 项真实界面验收，独立合成库与本地 mock

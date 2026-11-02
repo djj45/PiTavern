@@ -10,6 +10,7 @@ import type { WorldState } from "./state.ts";
 import {applyQuestAction,questAction,rejectedQuest} from "./quests.ts";
 import {visibleQuests} from "./quest-view.ts";
 import {interactionConditionsMet} from "./action-view.ts";
+import {worldClockLabel} from "./digest.ts";
 
 /** 只在内存中结算；commit 返回独立快照，文件提交与并发校验由 M2 调用者负责。 */
 export class WorldTransaction {
@@ -63,11 +64,27 @@ export class WorldTransaction {
     } : {summary:""};
   }
 
+  /** Keep the stored receipt immutable; a replay observes the current transaction without executing. */
+  private replayReceipt<T extends {summary:string;revision:number;time?:WorldActionTimeReceipt}>(original:T):T {
+    const result=structuredClone(original);
+    if(!this.template?.actionTime)return result;
+    return {...result,
+      summary:`此前已处理，本次未重新执行；本次新增耗时 0 分钟；当前世界时间 ${worldClockLabel(this.working.clockMinutes)}（累计 ${this.working.clockMinutes} 分钟）。原执行时间与版本见 replay 历史回执，不能作为当前状态。`,
+      revision:this.working.revision,
+      time:{elapsedMinutes:0,clockMinutes:this.working.clockMinutes,changes:[]},
+      replay:{originalRevision:original.revision,...(original.time?{originalTime:structuredClone(original.time)}:{})},
+    };
+  }
+
   quest(input:unknown):WorldQuestResult {
     if(this.phase!=="open" || this.access.mode!=="enabled" || !this.template)return rejectedQuest(this.working);
     const action=questAction(input);if(!action)return rejectedQuest(this.working);
     const key=JSON.stringify(action),previous=this.questReceipts.get(key);
-    if(previous)return structuredClone(previous);
+    if(previous){
+      const result=this.replayReceipt(previous);
+      if(this.template.actionTime)result.quests=visibleQuests(this.working,this.template,this.template.initial.actorId);
+      return result;
+    }
     const applied=applyQuestAction(this.working,this.template,action,this.turn);
     // Failed conditions can be met by a later legitimate tool action in this turn.
     if(applied.result.status!=="rejected"){
@@ -102,7 +119,8 @@ export class WorldTransaction {
     const argsHash = worldContentHash(command);
     const previous = this.receiptMap.get(commandId);
     if (previous) {
-      return previous.argsHash === argsHash ? structuredClone(previous.result) : rejected("COMMAND_CONFLICT", "相同命令 ID 的参数不同");
+      if(previous.argsHash!==argsHash)return rejected("COMMAND_CONFLICT", "相同命令 ID 的参数不同");
+      return previous.result.status==="staged" ? this.replayReceipt(previous.result) : structuredClone(previous.result);
     }
     let result: WorldCommandResult;
     if (this.access.mode !== "enabled" || !this.template) {
