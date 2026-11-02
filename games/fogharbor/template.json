@@ -6,7 +6,7 @@
   "template": {
     "schemaVersion": 4,
     "templateId": "fogharbor-last-light",
-    "templateVersion": 1,
+    "templateVersion": 2,
     "rulesVersion": 1,
     "locations": [
       {
@@ -183,6 +183,9 @@
             "actorId": "player",
             "factId": "survey"
           }
+        ],
+        "publicConditionIndexes": [
+          0
         ]
       },
       {
@@ -206,6 +209,10 @@
             "factId": "testimony",
             "fromActorId": "yan"
           }
+        ],
+        "publicConditionIndexes": [
+          0,
+          1
         ]
       },
       {
@@ -228,6 +235,10 @@
             "actorId": "player",
             "factId": "ledger"
           }
+        ],
+        "publicConditionIndexes": [
+          0,
+          1
         ]
       },
       {
@@ -254,6 +265,11 @@
             "actorId": "player",
             "factId": "lamp"
           }
+        ],
+        "publicConditionIndexes": [
+          0,
+          1,
+          2
         ]
       },
       {
@@ -280,6 +296,11 @@
             "actorId": "player",
             "factId": "rescue"
           }
+        ],
+        "publicConditionIndexes": [
+          0,
+          1,
+          2
         ]
       },
       {
@@ -315,6 +336,10 @@
             "type": "publish",
             "factId": "disclosure"
           }
+        ],
+        "publicConditionIndexes": [
+          0,
+          1
         ]
       }
     ],

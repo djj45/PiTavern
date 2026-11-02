@@ -53,6 +53,10 @@ for (const fact of envelope.template.facts.filter((f: {visibility: string}) => f
   assert.ok(!publicMaterials.includes(fact.text), fact.id + " leaked");
 }
 assert.ok(!publicMaterials.includes("卢晦"));
+assert.match(parsedCard.systemPrompt, /证词不能升级为定罪/);
+assert.match(parsedCard.systemPrompt, /未登记的钥匙/);
+assert.match(parsedCard.systemPrompt, /环境、动作与情绪可自由描写/);
+assert.match(parsedCard.postHistoryInstructions, /后续目标/);
 const initialView = buildPlayerWorldView(initial.snapshot, initial.template);
 assert.deepEqual(initialView.knownFacts!.map(f => f.id), ["commission"]);
 assert.deepEqual(initialView.quests!.map(q => q.id), ["repair", "investigate"]);
@@ -84,24 +88,35 @@ try {
     f.sessions.initializeChatWorldByHash(chat.id, published.publishedHash!, f.chats.revisionId(chat.id), false);
     const state = () => f.chats.readWorld(chat.id)!.snapshot;
     const known = (id: string) => actorKnows(state(), f.chats.readWorld(chat.id)!.template!, "player", id);
-    const turn = async (text: string, calls: Call[], final: MockStep = { text: "按照本轮成功结果继续调查。" }) => {
+    const turn = async (text: string, calls: Call[], final: MockStep = { text: "按照本轮成功结果继续调查。" }, noticeStatus?: "ready" | "later") => {
       const hidden = envelope.template.facts.filter((fact: {id: string; visibility: string}) => fact.visibility === "restricted" && !known(fact.id));
       const steps: MockStep[] = calls.map(call => ({ calls: [call] }));
       if (dual) steps.push({ calls: [submit] });
       steps.push(final);
+      if (noticeStatus) {
+        const inspect = final.inspect;
+        final.inspect = body => {
+          inspect?.(body);
+          const input = body.messages.map((m: {content: unknown}) => typeof m.content === "string" ? m.content : JSON.stringify(m.content)).join("\n");
+          assert.match(input, new RegExp('"id":"post_notice","name":"[^"\\n]+","availability":\\{"status":"' + noticeStatus + '"'), label + ": 最新公开可用性必须进入正文请求");
+          assert.match(input, /证词不能升级为定罪|不能由证词推导定罪/);
+          for (const fact of hidden) if (fact.id === "disclosure") assert.ok(!input.includes(fact.text));
+        };
+      }
       // At the beginning of a turn only the current branch's known facts may appear.
       const existingInspect = steps[0].inspect;
       steps[0].inspect = body => {
         existingInspect?.(body);
         const sent = JSON.stringify(body);
         assert.ok(sent.includes("雾港最后一盏灯"));
+        assert.match(sent, /证词不能升级为定罪|不能由证词推导定罪/);
         for (const fact of hidden) assert.ok(!sent.includes(fact.text), label + ": " + fact.id);
       };
       f.plan(label + " " + text, steps);
       await f.sessions.send(chat.id, text);
       assert.equal(f.count(), steps.length, text + " mock requests");
     };
-    await turn("提前验收与公开材料", [interact("confirm_light"), interact("post_notice")]);
+    await turn("提前验收与公开材料", [interact("confirm_light"), interact("post_notice")], {text:"公开材料仍是后续目标，先核验救援。"}, "later");
     assert.ok(!known("lamp") && !known("disclosure")); assert.equal(state().money.player, 30);
     check(label + "：凭空宣告修灯/公开均拒绝，无知识或金钱变化");
 
@@ -120,6 +135,7 @@ try {
     assert.ok(!known("lamp")); assert.equal(state().money.player, 24);
     await turn("去档案室核对值班簿", [move("archive"), interact("read_register"), quest("investigate")]);
     assert.ok(known("ledger"));
+    await turn("有证词和记录仍不能提前公开", [interact("post_notice")], {text:"先完成救援核验，再回公所。"}, "later");
     const beforeFailed = stateFields(f.chats.readMetadata(chat.id));
     await turn("等到01:30并验收，但正文失败", [wait(85), move("lighthouse"), interact("confirm_light")], { failure: true });
     assert.deepEqual(stateFields(f.chats.readMetadata(chat.id)), beforeFailed);
@@ -128,13 +144,16 @@ try {
     assert.equal(state().actors.qiao.locationId, "lighthouse");
     check(label + "：错过在场拒绝，失败正文撤销等待/移动/揭示，重试到01:30才亮灯");
 
-    await turn("到栈桥接船并核验到港", [move("pier"), quest("guide_ship", "accept"), quest("guide_ship"), interact("confirm_arrival")]);
+    await turn("到栈桥接船并核验到港", [move("pier"), quest("guide_ship", "accept"), quest("guide_ship"), interact("confirm_arrival")], {text:"救援已核验，下一步回公所确认林照在场。"}, "later");
     assert.ok(known("rescue")); assert.equal(state().money.player, 44); assert.equal(state().money.yan, 20);
     assert.ok(!known("disclosure"));
+    const notice = buildPlayerWorldView(state(), f.chats.readWorld(chat.id)!.template).publicInteractions.find(i => i.id === "post_notice")!;
+    assert.deepEqual(notice.availability!.reasons, ["需前往潮声公所", "需林照在场且可交互"]);
     check(label + "：灯火归航里程碑可先达成，未自动公开证据");
 
+    await turn("到02:00回公所确认公开条件", [wait(30), move("hall")], {text:"林照在场，当前可以请求公开核验材料。"}, "ready");
     const beforeFinal = state();
-    await turn("等到02:00，回公所报备并公开", [wait(30), move("hall"), quest("investigate"), quest("public_record", "accept"), interact("post_notice"), quest("public_record")]);
+    await turn("在公所报备并公开", [quest("investigate"), quest("public_record", "accept"), interact("post_notice"), quest("public_record")]);
     assert.equal(state().money.player, 52); assert.equal(state().money.lin, 42);
     assert.equal(Object.values(state().money).reduce((a, b) => a + b, 0), 160);
     assert.equal(state().clockMinutes, 120);
